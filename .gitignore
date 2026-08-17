@@ -1,0 +1,18 @@
+node_modules/
+.next/
+out/
+build/
+next-env.d.ts
+*.tsbuildinfo
+
+# Launcher build output — rebuild with `npm run build:exe`.
+Corpus.exe
+launcher/corpus.ico
+
+# Your library and your API key live here. Never commit.
+data/
+.env*.local
+.env
+
+.next-dev/
+*.log

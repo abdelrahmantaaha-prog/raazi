@@ -1,0 +1,190 @@
+@import "tailwindcss";
+
+@theme {
+  --color-paper: #fbfaf7;
+  --color-ink: #1c1a17;
+  --color-muted: #6b665e;
+  --color-rule: #e2ddd3;
+  --color-accent: #7a4b2a;
+  --color-accent-soft: #f0e7dd;
+  --font-serif: Georgia, "Iowan Old Style", "Times New Roman", serif;
+}
+
+:root {
+  color-scheme: light;
+}
+
+body {
+  background: var(--color-paper);
+  color: var(--color-ink);
+  font-family: ui-sans-serif, system-ui, -apple-system, "Segoe UI", sans-serif;
+}
+
+/* Entries are for reading, so they get the book treatment. */
+.prose-entry {
+  font-family: var(--font-serif);
+  font-size: 1.0625rem;
+  line-height: 1.75;
+}
+.prose-entry h1,
+.prose-entry h2,
+.prose-entry h3 {
+  font-weight: 600;
+  margin: 1.6em 0 0.5em;
+  line-height: 1.3;
+}
+.prose-entry h2 { font-size: 1.25rem; }
+.prose-entry h3 { font-size: 1.1rem; }
+.prose-entry p { margin: 0 0 1em; }
+.prose-entry ul, .prose-entry ol { margin: 0 0 1em 1.25em; list-style: disc; }
+.prose-entry ol { list-style: decimal; }
+.prose-entry li { margin-bottom: 0.35em; }
+.prose-entry strong { font-weight: 600; }
+.prose-entry em { font-style: italic; }
+.prose-entry blockquote {
+  border-left: 3px solid var(--color-rule);
+  padding-left: 1em;
+  margin: 0 0 1em;
+  color: var(--color-muted);
+}
+
+/* Sources can be Arabic; entries follow their sources. */
+[dir="rtl"] .prose-entry { text-align: right; }
+
+@media (prefers-reduced-motion: no-preference) {
+  .fade-in { animation: fade 0.2s ease-out; }
+  @keyframes fade { from { opacity: 0; transform: translateY(2px); } }
+}
+
+/* Marks the passage a citation just jumped to, so it is findable in a long
+   evidence list without the reader having to hunt for it. */
+.cite-flash {
+  border-left-color: var(--color-accent);
+  background: var(--color-accent-soft);
+  border-radius: 0 4px 4px 0;
+  transition: background 0.4s ease-out, border-color 0.4s ease-out;
+}
+
+/* ---------------------------------------------------------------------------
+   Moving between views
+
+   A page that replaces its contents instantly makes you re-find your place
+   every time; one that fades the new material in tells you what changed. The
+   cascade is a small stagger down the page, so a list arrives in reading order
+   rather than all at once — which is what makes it legible rather than merely
+   decorative.
+
+   All of it is behind prefers-reduced-motion. Someone who has asked their
+   system for less movement has asked for less movement.
+   --------------------------------------------------------------------------- */
+
+@media (prefers-reduced-motion: no-preference) {
+  .view-enter {
+    animation: view-in 0.34s cubic-bezier(0.22, 0.61, 0.36, 1) both;
+  }
+
+  @keyframes view-in {
+    from { opacity: 0; transform: translateY(6px); }
+    to   { opacity: 1; transform: none; }
+  }
+
+  /* Children arrive one after another. Ten steps is enough for any list worth
+     staggering; past that the last rows would be waiting noticeably long, so
+     everything beyond falls back to the tenth delay. */
+  .cascade > * {
+    animation: view-in 0.36s cubic-bezier(0.22, 0.61, 0.36, 1) both;
+  }
+  .cascade > *:nth-child(1)  { animation-delay: 0ms; }
+  .cascade > *:nth-child(2)  { animation-delay: 34ms; }
+  .cascade > *:nth-child(3)  { animation-delay: 68ms; }
+  .cascade > *:nth-child(4)  { animation-delay: 102ms; }
+  .cascade > *:nth-child(5)  { animation-delay: 136ms; }
+  .cascade > *:nth-child(6)  { animation-delay: 170ms; }
+  .cascade > *:nth-child(7)  { animation-delay: 204ms; }
+  .cascade > *:nth-child(8)  { animation-delay: 238ms; }
+  .cascade > *:nth-child(9)  { animation-delay: 272ms; }
+  .cascade > *:nth-child(n+10) { animation-delay: 306ms; }
+}
+
+/* ---------------------------------------------------------------------------
+   The draft editor
+
+   Styled here rather than with utility classes because the content is written
+   by contenteditable at runtime — there is nowhere to hang a class on a
+   paragraph the browser creates when you press Enter.
+   --------------------------------------------------------------------------- */
+
+.prose-draft {
+  font-family: Georgia, "Iowan Old Style", "Times New Roman", serif;
+  font-size: 1.02rem;
+  line-height: 1.75;
+}
+.prose-draft:empty::before {
+  content: "Write.";
+  color: var(--color-muted);
+}
+.prose-draft > * + * { margin-top: 0.85em; }
+.prose-draft h1 { font-size: 1.5rem; font-weight: 600; margin-top: 1.4em; }
+.prose-draft h2 { font-size: 1.25rem; font-weight: 600; margin-top: 1.3em; }
+.prose-draft h3 { font-size: 1.08rem; font-weight: 600; margin-top: 1.2em; }
+.prose-draft blockquote {
+  border-inline-start: 3px solid var(--color-rule);
+  padding-inline-start: 1em;
+  color: var(--color-muted);
+  font-style: italic;
+}
+.prose-draft ul { list-style: disc; padding-inline-start: 1.5em; }
+.prose-draft ol { list-style: decimal; padding-inline-start: 1.5em; }
+.prose-draft li + li { margin-top: 0.25em; }
+
+/* ---------------------------------------------------------------------------
+   Every page arrives the same way
+
+   The wrapper fades as a whole, and the sections inside it follow one after
+   another. Two levels are targeted because a page here renders a single root
+   element with its sections inside — animating only the wrapper would fade the
+   page in as one flat block, which is the thing worth avoiding.
+
+   Behind prefers-reduced-motion, like the rest of it.
+   --------------------------------------------------------------------------- */
+
+@media (prefers-reduced-motion: no-preference) {
+  /* The page wrapper fades but must never be *moved*.
+   *
+   * A transform of any kind — including the identity matrix an animation
+   * leaves behind while it fills — makes an element the containing block for
+   * every `position: fixed` descendant. The reader is a fixed, full-screen
+   * panel, so with `translateY` on this wrapper it stopped resolving against
+   * the viewport and resolved against the page column instead: 287px wide,
+   * zero pixels tall, which on a phone is a blank screen with a rule across
+   * the top. Opacity has no such side effect. The rise lives on the sections
+   * below, which nothing fixed hangs off.
+   */
+  .page-enter {
+    animation: fade-only 0.28s ease both;
+  }
+
+  @keyframes fade-only {
+    from { opacity: 0; }
+    to   { opacity: 1; }
+  }
+
+  .page-enter > * > * {
+    animation: view-in 0.34s cubic-bezier(0.22, 0.61, 0.36, 1) both;
+  }
+  .page-enter > * > *:nth-child(1) { animation-delay: 30ms; }
+  .page-enter > * > *:nth-child(2) { animation-delay: 66ms; }
+  .page-enter > * > *:nth-child(3) { animation-delay: 102ms; }
+  .page-enter > * > *:nth-child(4) { animation-delay: 138ms; }
+  .page-enter > * > *:nth-child(5) { animation-delay: 174ms; }
+  .page-enter > * > *:nth-child(6) { animation-delay: 210ms; }
+  .page-enter > * > *:nth-child(n+7) { animation-delay: 240ms; }
+
+  /* The reader is a full-screen panel of its own and must not slide in from
+     under the page it replaced — it opens over everything, instantly. */
+  /* Nothing pinned to the viewport takes part in the entrance: not the reader,
+     not its advance bar, not the dictionary card. They are positioned against
+     the screen and should arrive on it, not slide in from under the page they
+     replaced. */
+  .page-enter .fixed { animation: none; }
+}

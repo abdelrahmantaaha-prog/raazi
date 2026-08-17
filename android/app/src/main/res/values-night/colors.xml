@@ -1,0 +1,10 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <!-- Only the chrome around the WebView follows the system theme; the pages
+         inside keep their own paper, which is what a reading app should do. -->
+    <color name="paper">#16161A</color>
+    <color name="ink">#D6D3CD</color>
+    <color name="muted">#8B877F</color>
+    <color name="rule">#2C2C31</color>
+    <color name="accent_soft">#2A2420</color>
+</resources>

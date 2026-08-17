@@ -1,0 +1,17 @@
+{
+  "version": "0.0.1",
+  "configurations": [
+    {
+      "name": "corpus",
+      "runtimeExecutable": "npm",
+      "runtimeArgs": ["run", "dev"],
+      "port": 5400
+    },
+    {
+      "name": "corpus-check",
+      "runtimeExecutable": "npx",
+      "runtimeArgs": ["next", "dev", "--port", "5401"],
+      "port": 5401
+    }
+  ]
+}

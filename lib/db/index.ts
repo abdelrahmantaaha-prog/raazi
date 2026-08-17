@@ -1,0 +1,117 @@
+import Database from "better-sqlite3";
+import fs from "node:fs";
+import path from "node:path";
+import { migrate } from "./migrate";
+
+/** Overridable so a test run can point at a scratch library instead of yours. */
+export const DATA_DIR = process.env.CORPUS_DATA_DIR
+  ? path.resolve(process.env.CORPUS_DATA_DIR)
+  : path.join(process.cwd(), "data");
+export const SOURCES_DIR = path.join(DATA_DIR, "sources");
+const DB_PATH = path.join(DATA_DIR, "corpus.db");
+const PID_PATH = path.join(DATA_DIR, "corpus.pid");
+
+/**
+ * Whether some other Corpus process is alive on this library right now.
+ *
+ * The worker claims the pid file when it starts (see claimWorkerPid); a crash
+ * leaves the file behind, which is why the answer comes from probing the pid
+ * rather than from the file existing. Signal 0 is a liveness test, not a
+ * signal: it throws for a pid that is gone and returns for one that is not.
+ * EPERM would also mean "alive", but everything here runs as the same user,
+ * so the catch treating it as dead is acceptable rather than subtle.
+ */
+function anotherInstanceAlive(): number | null {
+  try {
+    const pid = Number(fs.readFileSync(PID_PATH, "utf8").trim());
+    if (!Number.isInteger(pid) || pid <= 0 || pid === process.pid) return null;
+    process.kill(pid, 0);
+    return pid;
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * Records this process as the one running the worker. Called by startWorker,
+ * not by open(): merely reading the library — a test, a script, a second dev
+ * server — must not claim to own its queue.
+ */
+export function claimWorkerPid(): void {
+  try {
+    fs.mkdirSync(DATA_DIR, { recursive: true });
+    fs.writeFileSync(PID_PATH, String(process.pid), "utf8");
+  } catch {
+    // Losing the claim costs the guard, not the app.
+  }
+}
+
+/**
+ * Next's dev server re-evaluates modules on hot reload. Without a global pin we
+ * would open a new SQLite handle (and later, a second worker) on every edit.
+ */
+declare global {
+  // eslint-disable-next-line no-var
+  var __corpusDb: Database.Database | undefined;
+}
+
+function open(): Database.Database {
+  fs.mkdirSync(SOURCES_DIR, { recursive: true });
+  const db = new Database(DB_PATH);
+  db.pragma("journal_mode = WAL");
+  db.pragma("foreign_keys = ON");
+  db.pragma("busy_timeout = 5000");
+
+  const schema = fs.readFileSync(
+    path.join(process.cwd(), "lib", "db", "schema.sql"),
+    "utf8"
+  );
+  db.exec(schema);
+  migrate(db);
+
+  // Crash recovery is only safe when we are alone. Every `tsx scripts/…` and
+  // stray `npm run dev` opens this same database, and resetting `running`
+  // tasks while the real worker is mid-call on one of them gets that task
+  // claimed and executed twice — duplicate mentions, duplicate token spend.
+  const other = anotherInstanceAlive();
+  if (other !== null) {
+    console.log(
+      `[corpus] another Corpus process (pid ${other}) is using this library — leaving its in-flight tasks alone`
+    );
+  } else {
+    recoverOrphanedTasks(db);
+  }
+  return db;
+}
+
+/**
+ * Crash recovery. A task left in `running` means the process died mid-call —
+ * the transaction that would have written its results never committed, so the
+ * work is simply undone. Put it back in the queue.
+ *
+ * Guarded by a liveness check on the pid file above: "the process died" is
+ * only a valid inference when no other Corpus process is alive.
+ */
+function recoverOrphanedTasks(db: Database.Database) {
+  const orphaned = db
+    .prepare("UPDATE tasks SET state='pending' WHERE state='running'")
+    .run();
+  const runs = db
+    .prepare("UPDATE runs SET state='queued' WHERE state='running'")
+    .run();
+  if (orphaned.changes > 0 || runs.changes > 0) {
+    console.log(
+      `[corpus] recovered ${orphaned.changes} interrupted task(s) across ${runs.changes} run(s)`
+    );
+  }
+}
+
+export function db(): Database.Database {
+  if (!globalThis.__corpusDb) globalThis.__corpusDb = open();
+  return globalThis.__corpusDb;
+}
+
+/** Runs `fn` inside a transaction; nothing is visible until it returns. */
+export function tx<T>(fn: () => T): T {
+  return db().transaction(fn)();
+}

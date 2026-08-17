@@ -1,0 +1,49 @@
+name: Android helper
+
+# Builds the phone app. There is no Android toolchain on the machine Corpus is
+# developed on, so this is where the APK actually comes from — push, wait, and
+# download it from the run's artifacts.
+
+on:
+  push:
+    paths:
+      - "android/**"
+      - ".github/workflows/android.yml"
+  workflow_dispatch:
+
+jobs:
+  apk:
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Use JDK 17
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: "17"
+
+      # Gradle is invoked directly rather than through a wrapper: a wrapper
+      # needs a checked-in binary jar, and this project has no way to generate
+      # or verify one locally.
+      - name: Set up Gradle
+        uses: gradle/actions/setup-gradle@v4
+        with:
+          gradle-version: "8.9"
+
+      - name: Build debug APK
+        working-directory: android
+        run: gradle --no-daemon assembleDebug
+
+      - name: Name it something you can find on a phone
+        run: |
+          mkdir -p out
+          cp android/app/build/outputs/apk/debug/app-debug.apk \
+             "out/corpus-helper-${GITHUB_SHA::7}.apk"
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: corpus-helper-apk
+          path: out/*.apk
+          if-no-files-found: error

@@ -1,0 +1,14 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  Corpus serves plain HTTP, because it is a program running on a desktop on your
+  own network with no certificate to its name. Android forbids cleartext by
+  default, so it has to be permitted here or every connection fails silently.
+
+  It cannot be narrowed to the private address ranges: this file matches domains
+  literally and has no notion of a subnet, and the machine's address changes
+  with the network anyway. The exposure is bounded by the app never being given
+  an address it did not find on the local network or receive by hand.
+-->
+<network-security-config>
+    <base-config cleartextTrafficPermitted="true" />
+</network-security-config>
