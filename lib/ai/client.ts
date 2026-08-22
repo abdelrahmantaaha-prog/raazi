@@ -168,6 +168,18 @@ async function withRotation<T>(
 
         const failure = keyFailure(err);
 
+        // The pool is a service, not a key with a daily allowance. Whatever it
+        // just refused, it refused for this minute: it rotates thirty-seven
+        // keys of its own and drops to a smaller model when one is spent, so
+        // its answer changes minute to minute. Parking it for an hour — and
+        // doubling that on the next refusal, as a real key deserves — is how a
+        // single bad moment took the pool off the ring for the rest of the
+        // night and left this machine's own spent keys to explain themselves.
+        if (isBrokerKey(key.id)) {
+          markCooldown(key.id, 60_000, `The shared key pool: ${"reason" in failure ? failure.reason : "no answer"}`);
+          continue;
+        }
+
         if (failure.kind === "daily") {
           markExhausted(key.id, failure.reason, getConfig().keyRetryMinutes);
           console.log(`[corpus] key "${key.label}" is out of quota for the day; trying the next one`);
