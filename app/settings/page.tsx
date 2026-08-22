@@ -17,6 +17,7 @@ interface KeyRow {
   calls: number;
   tokens: number;
   fromEnv: boolean;
+  shared: boolean;
 }
 
 interface Settings {
@@ -123,6 +124,11 @@ export default function SettingsPage() {
                     {k.fromEnv && (
                       <span className="text-xs text-[var(--color-muted)]">from your environment</span>
                     )}
+                    {k.shared && (
+                      <span className="text-xs text-[var(--color-muted)]">
+                        one door to every project&rsquo;s keys — the keys below are the fallback
+                      </span>
+                    )}
                   </div>
                   <p className="text-xs text-[var(--color-muted)]">
                     {k.status === "waiting" && k.availableAt
@@ -147,7 +153,7 @@ export default function SettingsPage() {
                       Retry
                     </Button>
                   )}
-                  {!k.fromEnv && (
+                  {!k.fromEnv && !k.shared && (
                     <>
                       <Button
                         variant="ghost"

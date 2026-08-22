@@ -348,7 +348,10 @@ export function publicKeys() {
     label: k.label,
     provider: (k.provider ?? "gemini") as ProviderId,
     model: modelFor(k),
-    hint: `…${k.key.slice(-4)}`,
+    // The pool's "key" is this app's token for it, and showing its last four
+    // characters would read as a key fragment. It is not one, and there is
+    // nothing about it worth recognising at a glance.
+    hint: isBrokerKey(k.id) ? "" : `…${k.key.slice(-4)}`,
     status: statusOf(k),
     availableAt: past(k.exhaustedUntil)
       ? past(k.cooldownUntil)
@@ -359,5 +362,8 @@ export function publicKeys() {
     calls: k.calls ?? 0,
     tokens: (k.tokensIn ?? 0) + (k.tokensOut ?? 0),
     fromEnv: k.id === "env",
+    /** The shared pool rather than a key of yours: nothing here to remove, and
+     *  its state is a fact about the network that a restart re-learns. */
+    shared: isBrokerKey(k.id),
   }));
 }
