@@ -63,7 +63,10 @@ export const PROVIDERS: Record<ProviderId, ProviderSpec> = {
     label: "Groq",
     kind: "openai",
     baseUrl: "https://api.groq.com/openai/v1",
-    defaultModel: "llama-3.3-70b-versatile",
+    // Groq retired the Llama 3.3 line this default used to name, and a model
+    // that no longer exists reads as a 404 rather than as a missing model —
+    // check /v1/models if this one goes the same way.
+    defaultModel: "openai/gpt-oss-120b",
     keysUrl: "https://console.groq.com/keys",
     capabilities: { json: true, vision: false, audio: false, embed: false },
     note: "Very fast and a generous daily allowance, but a low tokens-per-minute ceiling.",

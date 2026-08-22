@@ -13,6 +13,8 @@ import {
   nextKey,
   type ApiKey,
 } from "../keys";
+import { localKeys } from "../keys";
+import { brokerIsDown, isBrokerKey } from "../broker";
 import { spec, type ProviderId, type Stage } from "../providers";
 import { chatJson, chatText, validateOpenAiKey } from "./openai";
 import {
@@ -135,14 +137,15 @@ async function pace(keyId: string) {
  */
 async function withRotation<T>(
   candidates: ProviderId[],
-  fn: (key: ApiKey) => Promise<T>
+  fn: (key: ApiKey) => Promise<T>,
+  prefer?: string
 ): Promise<{ value: T; key: ApiKey }> {
   const tried = new Set<string>();
   let lastError: unknown;
 
   for (const provider of candidates) {
     for (;;) {
-      const key = nextKey(provider, tried);
+      const key = nextKey(provider, tried, prefer);
       if (!key) break; // this provider is spent; try the next one
 
       tried.add(key.id);
@@ -153,6 +156,16 @@ async function withRotation<T>(
         return { value, key };
       } catch (err) {
         lastError = err;
+
+        // The broker being unreachable is not a refusal — it is the pool being
+        // out of the picture for a while. Step past it and let this machine's
+        // own keys take the work, which is what they were kept for.
+        if (isBrokerKey(key.id) && brokerIsDown(err)) {
+          markCooldown(key.id, 5 * 60_000, "The shared key pool is unreachable.");
+          console.warn("[corpus] the key pool is unreachable; falling back to local keys");
+          continue;
+        }
+
         const failure = keyFailure(err);
 
         if (failure.kind === "daily") {
@@ -198,6 +211,21 @@ async function withRotation<T>(
 // ---------------------------------------------------------------------------
 // Calls
 // ---------------------------------------------------------------------------
+
+/**
+ * The Gemini SDK, pointed wherever this key says.
+ *
+ * A key on the ring is a key; a key on the broker is a key plus a base URL, and
+ * the SDK will happily talk to a proxy that speaks Google's own API — which is
+ * exactly what the broker's /gemini surface is. Nothing else about the call
+ * changes, which is why OCR, audio and response schemas all still work.
+ */
+function gemini(k: ApiKey): GoogleGenAI {
+  return new GoogleGenAI({
+    apiKey: k.key,
+    ...(k.baseUrl ? { httpOptions: { baseUrl: k.baseUrl } } : {}),
+  });
+}
 
 /** Providers other than Gemini take one text prompt, so parts are flattened.
  *  Non-text parts never reach them — the router guarantees that. */
@@ -259,7 +287,7 @@ export async function generateJson<T>(opts: {
       });
     }
 
-    const ai = new GoogleGenAI({ apiKey: k.key });
+    const ai = gemini(k);
     const res = await ai.models.generateContent({
       model: opts.model ?? modelFor(k),
       contents: [{ role: "user", parts: geminiParts(opts.parts) }],
@@ -296,6 +324,8 @@ export async function generateText(opts: {
   lang?: string;
   sample?: string;
   need?: Need;
+  /** Ask for a particular key first — see uploadClient(). */
+  pin?: string;
 }): Promise<CallResult<string>> {
   const candidates = providersFor(opts.stage, {
     need: opts.need,
@@ -318,7 +348,7 @@ export async function generateText(opts: {
       });
     }
 
-    const ai = new GoogleGenAI({ apiKey: k.key });
+    const ai = gemini(k);
     const res = await ai.models.generateContent({
       model: opts.model ?? modelFor(k),
       contents: [{ role: "user", parts: geminiParts(opts.parts) }],
@@ -332,7 +362,7 @@ export async function generateText(opts: {
     checkGeminiFinish(res.candidates?.[0]?.finishReason, res.promptFeedback?.blockReason);
     if (!res.text) throw new Error("Empty response.");
     return { data: res.text, usage };
-  });
+  }, opts.pin);
 
   markUsed(key.id, value.usage.tokensIn, value.usage.tokensOut);
   return value;
@@ -344,7 +374,7 @@ export async function embed(texts: string[]): Promise<{ vectors: Float32Array[];
   const candidates = providersFor(undefined, { need: "embed" });
 
   const { value } = await withRotation(candidates, async (k) => {
-    const ai = new GoogleGenAI({ apiKey: k.key });
+    const ai = gemini(k);
     const res = await ai.models.embedContent({
       model: cfg.embedModel,
       contents: texts,
@@ -359,11 +389,27 @@ export async function embed(texts: string[]): Promise<{ vectors: Float32Array[];
   return value;
 }
 
-/** The first usable Gemini key, for the file-upload API the SDK owns. */
+/**
+ * The file-upload API the SDK owns, and the key it is speaking as.
+ *
+ * This one call cannot go through the pool. The Files API hands back a URI that
+ * only the uploading key can read, and the broker picks a fresh key per
+ * request — so an upload there and a read here would be two different keys and
+ * the file would not exist. It stays on a key this machine owns, and the caller
+ * is told which one so the call that reads the file can ask for it by name.
+ */
+export function uploadClient(): { ai: GoogleGenAI; keyId: string } {
+  const key = localKeys("gemini")[0];
+  if (!key) throw new MissingKeyError();
+  return { ai: gemini(key), keyId: key.id };
+}
+
+/** For calls that need a Gemini client but no particular key — counting tokens,
+ *  say. The pool is fine for those, so it is tried first as usual. */
 export function client(): GoogleGenAI {
   const key = nextKey("gemini");
   if (!key) throw new MissingKeyError();
-  return new GoogleGenAI({ apiKey: key.key });
+  return gemini(key);
 }
 
 /** Pre-flight cost estimate, so a book can be priced before it is started. */

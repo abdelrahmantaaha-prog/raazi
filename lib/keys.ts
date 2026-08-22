@@ -1,6 +1,7 @@
 import crypto from "node:crypto";
 import { readStore, writeStore } from "./config-file";
 import { spec, type ProviderId } from "./providers";
+import { brokerKeys, isBrokerKey, patchBrokerKey } from "./broker";
 
 /**
  * The key ring.
@@ -89,17 +90,35 @@ export function listKeys(): ApiKey[] {
   if (envKey && !keys.some((k) => k.key === envKey)) {
     keys.unshift({ id: "env", label: "From GEMINI_API_KEY", key: envKey, provider: "gemini" });
   }
-  // A key written before Corpus knew about other providers can only be Gemini.
-  return keys.map((k) => ({ ...k, provider: k.provider ?? "gemini" }));
+  // The shared pool goes in front of everything: it rotates thirty-seven keys
+  // and knows what the other apps have already spent. These keys are on this
+  // machine, and they are the fallback for when the broker cannot be reached.
+  return [...brokerKeys(), ...keys].map((k) => ({ ...k, provider: k.provider ?? "gemini" }));
+}
+
+/** Keys that are genuinely this machine's — the broker is not one of them, and
+ *  neither surface can upload a file that the other can then read. */
+export function localKeys(provider?: ProviderId): ApiKey[] {
+  return usableKeys(provider).filter((k) => !isBrokerKey(k.id));
 }
 
 function persist(keys: ApiKey[]) {
   const stored = read();
-  // The environment key is not ours to save.
-  write({ ...stored, keys: keys.filter((k) => k.id !== "env"), apiKey: undefined });
+  // The environment key is not ours to save, and neither is the broker's.
+  write({
+    ...stored,
+    keys: keys.filter((k) => k.id !== "env" && !isBrokerKey(k.id)),
+    apiKey: undefined,
+  });
 }
 
 function update(id: string, patch: Partial<ApiKey>) {
+  // The broker's state is a fact about the network, not about a key you own;
+  // it is remembered for this process and forgotten on restart.
+  if (isBrokerKey(id)) {
+    patchBrokerKey(id, patch);
+    return;
+  }
   const keys = listKeys().map((k) => (k.id === id ? { ...k, ...patch } : k));
   persist(keys);
 }
@@ -131,8 +150,16 @@ export function liveKeys(provider?: ProviderId): ApiKey[] {
   );
 }
 
-export function nextKey(provider?: ProviderId, exclude: Set<string> = new Set()): ApiKey | undefined {
-  return usableKeys(provider).find((k) => !exclude.has(k.id));
+/** `prefer` pins a particular key when it is still usable — the Files API hands
+ *  back a URI only the uploading key can read, so that call and the one that
+ *  reads the file have to agree on which key they are. */
+export function nextKey(
+  provider?: ProviderId,
+  exclude: Set<string> = new Set(),
+  prefer?: string
+): ApiKey | undefined {
+  const free = usableKeys(provider).filter((k) => !exclude.has(k.id));
+  return (prefer ? free.find((k) => k.id === prefer) : undefined) ?? free[0];
 }
 
 export function hasUsableKey(provider?: ProviderId): boolean {

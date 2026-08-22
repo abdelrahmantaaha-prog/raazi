@@ -1,7 +1,7 @@
 import fs from "node:fs";
 import path from "node:path";
 import { db, tx } from "../db";
-import { client, generateText } from "../ai/client";
+import { uploadClient, generateText } from "../ai/client";
 import { enqueue, finishTask } from "../queue";
 import type { Task } from "../types";
 import { writeChunks } from "./ocr";
@@ -57,6 +57,7 @@ export async function handleTranscribe(task: Task): Promise<void> {
     return;
   }
 
+  let pinnedKey: string | undefined;
   let mediaPart:
     | { fileData: { fileUri: string; mimeType?: string } }
     | { inlineData: { mimeType: string; data: string } };
@@ -73,7 +74,11 @@ export async function handleTranscribe(task: Task): Promise<void> {
       mediaPart = { inlineData: { mimeType, data } };
     } else {
       // Anything sizeable goes through the Files API rather than the request body.
-      const uploaded = await client().files.upload({
+      // The uploading key is remembered: the URI it hands back is readable only
+      // by that key, so the transcription call below has to ask for it again.
+      const { ai, keyId } = uploadClient();
+      pinnedKey = keyId;
+      const uploaded = await ai.files.upload({
         file: source.path,
         config: { mimeType, displayName: source.title },
       });
@@ -81,7 +86,7 @@ export async function handleTranscribe(task: Task): Promise<void> {
       // Gemini will not read the file until it finishes processing it.
       for (let i = 0; i < 60 && file.state === "PROCESSING"; i++) {
         await new Promise((r) => setTimeout(r, 5000));
-        file = await client().files.get({ name: file.name! });
+        file = await ai.files.get({ name: file.name! });
       }
       if (file.state !== "ACTIVE") {
         throw new Error(`Gemini could not process the media file (state: ${file.state}).`);
@@ -95,6 +100,7 @@ export async function handleTranscribe(task: Task): Promise<void> {
 
   const { data: text, usage } = await generateText({
     need: "audio",
+    pin: pinnedKey,
     system: SYSTEM,
     temperature: 0,
     parts: [`Transcribe this recording: "${source.title}".`, mediaPart],
