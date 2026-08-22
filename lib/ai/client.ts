@@ -115,6 +115,12 @@ declare global {
 }
 
 async function pace(keyId: string) {
+  // The pool is one key id here and thirty-seven keys behind it. Pacing it like
+  // a single key throttles the whole ring to one key's rate — the exact thing
+  // the pool exists to avoid — and the limit it is pacing against is per real
+  // key, which is a thing only the broker can see. It does its own waiting.
+  if (isBrokerKey(keyId)) return;
+
   const { requestsPerMinute } = getConfig();
   if (requestsPerMinute <= 0) return;
   if (!globalThis.__corpusLastCall) globalThis.__corpusLastCall = new Map();
