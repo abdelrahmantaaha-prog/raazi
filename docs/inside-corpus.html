@@ -1,0 +1,1874 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Inside Corpus</title>
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="description" content="A chapter-by-chapter tour of the Corpus codebase, built from its real source.">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Newsreader:ital,opsz,wght@0,6..72,400;0,6..72,500;0,6..72,600;1,6..72,400&family=IBM+Plex+Mono:wght@400;500;600&family=IBM+Plex+Sans:wght@400;500;600&display=swap">
+<style>
+/* ---------- tokens: light is the base, both dark states redefine only these ---------- */
+:root {
+  --ground: hsl(244 18% 97%);
+  --surface: #FFFFFF;
+  --surface-2: hsl(240 17% 95%);
+  --ink: hsl(250 47% 11%);
+  --ink-soft: hsl(246 20% 32%);
+  --ink-faint: hsl(248 11% 47%);
+  --line: hsl(242 17% 88%);
+  --line-soft: hsl(238 18% 93%);
+  --teal: hsl(250 80% 27%);
+  --teal-deep: hsl(250 80% 20%);
+  --teal-wash: hsl(244 25% 92%);
+  --ochre: hsl(36 82% 31%);
+  --ochre-wash: hsl(40 72% 92%);
+  --danger: hsl(4 53% 43%);
+  --ok: hsl(150 60% 30%);
+  --shadow: 0 1px 2px hsl(250 47% 11% / .05), 0 8px 24px -12px hsl(250 47% 11% / .18);
+  --radius: 10px;
+  /* the code panel is an editor window: dark in both themes, on purpose */
+  --code-bg: hsl(250 44% 8%);
+  --code-ink: hsl(246 23% 87%);
+  --code-dim: hsl(250 16% 41%);
+  --code-line: hsl(248 38% 14%);
+  --c-key: hsl(246 46% 66%);
+  --c-str: hsl(39 68% 63%);
+  --c-com: hsl(246 15% 42%);
+  --c-num: hsl(20 70% 80%);
+  --c-fn: hsl(44 48% 86%);
+}
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) {
+  --ground: hsl(253 37% 6%);
+  --surface: hsl(250 38% 9%);
+  --surface-2: hsl(250 37% 12%);
+  --ink: hsl(246 29% 93%);
+  --ink-soft: hsl(247 17% 75%);
+  --ink-faint: hsl(251 13% 58%);
+  --line: hsl(248 26% 16%);
+  --line-soft: hsl(248 31% 13%);
+  --teal: hsl(250 47% 51%);
+  --teal-deep: hsl(250 54% 63%);
+  --teal-wash: hsl(253 51% 13%);
+  --ochre: hsl(40 74% 59%);
+  --ochre-wash: hsl(38 39% 12%);
+  --danger: hsl(5 65% 68%);
+  --ok: hsl(146 47% 62%);
+  --shadow: 0 1px 2px rgba(0,0,0,.3), 0 10px 30px -14px rgba(0,0,0,.7);
+  }
+}
+:root[data-theme="dark"] {
+  --ground: hsl(253 37% 6%);
+  --surface: hsl(250 38% 9%);
+  --surface-2: hsl(250 37% 12%);
+  --ink: hsl(246 29% 93%);
+  --ink-soft: hsl(247 17% 75%);
+  --ink-faint: hsl(251 13% 58%);
+  --line: hsl(248 26% 16%);
+  --line-soft: hsl(248 31% 13%);
+  --teal: hsl(250 47% 51%);
+  --teal-deep: hsl(250 54% 63%);
+  --teal-wash: hsl(253 51% 13%);
+  --ochre: hsl(40 74% 59%);
+  --ochre-wash: hsl(38 39% 12%);
+  --danger: hsl(5 65% 68%);
+  --ok: hsl(146 47% 62%);
+  --shadow: 0 1px 2px rgba(0,0,0,.3), 0 10px 30px -14px rgba(0,0,0,.7);
+}
+
+* { box-sizing: border-box; }
+body {
+  margin: 0;
+  background: var(--ground);
+  color: var(--ink);
+  font-family: "IBM Plex Sans", ui-sans-serif, system-ui, sans-serif;
+  font-size: 16.5px;
+  line-height: 1.65;
+  -webkit-font-smoothing: antialiased;
+}
+h1, h2, h3, h4 { font-family: Newsreader, Georgia, "Times New Roman", serif; font-weight: 600; text-wrap: balance; line-height: 1.18; margin: 0; }
+p { margin: 0; }
+a { color: var(--teal); text-underline-offset: 3px; }
+code, kbd { font-family: "IBM Plex Mono", ui-monospace, Menlo, Consolas, monospace; }
+
+/* ---------- shell ---------- */
+.shell { display: grid; grid-template-columns: 264px minmax(0, 1fr); gap: 0; min-height: 100vh; }
+.rail {
+  position: sticky; top: 0; align-self: start; height: 100vh; overflow-y: auto;
+  border-inline-end: 1px solid var(--line); background: var(--surface);
+  padding: 22px 18px 32px; display: flex; flex-direction: column; gap: 18px;
+}
+.brand { display: flex; align-items: center; gap: 10px; }
+.mark {
+  width: 34px; height: 34px; border-radius: 9px; background: var(--teal); color: #fff;
+  display: grid; place-items: center; font-family: "IBM Plex Mono", monospace; font-weight: 600; font-size: 15px;
+}
+.brand b { font-family: Newsreader, serif; font-size: 20px; font-weight: 600; letter-spacing: .01em; }
+.brand span { display: block; font-size: 11.5px; color: var(--ink-faint); font-family: "IBM Plex Mono", monospace; letter-spacing: .04em; }
+nav.toc { display: flex; flex-direction: column; gap: 1px; }
+nav.toc a {
+  display: grid; grid-template-columns: 26px 1fr; align-items: baseline; gap: 6px;
+  padding: 7px 9px; border-radius: 8px; text-decoration: none; color: var(--ink-soft);
+  font-size: 14px; line-height: 1.3;
+}
+nav.toc a .num { font-family: "IBM Plex Mono", monospace; font-size: 11px; color: var(--ink-faint); }
+nav.toc a:hover { background: var(--surface-2); color: var(--ink); }
+nav.toc a.active { background: var(--teal-wash); color: var(--teal-deep); font-weight: 600; }
+nav.toc a.active .num { color: var(--teal); }
+.rail-foot { margin-top: auto; font-size: 12px; color: var(--ink-faint); border-top: 1px solid var(--line-soft); padding-top: 14px; display: flex; flex-direction: column; gap: 8px; }
+.theme-btn {
+  font: inherit; font-size: 12px; color: var(--ink-soft); background: var(--surface-2);
+  border: 1px solid var(--line); border-radius: 999px; padding: 5px 11px; cursor: pointer; width: fit-content;
+}
+.theme-btn:hover { color: var(--ink); }
+
+main { padding: 0 0 120px; min-width: 0; }
+.wrap { max-width: 1180px; margin: 0 auto; padding: 0 40px; }
+section { padding: 54px 0 10px; scroll-margin-top: 12px; }
+.prose { max-width: 68ch; display: flex; flex-direction: column; gap: 18px; }
+.eyebrow {
+  font-family: "IBM Plex Mono", monospace; font-size: 11.5px; letter-spacing: .12em;
+  text-transform: uppercase; color: var(--teal); font-weight: 600;
+}
+h2 { font-size: clamp(26px, 3.4vw, 36px); margin-top: 6px; }
+h3 { font-size: 20px; margin-top: 8px; }
+.lede { font-size: 18.5px; color: var(--ink-soft); }
+.prose ul, .prose ol { margin: 0; padding-inline-start: 22px; display: flex; flex-direction: column; gap: 8px; }
+.prose li::marker { color: var(--teal); }
+strong { font-weight: 600; }
+
+/* ---------- hero ---------- */
+.hero { padding: 68px 0 26px; }
+.hero h1 { font-size: clamp(38px, 6vw, 66px); letter-spacing: -.015em; }
+.hero .sub { max-width: 60ch; font-size: 19px; color: var(--ink-soft); margin-top: 18px; }
+.facts { display: flex; flex-wrap: wrap; gap: 10px; margin-top: 26px; }
+.fact {
+  border: 1px solid var(--line); background: var(--surface); border-radius: 999px;
+  padding: 7px 14px; font-size: 13px; color: var(--ink-soft); font-family: "IBM Plex Mono", monospace;
+}
+.fact b { color: var(--ink); font-weight: 600; }
+
+/* ---------- cards ---------- */
+.cards { display: grid; grid-template-columns: repeat(auto-fit, minmax(240px, 1fr)); gap: 14px; margin-top: 8px; }
+.card { background: var(--surface); border: 1px solid var(--line); border-radius: var(--radius); padding: 18px; box-shadow: var(--shadow); }
+.card h4 { font-size: 17px; margin-bottom: 6px; }
+.card p { font-size: 14.5px; color: var(--ink-soft); }
+.card .tagline { font-family: "IBM Plex Mono", monospace; font-size: 11.5px; color: var(--teal); letter-spacing: .04em; margin-bottom: 8px; }
+
+.note-box {
+  border: 1px solid var(--line); border-radius: var(--radius); background: var(--surface);
+  padding: 16px 18px; display: flex; gap: 14px; align-items: flex-start;
+}
+.note-box.warn { background: var(--ochre-wash); border-color: color-mix(in srgb, var(--ochre) 35%, transparent); }
+.note-box .badge {
+  flex: none; font-family: "IBM Plex Mono", monospace; font-size: 10.5px; letter-spacing: .08em;
+  text-transform: uppercase; color: var(--ochre); border: 1px solid color-mix(in srgb, var(--ochre) 45%, transparent);
+  border-radius: 999px; padding: 3px 9px; margin-top: 2px;
+}
+.note-box p { font-size: 15px; color: var(--ink-soft); }
+
+/* ---------- glossary term ---------- */
+button.term {
+  font: inherit; color: var(--ink); background: none; border: 0; padding: 0; cursor: help;
+  border-bottom: 1.5px dotted var(--teal);
+}
+button.term:hover, button.term:focus-visible { color: var(--teal-deep); }
+#pop {
+  position: absolute; z-index: 60; max-width: 300px; background: var(--surface); color: var(--ink);
+  border: 1px solid var(--line); border-radius: 8px; box-shadow: var(--shadow);
+  padding: 10px 12px; font-size: 14px; line-height: 1.5; display: none;
+}
+#pop b { color: var(--teal); }
+
+/* ---------- code specimen ---------- */
+.specimen { margin: 26px 0 8px; }
+.spec-head {
+  display: flex; flex-wrap: wrap; align-items: center; gap: 10px;
+  border: 1px solid var(--line); border-bottom: 0; border-radius: var(--radius) var(--radius) 0 0;
+  background: var(--surface); padding: 10px 14px;
+}
+.spec-path { font-family: "IBM Plex Mono", monospace; font-size: 12.5px; color: var(--ink); font-weight: 500; }
+.spec-what { font-size: 13px; color: var(--ink-faint); }
+.spec-steps { margin-inline-start: auto; display: flex; align-items: center; gap: 6px; }
+.step-btn {
+  font: inherit; font-family: "IBM Plex Mono", monospace; font-size: 12px; cursor: pointer;
+  background: var(--surface-2); border: 1px solid var(--line); color: var(--ink-soft);
+  border-radius: 7px; padding: 4px 10px;
+}
+.step-btn:hover:not(:disabled) { color: var(--ink); border-color: var(--teal); }
+.step-btn:disabled { opacity: .4; cursor: default; }
+.step-count { font-family: "IBM Plex Mono", monospace; font-size: 11.5px; color: var(--ink-faint); }
+
+.spec-body { display: grid; grid-template-columns: minmax(0, 1.45fr) minmax(230px, .8fr); gap: 0; border: 1px solid var(--line); border-radius: 0 0 var(--radius) var(--radius); overflow: hidden; }
+.code-pane { background: var(--code-bg); overflow-x: auto; padding: 12px 0; }
+pre.code { margin: 0; font-family: "IBM Plex Mono", monospace; font-size: 13px; line-height: 1.62; color: var(--code-ink); min-width: max-content; }
+.cl { display: grid; grid-template-columns: 46px 14px 1fr; align-items: baseline; }
+.cl .n { color: var(--code-dim); text-align: right; padding-inline-end: 10px; font-size: 11.5px; user-select: none; }
+.cl .dot { color: transparent; font-size: 11px; }
+.cl.has-note { cursor: pointer; }
+.cl.has-note .dot { color: var(--ochre); }
+.cl.has-note:hover { background: rgba(255,255,255,.045); }
+.cl.on { background: color-mix(in srgb, var(--ochre) 22%, transparent); }
+.cl.on .n { color: var(--ochre); }
+.cl .t { white-space: pre; padding-inline-end: 18px; }
+.cl:focus-visible { outline: 2px solid var(--ochre); outline-offset: -2px; }
+.tok-k { color: var(--c-key); }
+.tok-s { color: var(--c-str); }
+.tok-c { color: var(--c-com); font-style: italic; }
+.tok-n { color: var(--c-num); }
+.tok-f { color: var(--c-fn); }
+
+.note-pane { background: var(--surface); border-inline-start: 1px solid var(--line); padding: 16px 16px 18px; }
+.note-pane .nl { font-family: "IBM Plex Mono", monospace; font-size: 11px; letter-spacing: .06em; text-transform: uppercase; color: var(--ochre); }
+.note-pane .nt { margin-top: 8px; font-size: 14.5px; color: var(--ink-soft); line-height: 1.6; }
+.note-pane .nt code { font-size: 13px; background: var(--surface-2); border-radius: 4px; padding: 1px 4px; color: var(--ink); }
+.note-pane .hint { font-size: 13px; color: var(--ink-faint); }
+
+/* ---------- trace diagram ---------- */
+.trace { border: 1px solid var(--line); border-radius: var(--radius); background: var(--surface); padding: 18px; margin: 24px 0 8px; }
+.trace-top { display: flex; flex-wrap: wrap; gap: 12px; align-items: center; margin-bottom: 14px; }
+.trace-top h4 { font-size: 17px; }
+.play {
+  font: inherit; font-size: 13.5px; font-weight: 600; cursor: pointer; margin-inline-start: auto;
+  background: var(--teal); color: #fff; border: 0; border-radius: 8px; padding: 8px 16px;
+}
+.play:hover { background: var(--teal-deep); }
+.hops { display: flex; flex-direction: column; gap: 8px; }
+.hop {
+  display: grid; grid-template-columns: 30px 1fr; gap: 12px; align-items: start;
+  border: 1px solid var(--line-soft); background: var(--surface-2); border-radius: 9px; padding: 11px 13px;
+  opacity: .45; transition: opacity .25s ease, border-color .25s ease, background .25s ease;
+}
+.hop .k { font-family: "IBM Plex Mono", monospace; font-size: 12px; color: var(--ink-faint); }
+.hop b { font-size: 14.5px; display: block; }
+.hop span { font-size: 13.5px; color: var(--ink-soft); }
+.hop code { font-size: 12.5px; color: var(--teal-deep); }
+.hop.lit { opacity: 1; border-color: var(--teal); background: var(--teal-wash); }
+.hop.lit .k { color: var(--teal); }
+@media (prefers-reduced-motion: reduce) { .hop { transition: none; } }
+
+/* ---------- check yourself ---------- */
+.check { border: 1px solid var(--line); border-radius: var(--radius); background: var(--surface); padding: 16px 18px; margin-top: 20px; }
+.check .q { font-weight: 600; font-size: 15.5px; }
+.check .reveal { font: inherit; font-size: 13px; margin-top: 10px; cursor: pointer; background: var(--surface-2); border: 1px solid var(--line); color: var(--ink-soft); border-radius: 7px; padding: 5px 12px; }
+.check .reveal:hover { color: var(--ink); }
+.check .a { display: none; margin-top: 10px; font-size: 15px; color: var(--ink-soft); border-top: 1px solid var(--line-soft); padding-top: 10px; }
+.check.open .a { display: block; }
+.check.open .reveal { display: none; }
+
+/* ---------- commands ---------- */
+.cmd { display: flex; align-items: center; gap: 10px; background: var(--code-bg); border-radius: 8px; padding: 9px 12px; margin-top: 8px; }
+.cmd code { color: var(--code-ink); font-size: 13px; flex: 1; overflow-x: auto; white-space: pre; }
+.copy { font: inherit; font-family: "IBM Plex Mono", monospace; font-size: 11px; cursor: pointer; background: #1B3B34; color: #9FD7C9; border: 1px solid #24504733; border-radius: 6px; padding: 4px 9px; }
+.copy:hover { background: #24504A; }
+
+/* ---------- tables ---------- */
+.tablewrap { overflow-x: auto; border: 1px solid var(--line); border-radius: var(--radius); background: var(--surface); }
+table { border-collapse: collapse; width: 100%; font-size: 14.5px; min-width: 520px; }
+th, td { text-align: start; padding: 11px 14px; border-bottom: 1px solid var(--line-soft); vertical-align: top; }
+th { font-family: "IBM Plex Mono", monospace; font-size: 11.5px; letter-spacing: .06em; text-transform: uppercase; color: var(--ink-faint); font-weight: 500; }
+tr:last-child td { border-bottom: 0; }
+td code { font-size: 13px; color: var(--teal-deep); }
+
+hr.rule { border: 0; border-top: 1px solid var(--line); margin: 44px 0 0; }
+
+@media (max-width: 1080px) {
+  .spec-body { grid-template-columns: 1fr; }
+  .note-pane { border-inline-start: 0; border-top: 1px solid var(--line); }
+}
+@media (max-width: 860px) {
+  .shell { grid-template-columns: 1fr; }
+  .rail { position: static; height: auto; border-inline-end: 0; border-bottom: 1px solid var(--line); }
+  nav.toc { flex-direction: row; overflow-x: auto; padding-bottom: 4px; }
+  nav.toc a { flex: none; grid-template-columns: 1fr; }
+  nav.toc a .num { display: none; }
+  .rail-foot { display: none; }
+  .wrap { padding: 0 20px; }
+  body { font-size: 16px; }
+}
+
+</style>
+</head>
+<body>
+
+<div class="shell">
+  <aside class="rail">
+    <div class="brand">
+      <div class="mark">📚</div>
+      <div>
+        <b>Inside Corpus</b>
+        <span>29,824 lines · TypeScript</span>
+      </div>
+    </div>
+    <nav class="toc" id="toc"></nav>
+    <div class="rail-foot">
+      <button class="theme-btn" id="themeBtn" type="button">Switch theme</button>
+      <div>Click any line with a <span style="color:var(--ochre)">&bull;</span> to read what it does.</div>
+    </div>
+  </aside>
+
+  <main>
+    <div class="wrap">
+
+      <header class="hero">
+        <div class="eyebrow">A tour of your own codebase</div>
+        <h1>Inside Corpus</h1>
+        <p class="sub">Every line of code on this page is real code from <code>Downloads/Claude/corpus</code> — not simplified examples. We start from “what is a durable queue” and end at “I understand why an entry that cites its sources can still be lying.”</p>
+        <div class="facts">
+          <div class="fact"><b>29824</b> lines</div>
+          <div class="fact"><b>18</b> tables</div>
+          <div class="fact"><b>150</b> assertions</div>
+          <div class="fact"><b>17</b> pipeline stages</div>
+          <div class="fact"><b>5</b> providers</div>
+          <div class="fact"><b>1</b> machine</div>
+        </div>
+      </header>
+
+      <hr class="rule">
+
+      <section id="ch0" data-title="Start here">
+
+        <div class="prose">
+          <div class="eyebrow">Chapter 0</div>
+          <h2>Start here</h2>
+          <p class="lede">Read this page in order, at a screen, with the repo open beside it. It is built to be used, not skimmed.</p>
+          <p>Three things worth knowing before we begin.</p>
+          <p><strong>Corpus is the most sophisticated thing you have built.</strong> Not the biggest — Knight Run is a third bigger — but the one with the most genuinely hard problems solved properly: a durable job queue, a taxonomy of API failures, entity resolution, and a verification pass that catches a class of error nothing structural can see. This page walks <strong>the spine</strong>: the queue, the error taxonomy, the key ring, the entry pipeline, and the ledger.</p>
+          <p><strong>Its comments are the best in your folder.</strong> Several of them are worth reading as essays — <code>lib/pipeline/verify.ts</code> opens with a real bug found in a real library, quoted verbatim, and explains why no amount of structural checking would have caught it. Where a comment says something better than I could, this page quotes it and gets out of the way.</p>
+          <p><strong>The dotted lines are the lesson.</strong> In every code panel, lines with an ochre dot in the gutter carry a note. Click one, or use the Prev / Next buttons and the arrow keys, and the note appears beside the code.</p>
+          <div class="note-box">
+            <span class="badge">Setup</span>
+            <p>Open a second window with VS Code on the <code>corpus</code> folder. The spine is six files: <code>lib/queue.ts</code>, <code>lib/worker.ts</code>, <code>lib/ai/errors.ts</code>, <code>lib/keys.ts</code>, <code>lib/pipeline/entry.ts</code>, <code>lib/audit.ts</code>.</p>
+          </div>
+        </div>
+      </section>
+
+      <hr class="rule">
+
+      <section id="ch1" data-title="What this thing is">
+
+        <div class="prose">
+          <div class="eyebrow">Chapter 1</div>
+          <h2>What this thing actually is</h2>
+          <p class="lede">A machine that reads your library once and writes an encyclopedia from it, where every sentence traces back to a quote at a page number.</p>
+          <p>Feed it books, papers, articles and recordings. It finds every person, organisation, institution, event and place, and writes an entry for each. Add another source next month and the existing entries <em>revise themselves</em>, and tell you what changed.</p>
+        </div>
+
+        <div class="cards">
+          <div class="card">
+            <div class="tagline">part 1</div>
+            <h4>A Next.js app on :5400</h4>
+            <p>Pages and API routes, served from your own machine. Started by <code>Corpus.exe</code> — a 15 KB C# launcher that sits in the tray, so the clinic-style “never see a terminal” rule applies here too.</p>
+          </div>
+          <div class="card" style="border-color: var(--teal);">
+            <div class="tagline">the source of truth</div>
+            <h4>SQLite, 18 tables</h4>
+            <p>Sources, chunks, entities, mentions, relations, events, entries, revisions, contradictions — plus <code>runs</code> and <code>tasks</code>, which are the queue. Your library and the database never leave the machine.</p>
+          </div>
+          <div class="card">
+            <div class="tagline">part 3</div>
+            <h4>A background worker</h4>
+            <p>A loop that claims one task at a time, calls a model, and writes the result. Ingesting a book is hundreds of calls over hours — Chapter 3 is what happens when one of them fails.</p>
+          </div>
+          <div class="card">
+            <div class="tagline">part 4</div>
+            <h4>Five providers, one router</h4>
+            <p>Gemini, Groq, Cerebras, OpenRouter, Mistral, and anything speaking the OpenAI API. Chapter 5 is the three routing rules that hold whatever you configure.</p>
+          </div>
+        </div>
+
+        <div class="prose" style="margin-top: 22px;">
+          <h3>The sentence that explains the whole design</h3>
+          <p>Corpus is <strong>a long-running job on free-tier quotas</strong>. A book is hundreds of calls across hours or days, on keys that will run out, on a machine that will be closed. Nearly every unusual thing in this codebase — the durable queue, the error taxonomy, the key ring, the hourly backoff, the parked-run timer — exists because that sentence is true.</p>
+          <p>Compare it with the other AI apps in your folder. Loqma makes one call and shows you the answer. Corpus makes eight hundred and has to survive all of them.</p>
+        </div>
+
+        <div class="check" data-answer="At most one task. The worker claims a task with an atomic UPDATE, and the handler writes its results AND marks the task done in a single transaction — so a kill either lands both or neither. On restart, anything left 'running' goes back in the queue. That is the entire durability story, and it is two design rules rather than any machinery.">
+          <div class="q">Check yourself: you kill the process halfway through a 400-page book. How much work is lost?</div>
+          <button class="reveal" type="button">Show answer</button>
+          <div class="a"></div>
+        </div>
+      </section>
+
+      <hr class="rule">
+
+      <section id="ch2" data-title="The map">
+
+        <div class="prose">
+          <div class="eyebrow">Chapter 2</div>
+          <h2>The map: where anything lives</h2>
+          <p class="lede">Nearly 30,000 lines, and the six that matter are all under 600.</p>
+        </div>
+
+        <div class="tablewrap" style="margin-top: 20px;">
+          <table>
+            <thead><tr><th>Path</th><th>Lines</th><th>What it is</th></tr></thead>
+            <tbody>
+              <tr><td><code>lib/db/schema.sql</code></td><td>—</td><td>The whole data model, 18 tables. Read this first — everything else is operations on it.</td></tr>
+              <tr><td><strong><code>lib/queue.ts</code></strong></td><td>294</td><td><strong>Runs and tasks.</strong> The atomic claim, and what jumps the queue.</td></tr>
+              <tr><td><strong><code>lib/worker.ts</code></strong></td><td>354</td><td><strong>The loop</strong>, and what it does when a call fails.</td></tr>
+              <tr><td><strong><code>lib/ai/errors.ts</code></strong></td><td>318</td><td><strong>The error taxonomy</strong> that makes resuming possible. The most valuable file here.</td></tr>
+              <tr><td><strong><code>lib/keys.ts</code></strong></td><td>336</td><td><strong>The key ring</strong> and per-key quota state.</td></tr>
+              <tr><td><code>lib/ai/client.ts</code></td><td>406</td><td>Routing, key rotation, provider failover, and the paced gate.</td></tr>
+              <tr><td><code>lib/pipeline/</code></td><td>—</td><td>Seventeen stages: extract, resolve, entry, verify, factcheck, ocr, transcribe, tag, enhance…</td></tr>
+              <tr><td><strong><code>lib/audit.ts</code></strong></td><td>414</td><td><strong>The evidence ledger</strong> — the one place you overrule the model, and it holds.</td></tr>
+              <tr><td><code>app/sources/[id]/Reader.tsx</code></td><td>1,645</td><td>The reading app. The largest file, and the one the user actually lives in.</td></tr>
+              <tr><td><code>scripts/test-*.mjs</code></td><td>—</td><td>150 assertions across 20 suites, none needing an API key.</td></tr>
+            </tbody>
+          </table>
+        </div>
+
+        <div class="prose" style="margin-top: 22px;">
+          <div class="note-box">
+            <span class="badge">The shape to notice</span>
+            <p>Everything converges on <strong>chunks</strong> — roughly 3,500-token windows split on paragraph boundaries, each carrying the page, chapter or timecode a citation will point at. Parsing, OCR, extraction, entries and citations are all operations on chunks.</p>
+            <p style="margin-top:10px">When a system has one central unit like that, learning it is mostly learning that unit. Find the chunk in the schema and the rest of the pipeline reads as things done to it.</p>
+          </div>
+        </div>
+      </section>
+
+      <hr class="rule">
+
+      <section id="ch3" data-title="A durable queue">
+
+        <div class="prose">
+          <div class="eyebrow">Chapter 3</div>
+          <h2>A queue that survives being killed</h2>
+          <p class="lede">Every unit of work is a row. That one decision is what makes a three-day job resumable.</p>
+          <p>The tempting implementation is an array of work in memory and a loop over it. It works beautifully until the laptop sleeps, and then eight hours of a book are gone with no record of how far it got.</p>
+          <p>So the queue is a table, and claiming from it has to be safe against two workers racing.</p>
+        </div>
+        <div class="specimen" data-spec="claim"></div>
+
+        <div class="note-box warn">
+          <span class="badge">The two rules that make this work</span>
+          <p><strong>Claim atomically.</strong> One <code>UPDATE … RETURNING</code> selects and marks in a single statement. Doing the select and the update separately leaves a window where two workers grab the same task — and the comment on line 42 says exactly that.</p>
+          <p style="margin-top:10px"><strong>Finish transactionally.</strong> Handlers must write their own results <em>and</em> mark the task done inside one transaction. Either both land or neither does, so a kill can never leave results written with the task still pending — which would duplicate them on restart.</p>
+          <p style="margin-top:10px">Together those give you: kill the process mid-book and lose at most one task. On restart, anything left <code>running</code> goes back in the queue.</p>
+        </div>
+
+        <div class="prose">
+          <h3>Priority, and why strict order is wrong</h3>
+          <p>First-come-first-served is correct for a pipeline and wrong for a person. A question typed into Ask would sit behind five hundred re-extractions — twenty minutes — while you watch. So work is ordered by <em>who is waiting on it</em>: 0 for anything you are looking at right now, 1 for the reading pipeline nobody is watching, 2 for decoration.</p>
+          <p>Within a band it stays first-come, so nothing starves and a long ingest still runs in the order it was queued.</p>
+        </div>
+
+        <div class="check" data-answer="Nothing, because nothing was written. finishTask marks the task done in the same transaction as the handler's results — so a crash before the commit rolls back both, and the task is still pending. A crash after it has both. There is no state where one landed and the other did not, which is why 'lose at most one task' is a guarantee rather than a hope.">
+          <div class="q">Check yourself: the process dies after a handler writes 40 mentions but before the task is marked done. What is duplicated on restart?</div>
+          <button class="reveal" type="button">Show answer</button>
+          <div class="a"></div>
+        </div>
+      </section>
+
+      <hr class="rule">
+
+      <section id="ch4" data-title="The error taxonomy">
+
+        <div class="prose">
+          <div class="eyebrow">Chapter 4</div>
+          <h2>The error taxonomy that makes resuming possible</h2>
+          <p class="lede">Six dispositions, and the distinction between two of them is worth hours of your life.</p>
+          <p>The file opens by naming it: <em>“a 429 because you sent 11 requests in a minute is a two-second problem, and a 429 because you burned the day's free quota is a tomorrow problem.”</em> Treat them the same and you either waste hours of backoff or hammer a dead key all day.</p>
+        </div>
+        <div class="specimen" data-spec="dispositions"></div>
+
+        <div class="prose">
+          <p>And the classification itself, which is where the hard-won judgement lives.</p>
+        </div>
+        <div class="specimen" data-spec="classify"></div>
+
+        <div class="note-box warn">
+          <span class="badge">Asymmetric costs</span>
+          <p>Read lines 191–194 twice. A bare 429 with no quota metadata is assumed to be a <em>short</em> window, not a spent day. The reasoning is about which way it is cheap to be wrong:</p>
+          <p style="margin-top:10px">Guess “spent for the day” over a per-minute burst → you park a key for eighteen hours and waste most of a free tier. Guess “short window” over a genuinely spent day → you waste one call.</p>
+          <p style="margin-top:10px">When two errors have wildly different costs, the right default is not the most likely one — it is the cheap one. That principle is worth more than the specific rule.</p>
+        </div>
+
+        <div class="prose">
+          <h3>Dispatch, and the response to each</h3>
+        </div>
+        <div class="specimen" data-spec="dispatch"></div>
+
+        <div class="check" data-answer="It is split, not failed. The chunk is halved and both halves are requeued AHEAD of the rest, so one dense page cannot stall a book behind it. The comment on line 109 says exactly that — and the seq bookkeeping is tested in test-hardening.mjs, because the halves must slot into a strictly increasing order rather than tying with each other.">
+          <div class="q">Check yourself: a chunk is so dense the model hits its output limit. What happens to it?</div>
+          <button class="reveal" type="button">Show answer</button>
+          <div class="a"></div>
+        </div>
+      </section>
+
+      <hr class="rule">
+
+      <section id="ch5" data-title="Keys and routing">
+
+        <div class="prose">
+          <div class="eyebrow">Chapter 5</div>
+          <h2>The key ring, and three rules the router will not bend</h2>
+          <p class="lede">Free tiers are per key, so three keys are three times the throughput — and the interesting code is about when a refused key comes back.</p>
+        </div>
+        <div class="specimen" data-spec="keys"></div>
+
+        <div class="note-box">
+          <span class="badge">An hour, not a day</span>
+          <p>A refused key is set aside for <strong>an hour</strong>, and the wait only doubles — to a cap of eight hours — if it is refused <em>again</em> on its first call back. Any single successful call resets it entirely.</p>
+          <p style="margin-top:10px">The cap is chosen with the arithmetic stated: “eight hours is long enough that a truly spent day costs three wasted calls.” Three wasted calls against not losing most of a free tier to a misdiagnosed burst. That is the trade, and it is written down where the constant is.</p>
+        </div>
+
+        <div class="prose">
+          <h3>Who answers which question</h3>
+          <p>Reading passages is around 88% of all tokens and needs nothing but text in and JSON out — so sending it to a cheaper provider is what makes a Gemini quota last. But three rules hold whatever you configure.</p>
+        </div>
+        <div class="specimen" data-spec="routing"></div>
+
+        <div class="note-box warn">
+          <span class="badge">The Arabic rule, and why it is absolute</span>
+          <p>The cheaper providers are appreciably weaker on Arabic, and — this is the phrase that matters — <em>“a name they miss is lost silently rather than slowly.”</em></p>
+          <p style="margin-top:10px">A slow failure you notice and wait out. A silent one produces a pedia that is simply missing people, with nothing anywhere to indicate it. So non-Latin sources override your routing, and where no language is declared — PDFs, pasted text — the router reads the passage itself and decides.</p>
+          <p style="margin-top:10px">That rule and the capability rule are the two <code>test-routing.mjs</code> exists to defend, because both fail invisibly.</p>
+        </div>
+
+        <div class="check" data-answer="One fifth of the characters. Line 102 — hits > text.length * 0.2 — which is well clear of the odd loanword or quoted phrase in an otherwise English document, and comfortably below anything genuinely written in Arabic. A threshold set between the two cases rather than at either end.">
+          <div class="q">Check yourself: a PDF declares no language. How much non-Latin text makes the router treat it as non-Latin?</div>
+          <button class="reveal" type="button">Show answer</button>
+          <div class="a"></div>
+        </div>
+      </section>
+
+      <hr class="rule">
+
+      <section id="ch6" data-title="Entries revise themselves">
+
+        <div class="prose">
+          <div class="eyebrow">Chapter 6</div>
+          <h2>Entries are derived, not authored</h2>
+          <p class="lede">An entry is a function of the evidence, and the evidence grows. One hash makes that mechanical.</p>
+        </div>
+        <div class="specimen" data-spec="entryHead"></div>
+
+        <div class="note-box">
+          <span class="badge">Two rules, deliberately separate</span>
+          <p>A <strong>new</strong> entry is only written once an entity clears the mention threshold, so the hundreds of names a book produces do not each cost a call.</p>
+          <p style="margin-top:10px">An entry that <strong>already exists</strong> is always brought back into line with its evidence, however small the entity — because <em>“a stale entry contradicts the sources it cites, which is the one thing this tool must not do.”</em></p>
+          <p style="margin-top:10px">Conflating those two was a bug, and the comment at the top of <code>lib/entries.ts</code> says so. They look like the same question and are not.</p>
+        </div>
+
+        <div class="prose">
+          <h3>The bug that a matching hash concealed</h3>
+          <p>Here is a failure that would be very hard to find by looking. The US entry had 146 quotes behind it and cited 52 of them — 36%. Entities with a dozen quotes were at 100%.</p>
+          <p>The difference is not judgement, it is <em>room</em>: asked to turn 146 passages into one entry in a single response, a model compresses, and what it compresses away is most of the evidence. And nothing ever revisited it, because <code>built_from_hash</code> recorded all 146 as accounted for. The entry was, by the system's own definition, perfectly fresh.</p>
+        </div>
+        <div class="specimen" data-spec="coverage"></div>
+
+        <div class="prose">
+          <p>The fix is two-part: write a large entity over several passes, each folding in a batch of evidence the entry does not yet cite; and add a <em>second</em> staleness definition — undercovered — so an entry citing a fraction of its evidence is rewritten even though its hash matches.</p>
+          <p>Notice that the coverage count is done in SQL rather than by parsing every body in JavaScript, because it runs on every idle sweep. A correctness check that is too slow to run often is a correctness check that does not run.</p>
+        </div>
+
+        <div class="check" data-answer="It stays fresh under the hash rule — the hash only records which mentions were SHOWN to the writer, and all of them were. That is why the UNDERCOVERED clause exists as a separate test: it counts how many mention markers actually appear in the body, and treats anything below 85% as unfinished. Two different failures needed two different definitions.">
+          <div class="q">Check yourself: an entry was written from all its evidence but cites a third of it. Is it stale?</div>
+          <button class="reveal" type="button">Show answer</button>
+          <div class="a"></div>
+        </div>
+      </section>
+
+      <hr class="rule">
+
+      <section id="ch7" data-title="The citation that lies">
+
+        <div class="prose">
+          <div class="eyebrow">Chapter 7</div>
+          <h2>The citation that lies</h2>
+          <p class="lede">The best comment in your entire folder, and the failure it describes is the one this application exists to prevent.</p>
+          <p>An audit of the library found every entity at 100% coverage with no dead citations. Inside one of them:</p>
+          <div class="note-box warn" style="margin-top:14px">
+            <span class="badge">From lib/pipeline/verify.ts</span>
+            <p><code>Al Saud is the ruling dynasty of Saudi Arabia [[m:36243]] [[m:36917]] …</code></p>
+            <p style="margin-top:10px">…where the cited passages are about Abdullah Sulaiman <em>not</em> being a member of it.</p>
+          </div>
+          <p style="margin-top:14px">The sentence is true. Its truth comes from the model's own knowledge of the world rather than from the books — <em>“which is the single thing this application exists to prevent, wearing a citation so it cannot be seen.”</em></p>
+          <p>And no structural check can catch it. The marker is real, the mention exists, it belongs to this entity, the sentence is cited. Every automated integrity test passes. Only reading the quote and the sentence together settles it.</p>
+        </div>
+        <div class="specimen" data-spec="verify"></div>
+
+        <div class="note-box">
+          <span class="badge">The prompt is the design</span>
+          <p>Three verdicts, and the definitions do the work. “Overstated” gets concrete examples — <em>a passage saying an arrangement “could” do something does not support a sentence saying it did.</em> And “unsupported” explicitly names the hard case: <em>“sentences that are perfectly true in the world but simply absent from the evidence — that is the most important case here, and the easiest to wave through, because a false sentence looks wrong while a true unsourced one looks fine.”</em></p>
+          <p style="margin-top:10px">That last clause is the whole insight. A checker looking for errors will not find these, because they are not errors. It has to be looking for something else.</p>
+        </div>
+
+        <div class="prose">
+          <h3>Report, do not edit</h3>
+          <p>The pass flags and does not rewrite, for a stated reason: <em>“a rewrite would quietly bury the disagreement, and what you want to see is the disagreement.”</em> Entries stay exactly as written and the flags sit beside them.</p>
+          <p>And when the entry is next regenerated, the verdicts ride along — sentence by sentence, with the verifier's note on what the passages actually say. The instruction is to <strong>investigate, not to obey</strong>: a flag can be wrong, and the evidence is in front of the writer to check. What is forbidden is repeating the claim unexamined.</p>
+        </div>
+
+        <div class="check" data-answer="'Supported' — and correctly so. The verdict is about whether the cited passages carry the sentence, not about whether the sentence is interesting or new. The prompt says so explicitly: do not object to a sentence being uninteresting, and most sentences should come back supported. A checker that flags everything teaches you to ignore it.">
+          <div class="q">Check yourself: a sentence is dull, obvious, and exactly what its quotes say. What verdict should it get?</div>
+          <button class="reveal" type="button">Show answer</button>
+          <div class="a"></div>
+        </div>
+      </section>
+
+      <hr class="rule">
+
+      <section id="ch8" data-title="The evidence ledger">
+
+        <div class="prose">
+          <div class="eyebrow">Chapter 8</div>
+          <h2>The one place you overrule the model</h2>
+          <p class="lede">And the most carefully-worded claim in the codebase, because “Corpus learns from your corrections” is the kind of sentence that quietly means nothing.</p>
+          <p>Everything else in Corpus decides what counts as evidence by asking a model. Discarding a quote is where you say no — and the design follows from what makes that worth doing at all: <em>“a rejection you have to repeat is not a judgement, it is a chore.”</em></p>
+        </div>
+        <div class="specimen" data-spec="ledger"></div>
+
+        <div class="note-box warn">
+          <span class="badge">Two mechanisms, and only one is a guarantee</span>
+          <p><strong>It BLOCKS.</strong> The quote never returns to that subject's evidence — not on re-extraction, not when Enhance takes a second look, not when the zero-token sweep matches the name again. A deterministic rule, enforced in SQL and at both places mentions are written. It holds whatever any model decides later.</p>
+          <p style="margin-top:10px"><strong>It TEACHES.</strong> Your reason goes back into the prompts that produced the mistake, as a standing correction in your own words. This is <em>a nudge, not a guarantee</em> — a model told “you have twice attributed the son's quotes to the father here” will usually not do it a third time, and may.</p>
+          <p style="margin-top:10px">Stating that split plainly is the point. What is true here is that <strong>the same passage cannot come back</strong>, and that the model is told why it was wrong. Those are different strengths of claim and the file refuses to blur them.</p>
+        </div>
+
+        <div class="prose">
+          <h3>Making the block actually hold</h3>
+          <p>Re-extraction writes new rows for old quotes, and those rows arrive without the marks their predecessors carried. So there are two enforcement points: an insert-time check against an index built once per pass, and <code>reapplyDiscards</code>, which re-applies the whole ledger to whatever is currently in the mentions table.</p>
+          <p>The detail worth stealing is <em>where</em> the comparison happens.</p>
+        </div>
+        <div class="specimen" data-spec="reapply"></div>
+
+        <div class="prose">
+          <p>And nothing is deleted. A discarded mention keeps its row, stays readable under the entry marked with your reason, and can be restored — <em>“because the only thing worse than evidence you have to reject by hand is evidence that disappears when you do.”</em></p>
+        </div>
+
+        <div class="check" data-answer="It matches, and deliberately. quoteKeyOf collapses all whitespace to single spaces before comparing, and reapplyDiscards runs that comparison in JavaScript rather than SQL precisely so it uses the same function that recorded the verdict — SQLite's lower(trim(...)) would leave the internal whitespace alone and the quote would silently fail to match itself. That case is the reason the function exists.">
+          <div class="q">Check yourself: a quote is re-extracted with its line breaks folded differently. Does the block still catch it?</div>
+          <button class="reveal" type="button">Show answer</button>
+          <div class="a"></div>
+        </div>
+      </section>
+
+      <hr class="rule">
+
+      <section id="ch9" data-title="Not sending tokens">
+
+        <div class="prose">
+          <div class="eyebrow">Chapter 9</div>
+          <h2>The cheapest call is the one you do not make</h2>
+          <p class="lede">A born-digital PDF becomes Markdown locally, for free. So the way to make it cheaper is to stop sending the parts that are not prose.</p>
+          <p>Gemini receives text, never the file. Before anything is chunked, <code>lib/ingest/clean.ts</code> drops endnotes and bibliographies, running heads and footers, hyphenation across line breaks, ligatures and zero-width junk.</p>
+          <p><strong>Measured on a real 717,000-character academic PDF: 16% fewer tokens and 8 fewer API calls.</strong> And the note shown when you add a source tells you what it skipped — a saving you cannot see is a saving you cannot trust.</p>
+        </div>
+
+        <div class="note-box warn">
+          <span class="badge">Why the threshold is conservative</span>
+          <p>pdfjs inlines superscript endnote markers, so a sentence can begin <em>“22 Shrewdly, WestExec…”</em> and look bibliographic while being the actual argument. Cutting more aggressively deletes the book.</p>
+          <p style="margin-top:10px">So the cleaner drops pages that are <em>mostly</em> citation lines, plus runs of three or more consecutive citation lines inside otherwise-prose pages — and stops there. <code>test-formats.mjs</code> specifically checks that the cleaner does not mistake cited prose for a bibliography, because that failure deletes content silently.</p>
+        </div>
+
+        <div class="prose">
+          <h3>Headings are for the chunker, not for you</h3>
+          <p>PDF headings are recovered from font sizes and emitted as Markdown — 156 of them in that same book — and article HTML becomes Markdown rather than flat text. The README is explicit that this is <em>“partly about tokens and mostly about giving the chunker real boundaries, so a chunk is a coherent passage instead of half of two.”</em></p>
+          <p>That is the deeper point. A chunk that straddles two sections produces an extraction with muddled context and a citation that points at a page where the claim is only half present. Structure recovered early pays for itself three stages later.</p>
+
+          <h3>And the other free win: resolution</h3>
+          <p>“Nasser” and “Gamal Abdel Nasser” become one person. Exact matches are free; only genuinely ambiguous pairs reach the model, batched ten at a time. The bias is stated and deliberate: <em>“it would rather leave two entries for one person than fuse two people”</em> — because splitting a merged pair is much harder than merging a split one, and a wrongly fused entity corrupts every sentence that cites it.</p>
+        </div>
+
+        <div class="check" data-answer="Nothing — a born-digital PDF spends zero on OCR. Pages with no embedded text are the only ones sliced out and sent to Gemini as images. Knowing which stages are free and which are paid is what lets you reason about the cost of a book before you start it.">
+          <div class="q">Check yourself: what does a born-digital PDF spend on OCR?</div>
+          <button class="reveal" type="button">Show answer</button>
+          <div class="a"></div>
+        </div>
+      </section>
+
+      <hr class="rule">
+
+      <section id="ch10" data-title="The reading app">
+
+        <div class="prose">
+          <div class="eyebrow">Chapter 10</div>
+          <h2>The half you actually live in</h2>
+          <p class="lede">Corpus is a reading app first — the user said so — and the reader is the largest file in the repo.</p>
+          <p>Two pieces of it are worth pulling out, because both are the kind of problem that costs an afternoon and is invisible once solved.</p>
+        </div>
+        <div class="specimen" data-spec="portal"></div>
+
+        <div class="note-box">
+          <span class="badge">The stacking-context trap</span>
+          <p>Read the symptom on lines 767–769: <em>“a fixed rail at body level painted over the whole book — the text was all there, full width and correct, with the first seventy pixels of every line hidden behind the navigation.”</em></p>
+          <p style="margin-top:10px">The cause is a rule almost nobody has memorised: <strong>an element with <code>opacity</code> below 1 creates a stacking context.</strong> The page wrapper fades in; that fade makes a stacking context; the reader's <code>z-40</code> is therefore resolved <em>inside</em> the wrapper and never competes with the rail's <code>z-30</code> at all.</p>
+          <p style="margin-top:10px">And note the fix's framing — <em>“moving it to the body ends the argument rather than winning it”</em>. Raising the z-index would have worked until the next transform, filter or containment property appeared somewhere up the tree. A portal is proof against the whole class.</p>
+        </div>
+
+        <div class="prose">
+          <h3>Reading a book aloud, for nothing</h3>
+        </div>
+        <div class="specimen" data-spec="speech"></div>
+
+        <div class="prose">
+          <p>The reasoning for using the browser's own voices is the same reasoning as the rest of the app: a book is around half a million characters, which exhausts the monthly free allowance of every hosted TTS service in a sitting or two — <em>and would mean posting the text of everything you read to somebody's server, in an app whose whole premise is a library that lives on your disk.</em></p>
+          <p>The cost was three platform bugs, all handled in one module so the reader can treat speech as: say this, tell me when it is genuinely finished.</p>
+        </div>
+
+        <div class="check" data-answer="It fires onend on the utterance it killed, indistinguishable from a natural finish — so a reader that advances on onend will skip forward a paragraph you never heard. That is why cancellation is handled in speech.ts rather than at the call site: the caller cannot tell the two apart, so the module has to.">
+          <div class="q">Check yourself: what goes wrong if you call <code>speechSynthesis.cancel()</code> and treat <code>onend</code> as “finished”?</div>
+          <button class="reveal" type="button">Show answer</button>
+          <div class="a"></div>
+        </div>
+      </section>
+
+      <hr class="rule">
+
+      <section id="ch11" data-title="Change it yourself">
+
+        <div class="prose">
+          <div class="eyebrow">Chapter 11</div>
+          <h2>Change it yourself</h2>
+          <p class="lede">Four exercises, in order of difficulty. Each one uses a different layer of what you have just read.</p>
+          <ol>
+            <li><strong>Change a threshold.</strong> <code>COVERAGE_TARGET</code> is 0.85 and <code>EVIDENCE_PER_PASS</code> is 40. Lower the target to 0.6 and watch how many entries stop being flagged as undercovered. This is the fastest way to feel what those two numbers actually trade against each other — passes cost calls, coverage costs passes.</li>
+            <li><strong>Add a discard reason.</strong> <code>lib/discard-reasons.ts</code> is data: a reason, a scope, and the wording carried back into the prompts. Adding one teaches you the block/teach split from Chapter 8 better than reading it does.</li>
+            <li><strong>Add a provider.</strong> Anything speaking the OpenAI API already works through <code>lib/ai/openai.ts</code>. Add it to <code>providers.ts</code> with honest <code>capabilities</code> — and then check <code>test-routing.mjs</code> still passes, because declaring vision you do not have is exactly what rule one exists to catch.</li>
+            <li><strong>Add a pipeline stage.</strong> A new task kind: a handler, a queue entry, a priority band, and a place in the schema for what it writes. Follow <code>lib/pipeline/verify.ts</code> — it is the newest stage and the cleanest example of the whole shape.</li>
+          </ol>
+
+          <h3>Running it</h3>
+          <div class="cmd"><code>npm run dev</code><button class="copy" type="button" data-copy="npm run dev">copy</button></div>
+          <p>Port 5400. Or double-click <code>Corpus.exe</code>, which starts the server in the background and sits in the tray — closing the browser leaves it running, so a long ingest keeps going.</p>
+          <div class="cmd"><code>npm test</code><button class="copy" type="button" data-copy="npm test">copy</button></div>
+          <p>150 assertions, no API key needed. <code>test-resume.mjs</code> drives the real worker against a scratch database with injected handlers, <strong>including a simulated kill mid-run and a real Gemini quota-error payload</strong> — which is how you test a durability guarantee rather than assert it.</p>
+
+          <h3>Habits that separate professionals from hobbyists</h3>
+          <ul>
+            <li><strong>Make every unit of work a row.</strong> If it is in memory, it does not survive; if it is in a table with an atomic claim, it does.</li>
+            <li><strong>Classify failures before handling them.</strong> Six dispositions here, and each one has a different correct response. Retrying everything is a strategy for systems that never run long enough to matter.</li>
+            <li><strong>Default to the cheap mistake.</strong> When two guesses cost wildly different amounts, pick the cheap one, not the likely one.</li>
+            <li><strong>Structural checks cannot see semantic failures.</strong> Chapter 7 is the general case: 100% coverage, no dead citations, and a sentence sourced from the model's own knowledge.</li>
+            <li><strong>Be exact about what you guarantee.</strong> The ledger blocks; the correction teaches. One is a rule, one is a nudge, and saying which is which is what makes the claim worth anything.</li>
+            <li><strong>When you cannot explain it, you do not understand it yet.</strong> Try explaining why a bare 429 is treated as a short window. The gaps announce themselves.</li>
+          </ul>
+
+          <div class="note-box">
+            <span class="badge">Next</span>
+            <p>Name any file in the repo — <code>Reader.tsx</code> in full, <code>lib/pipeline/resolve.ts</code>, <code>lib/graph.ts</code>, <code>lib/db/migrate.ts</code>, the morning chores — and it can get the same line-by-line treatment at whatever depth you want.</p>
+          </div>
+        </div>
+      </section>
+
+    </div>
+  </main>
+</div>
+
+<div id="pop" role="tooltip"></div>
+
+<script>
+/* ============ specimens: real code from the repo, with per-line notes ============ */
+const SPECS = {
+  "claim": {
+    "path": "lib/queue.ts",
+    "what": "taking work without racing",
+    "lines": [
+      [
+        42,
+        " * Take the next unit of work and mark it running in one statement. Doing the",
+        "The reason for the whole shape of the query below."
+      ],
+      [
+        43,
+        " * select and the update separately would let two workers grab the same task;",
+        "The race, named. Two statements leave a window between them; one statement has no window."
+      ],
+      [
+        49,
+        " * Strict first-come order is right for a pipeline and wrong for a person: a",
+        "The second design decision in this file, and it is about attention rather than throughput."
+      ],
+      [
+        51,
+        " * can be twenty minutes, and you are sitting there watching it. So work is",
+        "The concrete cost. Twenty minutes of watching a spinner is what a strictly fair queue actually feels like."
+      ],
+      [
+        54,
+        " *   0 — you are looking at the screen right now",
+        "Three bands, ordered by who is waiting. Not by importance — by whether a human is currently blocked."
+      ],
+      [
+        58,
+        " * Within a band it is still first come, first served, so nothing starves and a",
+        "The property that keeps priority from becoming unfairness. A low band still drains in order."
+      ],
+      [
+        61,
+        "export const PRIORITY: Record<string, number> = {",
+        "Only the exceptions are listed; everything else gets DEFAULT_PRIORITY. A table of exceptions is shorter and easier to audit than a table of everything."
+      ],
+      [
+        70,
+        "const PRIORITY_SQL = `CASE t.kind ${Object.entries(PRIORITY)",
+        "The map is compiled into a SQL CASE expression once, at module load. The ordering happens in SQLite rather than in JavaScript, so the LIMIT 1 below is meaningful."
+      ],
+      [
+        77,
+        "      `UPDATE tasks",
+        "An UPDATE, not a SELECT. This is the atomic claim."
+      ],
+      [
+        83,
+        "             AND r.state IN ('queued', 'running')",
+        "Tasks belonging to a paused or parked run are invisible to the claim, so pausing a run is one write rather than a sweep over its tasks."
+      ],
+      [
+        84,
+        "           ORDER BY ${PRIORITY_SQL}, r.id, t.seq",
+        "Priority band, then run, then sequence. The middle key is what stops two interleaved ingests from alternating chunk by chunk."
+      ],
+      [
+        87,
+        "    RETURNING *`",
+        "RETURNING is what makes this one statement instead of two. The row is claimed and handed back in the same operation — no window, no race."
+      ],
+      [
+        92,
+        "/** Marks the task done and bills its tokens to the run, atomically with the",
+        "The other half of the durability guarantee."
+      ],
+      [
+        93,
+        " *  caller's own writes when invoked inside a transaction. */",
+        "The contract handlers must honour: call this inside the same transaction as your results, so a crash lands both or neither."
+      ],
+      [
+        110,
+        "              state = CASE WHEN state = 'queued' THEN 'running' ELSE state END,",
+        "A run flips to 'running' on its first completed task. Deriving the state from work done means no separate 'start the run' call to forget."
+      ]
+    ]
+  },
+  "dispositions": {
+    "path": "lib/ai/errors.ts",
+    "what": "six answers to \"what now?\"",
+    "lines": [
+      [
+        2,
+        " * Turning a Gemini failure into a decision.",
+        "Not \"handling errors\" — turning a failure into a decision. The file's job is to produce one of six answers."
+      ],
+      [
+        4,
+        " * The distinction that matters most: a 429 because you sent 11 requests in a",
+        "The central case, stated first."
+      ],
+      [
+        6,
+        " * quota is a tomorrow problem. Treating them the same either wastes hours of",
+        "Both ways of being wrong, named."
+      ],
+      [
+        8,
+        " * apart in `quotaId` (…PerMinute… vs …PerDay…), so we do too.",
+        "And where the information actually lives. Reading the provider's own metadata beats guessing from the status code."
+      ],
+      [
+        11,
+        "export type Disposition =",
+        "A discriminated union, so the dispatch in worker.ts is exhaustive and the compiler enforces it."
+      ],
+      [
+        13,
+        "  | { kind: \"retry\"; delayMs: number; reason: string }",
+        "Each variant carries exactly what its response needs. Retry needs a delay; nothing else does."
+      ],
+      [
+        15,
+        "  | { kind: \"pause_quota\"; resumeAt: Date; reason: string }",
+        "A resume time, so the parked run can set its own timer and come back with nobody watching."
+      ],
+      [
+        17,
+        "  | { kind: \"pause_key\"; reason: string }",
+        "No resume time — only you can fix a bad key, so waiting is pointless."
+      ],
+      [
+        19,
+        "  | { kind: \"skip\"; reason: string }",
+        "The chunk is unusable, the book is not. One passage lost with the reason recorded beats a stalled run."
+      ],
+      [
+        21,
+        "  | { kind: \"split\"; reason: string }",
+        "The input was too big for the output limit. Halve it — a response, not a failure."
+      ],
+      [
+        32,
+        "export class AllKeysExhaustedError extends Error {",
+        "Carries the SOONEST key back, not the last. The run parks until the first key returns, which is usually hours earlier."
+      ],
+      [
+        49,
+        "export class TruncatedOutputError extends Error {",
+        "Distinct classes for the cases classify() cannot detect from a status code. finishReason: MAX_TOKENS is not an HTTP error at all."
+      ]
+    ]
+  },
+  "classify": {
+    "path": "lib/ai/errors.ts",
+    "what": "the judgement calls",
+    "lines": [
+      [
+        150,
+        "    const perDay = /\\b(rpd|requests per day|per day|daily)\\b/.test(raw);",
+        "Every phrasing providers actually use, because the OpenAI-compatible ones have no structured quota metadata at all."
+      ],
+      [
+        161,
+        "  // 402 means the account needs billing before it will serve anything. The key",
+        "A case that looks like quota and is not."
+      ],
+      [
+        163,
+        "  // is genuine — it authenticates — but no amount of waiting will help, so it",
+        "The right classification follows from what waiting would achieve. Retrying a billing problem never works, so it is treated as a rejected key."
+      ],
+      [
+        182,
+        "  if (status === 429 || raw.includes(\"resource_exhausted\") || raw.includes(\"quota\")) {",
+        "The main quota branch."
+      ],
+      [
+        188,
+        "    // Only Google explicitly saying \"per day\" is treated as a spent allowance.",
+        "A high bar for the expensive conclusion. Nothing is assumed to be a spent day."
+      ],
+      [
+        189,
+        "    if (perDay) return { kind: \"daily\", reason: \"Daily quota for this key is spent.\" };",
+        "The only path to parking a key for a long wait."
+      ],
+      [
+        191,
+        "    // Everything else — including a bare 429 with no quota metadata at all — is",
+        "And the default for everything else."
+      ],
+      [
+        193,
+        "    // keys for the rest of the day over what was often a per-minute burst, and",
+        "The measured cost of the old behaviour: whole keys lost for a day."
+      ],
+      [
+        194,
+        "    // being wrong the optimistic way only costs one wasted call.",
+        "The asymmetry that decides it. When two mistakes cost wildly different amounts, default to the cheap one."
+      ],
+      [
+        197,
+        "      delayMs: delay ?? (perMinute ? 30_000 : 60_000),",
+        "The provider's own retryDelay wins if given; otherwise 30s for a known per-minute limit, 60s for an unknown window."
+      ],
+      [
+        200,
+        "        : \"Rate limited, with no window given — assuming a short one.\"",
+        "The message says it is assuming. A log line that admits its own guess is worth ten that state a conclusion."
+      ],
+      [
+        207,
+        "const MAX_ATTEMPTS = 5;",
+        "Retries are bounded. An unbounded retry on a permanent failure is a worker that looks busy forever."
+      ]
+    ]
+  },
+  "dispatch": {
+    "path": "lib/worker.ts",
+    "what": "one response per disposition",
+    "lines": [
+      [
+        20,
+        "/** A handler does the work and reports what it spent. Handlers must write",
+        "The contract, stated at the type. Every handler in the pipeline honours it."
+      ],
+      [
+        22,
+        " *  see `commit` in lib/pipeline/handlers.ts. */",
+        "And a pointer to the shared helper that makes honouring it easy. A rule with no convenient way to follow it gets broken."
+      ],
+      [
+        41,
+        "/** How long the loop lingers on an empty queue before standing down. Any API",
+        "The worker is not a daemon — it stands down when idle and any route restarts it. That is what lets it live inside a Next.js process."
+      ],
+      [
+        46,
+        "  if (overBudget(task.run_id)) {",
+        "The budget check happens before the handler, not after. Checking afterwards would spend the tokens you were trying not to spend."
+      ],
+      [
+        57,
+        "  if (!handler) {",
+        "An unregistered task kind fails that one task rather than crashing the loop. A queue that can be poisoned by one bad row is not durable."
+      ],
+      [
+        65,
+        "    const d = classify(err, task.attempts);",
+        "One call turns any thrown thing into a decision. Everything below is just carrying that decision out."
+      ],
+      [
+        70,
+        "      case \"retry\":",
+        "Six cases, matching the union exactly. TypeScript will complain if a disposition is ever added without a response here."
+      ],
+      [
+        73,
+        "        await sleep(d.delayMs);",
+        "The sleep is in the worker, after releasing the task — so the task is available to another claim while this loop waits."
+      ],
+      [
+        86,
+        "      case \"skip\":",
+        "The chunk is unusable, the book is not."
+      ],
+      [
+        87,
+        "        // The chunk is unusable, but the book is not. Keep going.",
+        "A one-line comment that names the whole philosophy of the error handling: degrade the smallest unit that failed."
+      ],
+      [
+        105,
+        "  settleRun(task.run_id);",
+        "Called on every path, success or failure. The run's state is derived from its tasks rather than tracked separately, so it cannot drift."
+      ],
+      [
+        109,
+        " * The model ran out of output room on this input. Halve the chunk and queue",
+        "The split response."
+      ],
+      [
+        110,
+        " * the halves ahead of everything else, so a single dense page cannot stall a",
+        "Ahead of everything else — so the halves finish near where the original would have, and the book's ordering stays coherent."
+      ],
+      [
+        113,
+        " * Exported for scripts/test-hardening.mjs, which asserts the seq bookkeeping —",
+        "Exported purely to be tested. The seq arithmetic is fiddly and silently wrong if two halves tie, so it is checked rather than trusted."
+      ]
+    ]
+  },
+  "keys": {
+    "path": "lib/keys.ts",
+    "what": "the ring, and coming back from a refusal",
+    "lines": [
+      [
+        8,
+        " * A free key runs out of quota long before a book is finished. With several",
+        "The premise. One key cannot finish a book on a free tier, so the ring is not an optimisation."
+      ],
+      [
+        11,
+        " * then until the *earliest* one returns rather than the last.",
+        "A detail worth noticing: the earliest, not the last. Waiting for the last would add hours for nothing."
+      ],
+      [
+        13,
+        " * A key set aside is not written off for the day — see markExhausted. Providers",
+        "Chapter 4's asymmetry, applied to the key ring."
+      ],
+      [
+        17,
+        " * Keys live in data/config.json alongside the rest of the settings. Their state",
+        "Server-side, not in the browser — because the background worker has to reach the key with no tab open."
+      ],
+      [
+        26,
+        "   *  talk to more than one, which is why every read defaults it to gemini. */",
+        "A migration handled by defaulting rather than by a schema change. Keys written before multi-provider support still work."
+      ],
+      [
+        35,
+        "  exhaustedUntil?: string | null;",
+        "The quota clock, persisted — so a restart still knows which keys are spent."
+      ],
+      [
+        40,
+        "  /** Consecutive quota refusals, which lengthen the wait before trying again.",
+        "Strikes, not a fixed wait. The first refusal is treated optimistically; repeated ones are not."
+      ],
+      [
+        41,
+        "   *  Cleared by any successful call. */",
+        "Any single success resets it entirely. A key that recovers is fully trusted again immediately."
+      ],
+      [
+        179,
+        "export function markExhausted(id: string, reason: string, retryMinutes = 60) {",
+        "An hour by default, and configurable in Settings."
+      ],
+      [
+        182,
+        "  const minutes = Math.min(retryMinutes * 2 ** (strikes - 1), MAX_BACKOFF_MINUTES);",
+        "Exponential in the strike count, capped. One hour, two, four, eight — and no further."
+      ],
+      [
+        187,
+        "    lastError: `${reason} Trying again in ${describeMinutes(minutes)}.`,",
+        "The stored error says when it will retry. Settings shows this, so a parked key is never a mystery."
+      ],
+      [
+        191,
+        "/** Eight hours is long enough that a truly spent day costs three wasted calls. */",
+        "The cap justified by arithmetic. Three wasted calls is the entire price of being optimistic, and it is stated where someone might otherwise raise it."
+      ],
+      [
+        200,
+        " * A short rate-limit wait, lengthening while the key keeps refusing.",
+        "The same idea at the other timescale."
+      ],
+      [
+        205,
+        " * but reports it without saying so keeps asking to be retried in a minute, and",
+        "The failure this guards: a spent key that describes itself as merely busy."
+      ],
+      [
+        206,
+        " * a ring of a dozen such keys will poll all night for nothing. The wait doubles",
+        "Twelve keys polling every minute all night is a lot of nothing. Backoff at both timescales is what stops it."
+      ]
+    ]
+  },
+  "routing": {
+    "path": "lib/ai/client.ts",
+    "what": "three rules that do not bend",
+    "lines": [
+      [
+        46,
+        " * Picks who answers this call.",
+        "One function, and the ordering of its rules is the whole policy."
+      ],
+      [
+        49,
+        " *  1. A call needing OCR, transcription or embeddings goes to a provider that",
+        "Capability first. A stage preference is irrelevant if the provider cannot do the job."
+      ],
+      [
+        51,
+        " *     the backbone rather than being replaced.",
+        "An honest statement of why Gemini cannot simply be swapped out on a free tier."
+      ],
+      [
+        52,
+        " *  2. Non-Latin text goes to the provider set for it. The alternatives are",
+        "The second rule, and the one most likely to surprise someone reading the config."
+      ],
+      [
+        53,
+        " *     appreciably weaker on Arabic, and a missed name is a silent loss — worse",
+        "The phrase that justifies overriding the user's own routing. Silent losses are worse than slow ones."
+      ],
+      [
+        57,
+        " * The result is a list, not one provider: if the first has no usable keys the",
+        "Returning a list rather than a choice is what turns provider failover into a loop instead of an exception."
+      ],
+      [
+        66,
+        "  const capable = (p: ProviderId) => !opts.need || spec(p).capabilities[opts.need];",
+        "Capability is declared per provider in providers.ts. Declaring vision you do not have is exactly what test-routing.mjs checks for."
+      ],
+      [
+        70,
+        "    // Capability first: a stage preference is irrelevant if it cannot do the job.",
+        "Rule one, in one line of code and one of comment."
+      ],
+      [
+        76,
+        "    const preferred = isNonLatin(opts.lang, opts.sample)",
+        "Rule two. Note it consults the sample text, not only the declared language."
+      ],
+      [
+        83,
+        "  if (!candidates.includes(fallback) && capable(fallback)) candidates.push(fallback);",
+        "Gemini is appended as the last resort for everything, because it can do everything. The list always ends somewhere that works."
+      ],
+      [
+        90,
+        " * A source's declared language is only set for EPUB and web articles — a PDF",
+        "Why reading the text is necessary at all: most sources declare nothing."
+      ],
+      [
+        96,
+        "  if (lang && /^(ar|fa|ur|he|ru|zh|ja|ko|hi|el|th)\\b/i.test(lang)) return true;",
+        "A declared language short-circuits the sampling. Trust a declaration when you have one."
+      ],
+      [
+        102,
+        "  return hits > text.length * 0.2;",
+        "A fifth of the characters. Well clear of the odd loanword in English prose, and far below anything genuinely written in Arabic."
+      ],
+      [
+        106,
+        " * A paced gate in front of every call. Free tiers cap requests per minute, and",
+        "Pacing rather than reacting: waiting before a 429 is cheaper than unwinding a task after one."
+      ],
+      [
+        108,
+        " * per key, so the gate is too: three keys buy three times the throughput.",
+        "The gate is per key because the limit is. A global gate would waste two thirds of a three-key ring."
+      ]
+    ]
+  },
+  "entryHead": {
+    "path": "lib/pipeline/entry.ts",
+    "what": "an entry as a function of its evidence",
+    "lines": [
+      [
+        11,
+        " * An entry is never authored once and left alone — it is a function of the",
+        "The premise of the whole feature, and the reason 'stale' is a computable property rather than a judgement."
+      ],
+      [
+        12,
+        " * evidence, and the evidence grows. `built_from_hash` records exactly which",
+        "One hash makes staleness mechanical: hash the mention set, compare, done."
+      ],
+      [
+        16,
+        " * The second run is a revision, not a rewrite: the model sees the existing",
+        "The distinction that makes re-running affordable."
+      ],
+      [
+        17,
+        " * entry plus only the mentions it has not seen before, and reports what",
+        "Only the new evidence. Re-reading all of it would cost the same as the first write, every time a book arrives."
+      ],
+      [
+        19,
+        " * thing a researcher actually wants — a record of how the picture shifted when",
+        "And the by-product that turns out to be the point: a changelog of how each new source changed the picture."
+      ],
+      [
+        526,
+        "  return crypto.createHash(\"sha1\").update(ids.slice().sort((a, b) => a - b).join(\",\")).digest(\"hex\");",
+        "Sorted before hashing, so the same set of mentions in a different query order produces the same hash. Forgetting the sort would mark everything stale on every read."
+      ],
+      [
+        209,
+        "  if (!force && existing?.built_from_hash === hash && uncovered.length === 0) {",
+        "Two conditions to skip: the hash matches AND nothing is uncovered. The second is Chapter 6's fix, and it is why one check was not enough."
+      ]
+    ]
+  },
+  "coverage": {
+    "path": "lib/pipeline/entry.ts · lib/entries.ts",
+    "what": "the failure a matching hash concealed",
+    "lines": [
+      [
+        146,
+        " * How much evidence one call may be given.",
+        "A limit that exists because of a measured failure, not a guessed one."
+      ],
+      [
+        148,
+        " * The US entry had 146 quotes behind it and cited 52 of them — 36%. Entities",
+        "The measurement. Naming the actual entity and the actual numbers is what makes this comment checkable."
+      ],
+      [
+        150,
+        " * with a dozen quotes were at 100%. The difference is not judgement, it is",
+        "The diagnosis, and it is not the obvious one: the model was not being lazy, it was out of room."
+      ],
+      [
+        152,
+        " * revisited it, because `built_from_hash` recorded all 146 as accounted for.",
+        "And why nothing caught it. The freshness rule was satisfied — the evidence WAS all shown to the writer."
+      ],
+      [
+        157,
+        "const EVIDENCE_PER_PASS = 40;",
+        "So a large entity is written over several passes, each folding in a batch the entry does not yet cite."
+      ],
+      [
+        160,
+        "const MAX_PASSES = 8;",
+        "A ceiling, so a model that refuses to cite anything cannot loop for ever. Every convergence loop needs one."
+      ],
+      [
+        163,
+        "export const COVERAGE_TARGET = 0.85;",
+        "Below this share of evidence cited, the entry is treated as unfinished. Not 100% — some quotes genuinely do not belong in prose."
+      ],
+      [
+        35,
+        "const UNDERCOVERED = `",
+        "The second staleness definition, in SQL."
+      ],
+      [
+        38,
+        "      AND (SELECT COUNT(*) FROM live_mentions m WHERE m.entity_id = e.id) >= 8",
+        "Only applied to entities with real evidence behind them. A three-quote entity citing two is fine."
+      ],
+      [
+        42,
+        "           AND instr(en.body_md, '[[m:' || m.id || ']]') > 0",
+        "Counting actual citation markers in the body. This is the difference between 'was shown the evidence' and 'used the evidence'."
+      ],
+      [
+        33,
+        " * every body in JavaScript, because this runs on every idle sweep.",
+        "Done in SQL for speed, and the reason is given. A correctness check too slow to run often is one that does not run."
+      ]
+    ]
+  },
+  "verify": {
+    "path": "lib/pipeline/verify.ts",
+    "what": "reading an entry back against its own quotes",
+    "lines": [
+      [
+        9,
+        " * Reads a finished entry back against its own citations.",
+        "A stage that checks the output of another stage. Rare, and here it is the most important one."
+      ],
+      [
+        11,
+        " * Everything else in this pipeline measures whether the evidence reached the",
+        "The gap, precisely stated."
+      ],
+      [
+        13,
+        " * those are not the same question — an audit of the library found every entity",
+        "Two different questions that every structural metric conflates."
+      ],
+      [
+        16,
+        " *   Al Saud is the ruling dynasty of Saudi Arabia [[m:36243]] [[m:36917]] ...",
+        "The actual failure, quoted from the real library. A comment with a real example in it survives being skimmed."
+      ],
+      [
+        18,
+        " * where the cited passages are about Abdullah Sulaiman not being a member of it.",
+        "And the punchline. The sentence is true; the citations point at something else entirely."
+      ],
+      [
+        21,
+        " * application exists to prevent, wearing a citation so it cannot be seen.",
+        "The best sentence in the codebase. A hallucination in a costume."
+      ],
+      [
+        23,
+        " * Structural checks cannot catch that. The marker is real, the mention exists,",
+        "Every automated integrity test passes. That is why this stage has to exist."
+      ],
+      [
+        27,
+        " * This pass reports and does not edit, for the same reason the draft fact-check",
+        "A deliberate limit on what the stage does."
+      ],
+      [
+        28,
+        " * does: a rewrite would quietly bury the disagreement, and what you want to see",
+        "The reason: the disagreement is the finding. Fixing it silently destroys the information."
+      ],
+      [
+        44,
+        "            enum: [\"supported\", \"overstated\", \"unsupported\"],",
+        "Three verdicts, enforced by the schema. A free-text verdict would come back as prose nobody can count."
+      ],
+      [
+        49,
+        "              \"Under 25 words, only when not 'supported'. Say what the passages do say instead.\",",
+        "A note only when there is something to say, capped so it stays readable beside the sentence."
+      ],
+      [
+        67,
+        "- \"overstated\": the passages carry something weaker, narrower or more hedged.",
+        "The subtle category, and the examples below make it operable."
+      ],
+      [
+        69,
+        "  A passage saying an arrangement \"could\" do something does not support a",
+        "A concrete instance beats a definition. This is the difference between a rubric a model can apply and one it cannot."
+      ],
+      [
+        72,
+        "- \"unsupported\": the passages do not say this. This includes sentences that are",
+        "The category the whole stage exists for."
+      ],
+      [
+        74,
+        "  most important case here, and the easiest to wave through, because a false",
+        "And the reason it is hard: a false sentence looks wrong, while a true unsourced one looks fine."
+      ],
+      [
+        76,
+        "Judge only the sentence in front of you. Do not penalise it for what other",
+        "Scoping the judgement, so verdicts do not drift into general criticism of the entry."
+      ],
+      [
+        78,
+        "Most sentences should come back \"supported\"; say so and move on.`",
+        "Calibration. Without it, a checker asked to find problems finds problems, and a flag on every sentence is a flag on none."
+      ],
+      [
+        88,
+        "    .split(/(?<=[.!?؟])\\s+/)",
+        "Sentence splitting including the Arabic question mark — a lookbehind, so the punctuation stays with its sentence."
+      ],
+      [
+        90,
+        "    .filter((s) => s.length > 25 && /\\[\\[m:\\d+\\]\\]/.test(s))",
+        "Only sentences that actually carry a citation are checked. An uncited sentence is a different problem, measured by coverage."
+      ]
+    ]
+  },
+  "ledger": {
+    "path": "lib/audit.ts",
+    "what": "blocking and teaching, kept apart",
+    "lines": [
+      [
+        11,
+        " * Auditing an entry by hand.",
+        "The one place a human overrules the machine."
+      ],
+      [
+        13,
+        " * Everything else in Corpus decides what counts as evidence by asking a model.",
+        "Which is what makes this file structurally different from every other one."
+      ],
+      [
+        15,
+        " * makes that worth doing at all: a rejection you have to repeat is not a",
+        "The design principle in one clause. If the correction does not stick, nobody makes corrections."
+      ],
+      [
+        20,
+        " * 1. It BLOCKS. The quote never returns to that subject's evidence — not when",
+        "Mechanism one, and the list of paths it has to survive is the interesting part."
+      ],
+      [
+        22,
+        " *    the zero-token sweep matches the name again. This is a deterministic rule",
+        "Three separate paths that could reintroduce it. Naming them is how you know the block was designed rather than assumed."
+      ],
+      [
+        24,
+        " *    whatever any model decides later.",
+        "The strength of the claim: a rule, not a preference."
+      ],
+      [
+        26,
+        " * 2. It TEACHES. Your reason is carried back into the prompts that produced the",
+        "Mechanism two."
+      ],
+      [
+        30,
+        " *    father here\" will usually not do it a third time, and may. The value is",
+        "And its honest strength: usually, and may. A nudge stated as a nudge."
+      ],
+      [
+        33,
+        " * Stating that split plainly matters more than it might seem. \"Corpus learns",
+        "Why the file bothers to distinguish them at all."
+      ],
+      [
+        34,
+        " * from your corrections\" is the kind of claim that quietly means nothing; what",
+        "A warning about your own marketing copy, written into the source. Rare and worth imitating."
+      ],
+      [
+        38,
+        " * Nothing is deleted. A discarded mention keeps its row and stays readable under",
+        "The third property: reversibility."
+      ],
+      [
+        40,
+        " * thing worse than evidence you have to reject by hand is evidence that",
+        "And the reason. A destructive correction makes people afraid to correct."
+      ],
+      [
+        244,
+        "export function discardIndex(): Set<string> {",
+        "The whole ledger as a Set, built once per pass. Querying per candidate row would make extraction crawl."
+      ],
+      [
+        252,
+        "  return index.has(`${entityNorm}${quoteKeyOf(quote)}`);",
+        "The key is entity plus normalised quote — so the same passage can be evidence for one person and blocked for another, which is exactly the misattribution case."
+      ]
+    ]
+  },
+  "reapply": {
+    "path": "lib/audit.ts",
+    "what": "making the block survive re-extraction",
+    "lines": [
+      [
+        256,
+        " * Re-applies the ledger to whatever is currently in the mentions table.",
+        "The second enforcement point. The insert-time check catches the common path; this catches everything else."
+      ],
+      [
+        258,
+        " * Re-extraction writes new rows for old quotes, and those rows arrive without",
+        "The specific hole: new rows for old quotes, arriving clean."
+      ],
+      [
+        261,
+        " * catches everything, including material written before the check existed.",
+        "Including data that predates the feature — a migration and a guard in one function."
+      ],
+      [
+        270,
+        "  if (verdicts.size === 0) return 0;",
+        "An empty ledger means no work at all. The early return keeps this free for the common case of a library with no discards."
+      ],
+      [
+        272,
+        "  // Matched in JS rather than in SQL, so the comparison is the same function",
+        "The detail worth stealing, and the next three lines explain it."
+      ],
+      [
+        274,
+        "  // SQLite's lower(trim(...)) leaves the internal whitespace alone, and a quote",
+        "Why the obvious SQL version is wrong: trim touches the ends, not the middle."
+      ],
+      [
+        275,
+        "  // re-extracted with its line breaks folded differently would silently fail to",
+        "And the failure it produces — a quote that does not match itself. Silent, and exactly what the ledger exists to prevent."
+      ],
+      [
+        281,
+        "        WHERE m.discarded_at IS NULL ${sourceId ? \"AND m.source_id = ?\" : \"\"}`",
+        "Optional scoping to one source, so re-extracting a single book does not rescan the whole library."
+      ],
+      [
+        290,
+        "  tx(() => {",
+        "All the marks in one transaction. A half-applied ledger is worse than an unapplied one, because you would believe it."
+      ],
+      [
+        122,
+        "  return quote.replace(/\\s+/g, \" \").trim().toLowerCase();",
+        "The whole normalisation: collapse all whitespace, trim, lowercase. Small enough to be obviously correct, and used at every comparison point."
+      ]
+    ]
+  },
+  "portal": {
+    "path": "app/sources/[id]/Reader.tsx",
+    "what": "a CSS bug worth an afternoon",
+    "lines": [
+      [
+        761,
+        "   * The reader is rendered straight into <body>, not where it sits in the tree.",
+        "The what, before the why."
+      ],
+      [
+        763,
+        "   * `z-40` only outranks the navigation rail's `z-30` if the two are compared",
+        "The rule everyone half-knows: z-index only compares within a stacking context."
+      ],
+      [
+        764,
+        "   * in the same stacking context, and they were not: the page wrapper fades in,",
+        "And the culprit — a fade-in animation."
+      ],
+      [
+        765,
+        "   * an element with opacity below 1 forms a stacking context, and the reader's",
+        "The rule almost nobody has memorised. Opacity below 1 creates a stacking context, silently."
+      ],
+      [
+        768,
+        "   * static and unpositioned, so a fixed rail at body level painted over the",
+        "The consequence."
+      ],
+      [
+        769,
+        "   * whole book — the text was all there, full width and correct, with the first",
+        "The symptom, described exactly as it appeared. This is what makes the comment searchable when it happens again."
+      ],
+      [
+        771,
+        "   * Moving it to the body ends the argument rather than winning it. It is also",
+        "The framing of the fix: end the argument, do not win it. Raising the z-index would work until the next transform appeared."
+      ],
+      [
+        773,
+        "   * filter, opacity or containment can reach it now.",
+        "Four properties that create stacking contexts, and a portal is proof against all of them."
+      ],
+      [
+        775,
+        "  return createPortal(",
+        "One call, and the whole class of bug is gone."
+      ]
+    ]
+  },
+  "speech": {
+    "path": "lib/speech.ts",
+    "what": "three platform bugs, handled once",
+    "lines": [
+      [
+        4,
+        " * No account, no key, no per-character cost and nothing sent anywhere: the",
+        "Four properties, and the fourth is the one that decides it."
+      ],
+      [
+        6,
+        " * That last property is what decides it. A book is around half a million",
+        "The arithmetic that rules out every hosted service."
+      ],
+      [
+        9,
+        " * everything you read to somebody's server — in an app whose whole premise is a",
+        "And the principle it would violate. A privacy claim is only as good as the feature most tempted to break it."
+      ],
+      [
+        12,
+        " * The awkward parts are all in the platform, and they are the reason this module",
+        "Why this is a module rather than one call at the point of use."
+      ],
+      [
+        16,
+        " *  - Voices arrive late. `getVoices()` is empty on first call in most browsers",
+        "Bug one, and the event that fixes it may already have fired — so waiting for it alone is not enough."
+      ],
+      [
+        18,
+        " *  - Long utterances are cut off. Chrome stops speaking after roughly fifteen",
+        "Bug two: a documented, long-standing Chrome bug. A paragraph has to be broken into sentence-sized pieces."
+      ],
+      [
+        21,
+        " *  - Cancelling is not clean. `cancel()` fires `onend` on the utterance it",
+        "Bug three, and the nastiest."
+      ],
+      [
+        22,
+        " *    killed, indistinguishable from a natural finish, which will happily",
+        "The consequence: a reader that advances on onend skips a paragraph you never heard."
+      ],
+      [
+        25,
+        " * All three are handled here so the reader can treat speech as: say this, tell",
+        "The interface the module exists to provide. Everything above is the price of that one sentence."
+      ],
+      [
+        38,
+        "export function sentences(text: string, max = 220): string[] {",
+        "The fix for bug two, and a pure function — which is why test-speech.mjs can check it with no browser."
+      ],
+      [
+        42,
+        "  // Split after sentence-ending punctuation, including the Arabic question mark",
+        "Arabic punctuation handled in the splitter, because a library that reads Arabic books has to read them aloud too."
+      ]
+    ]
+  }
+};
+
+/* ============ tiny syntax highlighter (escapes first, then tokenises) ============ */
+const KEYWORDS = new Set(["const","let","var","function","return","if","else","for","of","in","new","await","async","export","import","from","type","interface","class","extends","implements","try","catch","finally","throw","null","undefined","true","false","void","continue","break","this","as","default","typeof","Record","Promise","Set","Number","String","Boolean"]);
+function esc(s) { return s.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;"); }
+function highlight(src) {
+  let out = "", i = 0;
+  while (i < src.length) {
+    const rest = src.slice(i);
+    let m;
+    if ((m = rest.match(/^\/\/.*/)) || (m = rest.match(/^\/\*[\s\S]*?\*\//)) || (m = rest.match(/^\*.*/)) || (m = rest.match(/^\/\*\*.*/))) {
+      out += '<span class="tok-c">' + esc(m[0]) + "</span>"; i += m[0].length; continue;
+    }
+    if ((m = rest.match(/^"(?:[^"\\]|\\.)*"/)) || (m = rest.match(/^'(?:[^'\\]|\\.)*'/)) || (m = rest.match(/^`(?:[^`\\]|\\.)*`/))) {
+      out += '<span class="tok-s">' + esc(m[0]) + "</span>"; i += m[0].length; continue;
+    }
+    if ((m = rest.match(/^\b\d+(?:\.\d+)?\b/))) {
+      out += '<span class="tok-n">' + esc(m[0]) + "</span>"; i += m[0].length; continue;
+    }
+    if ((m = rest.match(/^[A-Za-z_$][A-Za-z0-9_$]*/))) {
+      const w = m[0];
+      const after = rest.slice(w.length);
+      if (KEYWORDS.has(w)) out += '<span class="tok-k">' + esc(w) + "</span>";
+      else if (/^\s*\(/.test(after)) out += '<span class="tok-f">' + esc(w) + "</span>";
+      else out += esc(w);
+      i += w.length; continue;
+    }
+    out += esc(src[i]); i += 1;
+  }
+  return out;
+}
+
+/* ============ render specimens ============ */
+document.querySelectorAll(".specimen").forEach((host) => {
+  const spec = SPECS[host.dataset.spec];
+  if (!spec) return;
+  const noted = spec.lines.map((l, idx) => (l[2] ? idx : -1)).filter((i) => i >= 0);
+
+  const head = document.createElement("div");
+  head.className = "spec-head";
+  head.innerHTML =
+    '<span class="spec-path">' + esc(spec.path) + "</span>" +
+    '<span class="spec-what">' + esc(spec.what) + "</span>" +
+    '<span class="spec-steps">' +
+      '<button class="step-btn" data-dir="-1" type="button">← Prev</button>' +
+      '<span class="step-count"></span>' +
+      '<button class="step-btn" data-dir="1" type="button">Next →</button>' +
+    "</span>";
+
+  const body = document.createElement("div");
+  body.className = "spec-body";
+  const codePane = document.createElement("div");
+  codePane.className = "code-pane";
+  const pre = document.createElement("pre");
+  pre.className = "code";
+  spec.lines.forEach((l, idx) => {
+    const row = document.createElement("div");
+    row.className = "cl" + (l[2] ? " has-note" : "");
+    if (l[2]) { row.tabIndex = 0; row.setAttribute("role", "button"); row.setAttribute("aria-label", "Explain line " + l[0]); }
+    row.dataset.idx = String(idx);
+    row.innerHTML = '<span class="n">' + l[0] + '</span><span class="dot">•</span><span class="t">' + highlight(l[1]) + "</span>";
+    pre.appendChild(row);
+  });
+  codePane.appendChild(pre);
+
+  const notePane = document.createElement("div");
+  notePane.className = "note-pane";
+  notePane.innerHTML = '<div class="nl">Note</div><div class="nt"></div>';
+
+  body.appendChild(codePane);
+  body.appendChild(notePane);
+  host.appendChild(head);
+  host.appendChild(body);
+
+  let cursor = -1;
+  const rows = pre.querySelectorAll(".cl");
+  const nl = notePane.querySelector(".nl");
+  const nt = notePane.querySelector(".nt");
+  const count = head.querySelector(".step-count");
+  const prevB = head.querySelector('[data-dir="-1"]');
+  const nextB = head.querySelector('[data-dir="1"]');
+
+  function show(idx, scroll) {
+    rows.forEach((r) => r.classList.remove("on"));
+    if (idx < 0) {
+      nl.textContent = "Note";
+      nt.innerHTML = '<span class="hint">Click a line marked with a dot, or press Next, to read what it does.</span>';
+      count.textContent = noted.length + " notes";
+      prevB.disabled = true; nextB.disabled = false;
+      cursor = -1;
+      return;
+    }
+    cursor = idx;
+    const row = rows[idx];
+    row.classList.add("on");
+    if (scroll) row.scrollIntoView({ block: "nearest", behavior: matchMedia("(prefers-reduced-motion: reduce)").matches ? "auto" : "smooth" });
+    nl.textContent = "Line " + spec.lines[idx][0];
+    nt.textContent = spec.lines[idx][2];
+    const pos = noted.indexOf(idx);
+    count.textContent = (pos + 1) + " / " + noted.length;
+    prevB.disabled = pos <= 0;
+    nextB.disabled = pos >= noted.length - 1;
+  }
+  show(-1, false);
+
+  pre.addEventListener("click", (e) => {
+    const row = e.target.closest(".cl.has-note");
+    if (row) show(Number(row.dataset.idx), false);
+  });
+  pre.addEventListener("keydown", (e) => {
+    const row = e.target.closest(".cl.has-note");
+    if (row && (e.key === "Enter" || e.key === " ")) { e.preventDefault(); show(Number(row.dataset.idx), false); }
+    if (e.key === "ArrowDown" || e.key === "ArrowUp") {
+      e.preventDefault();
+      const pos = noted.indexOf(cursor);
+      const nxt = e.key === "ArrowDown" ? Math.min(pos + 1, noted.length - 1) : Math.max(pos - 1, 0);
+      show(noted[nxt < 0 ? 0 : nxt], true);
+    }
+  });
+  head.addEventListener("click", (e) => {
+    const b = e.target.closest(".step-btn");
+    if (!b) return;
+    const dir = Number(b.dataset.dir);
+    const pos = noted.indexOf(cursor);
+    const nxt = pos === -1 ? 0 : Math.min(Math.max(pos + dir, 0), noted.length - 1);
+    show(noted[nxt], true);
+  });
+});
+
+/* ============ table of contents + scrollspy ============ */
+const secs = [...document.querySelectorAll("section[data-title]")];
+const toc = document.getElementById("toc");
+secs.forEach((s, i) => {
+  const a = document.createElement("a");
+  a.href = "#" + s.id;
+  a.innerHTML = '<span class="num">' + String(i).padStart(2, "0") + "</span><span>" + s.dataset.title + "</span>";
+  toc.appendChild(a);
+});
+const links = [...toc.querySelectorAll("a")];
+const spy = new IntersectionObserver((entries) => {
+  entries.forEach((en) => {
+    if (!en.isIntersecting) return;
+    const i = secs.indexOf(en.target);
+    links.forEach((l, j) => l.classList.toggle("active", j === i));
+  });
+}, { rootMargin: "-15% 0px -70% 0px" });
+secs.forEach((s) => spy.observe(s));
+
+/* ============ trace animation ============ */
+const hops = [...document.querySelectorAll("#hops .hop")];
+const playBtn = document.getElementById("playTrace");
+if (playBtn) playBtn.addEventListener("click", function () {
+  const reduce = matchMedia("(prefers-reduced-motion: reduce)").matches;
+  hops.forEach((h) => h.classList.remove("lit"));
+  this.disabled = true;
+  const step = (i) => {
+    if (i >= hops.length) { this.disabled = false; this.textContent = "Run it again"; return; }
+    hops[i].classList.add("lit");
+    setTimeout(() => step(i + 1), reduce ? 0 : 520);
+  };
+  step(0);
+});
+
+/* ============ checks ============ */
+document.querySelectorAll(".check").forEach((c) => {
+  c.querySelector(".a").textContent = c.dataset.answer;
+  c.querySelector(".reveal").addEventListener("click", () => c.classList.add("open"));
+});
+
+/* ============ copy buttons ============ */
+document.querySelectorAll(".copy").forEach((b) => {
+  b.addEventListener("click", async () => {
+    try { await navigator.clipboard.writeText(b.dataset.copy); b.textContent = "copied"; }
+    catch { b.textContent = "select it"; }
+    setTimeout(() => (b.textContent = "copy"), 1400);
+  });
+});
+
+/* ============ glossary popover ============ */
+const pop = document.getElementById("pop");
+let popFor = null;
+function hidePop() { pop.style.display = "none"; popFor = null; }
+document.addEventListener("click", (e) => {
+  const t = e.target.closest("button.term");
+  if (!t) { if (!e.target.closest("#pop")) hidePop(); return; }
+  if (popFor === t) { hidePop(); return; }
+  pop.innerHTML = "<b>" + esc(t.textContent) + "</b> — " + esc(t.dataset.def);
+  pop.style.display = "block";
+  const r = t.getBoundingClientRect();
+  const top = r.bottom + window.scrollY + 8;
+  const left = Math.min(r.left + window.scrollX, window.scrollX + document.documentElement.clientWidth - pop.offsetWidth - 16);
+  pop.style.top = top + "px";
+  pop.style.left = Math.max(8, left) + "px";
+  popFor = t;
+});
+document.addEventListener("keydown", (e) => { if (e.key === "Escape") hidePop(); });
+window.addEventListener("scroll", () => { if (popFor) hidePop(); }, { passive: true });
+
+/* ============ theme toggle ============ */
+const btn = document.getElementById("themeBtn");
+if (btn) btn.addEventListener("click", () => {
+  const cur = document.documentElement.getAttribute("data-theme");
+  const sysDark = matchMedia("(prefers-color-scheme: dark)").matches;
+  const now = cur ? cur : (sysDark ? "dark" : "light");
+  document.documentElement.setAttribute("data-theme", now === "dark" ? "light" : "dark");
+});
+
+</script>
+</body>
+</html>
