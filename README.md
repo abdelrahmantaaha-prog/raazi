@@ -1,15 +1,20 @@
 # Corpus
 
-A research pedia that grows with your sources.
+A research pedia that grows with your sources, and a newsroom that watches your beat.
 
-Feed it books, papers, articles and recordings. It reads them once, finds every
-person, organisation, institution, event and place, and writes an encyclopedia
-entry for each — with every sentence traceable to a quote at a page number. Add
-another source next month and the existing entries revise themselves, and tell
-you what changed.
+Feed it books, papers, articles and recordings — or point it at the feeds you
+follow and let them arrive on their own. It reads each once, finds every person,
+organisation, institution, event and place, and writes an encyclopedia entry for
+each, with every sentence traceable to a quote at a page number. Add another
+source next month and the existing entries revise themselves, and tell you what
+changed.
 
-Runs entirely on your machine. Your library, the database and your API key never
-leave it.
+Every morning it hands you a brief: what came in overnight about the subjects you
+watch, which outlets carried it, where they disagree, and which entries changed.
+Every line in it opens the passage it rests on.
+
+Runs on your machine. By default it listens on loopback only; Settings → LAN mode
+opens it to your own devices behind a token.
 
 ## Running it
 
@@ -81,9 +86,15 @@ on its own. `GEMINI_API_KEY` in `.env.local` overrides the stored one.
 | Parse | free | PDF text via pdfjs, EPUB via the spine, articles via Readability, Markdown by heading |
 | File | 1 call | Reads the opening and files it under the right topics (skipped if you chose them yourself) |
 | OCR | paid, only if needed | Pages with no embedded text are sliced out and sent to Gemini as images. A born-digital PDF spends nothing here |
-| Extract | 1 call per ~3,500 tokens | Entities, relations and dated events, each with a verbatim quote |
+| Extract | 1 call per ~3,500 tokens | Entities, relations and dated events, each with a verbatim quote, who is asserting it, and what kind of claim it is |
 | Resolve | cheap, mostly free | "Nasser" and "Gamal Abdel Nasser" become one person. Exact matches are free; only genuinely ambiguous pairs reach the model, batched ten at a time |
-| Entries | 1 call per entity | Only for entities above the mention threshold or ones you starred. The rest stay stubs and generate when you open them |
+| Sweep | free | Finds the appearances extraction walked past, by matching the names it already knows |
+| Entries | 1 call per entity, 2 for a large one | The writer sees all of a subject's evidence at once and plans the entry before writing it. Only for entities above the mention threshold, or ones you starred |
+| Verify | 1 call per entry | Reads every sentence back against its own citations and flags what they do not carry |
+
+A source is told when it was published, by whom and from where, and resolves its
+own relative dates against that: "March of this year", in a piece filed today, is
+stored as 2026-03. Nothing later in the pipeline could recover that.
 
 Everything converges on **chunks** — ~3,500-token windows split on paragraph
 boundaries, each carrying the page, chapter or timecode a citation will point at.
@@ -121,16 +132,34 @@ is a coherent passage instead of half of two.
 When a new source adds mentions the hash stops matching and the entity is marked
 **stale**.
 
-Regenerating is a revision, not a rewrite: the model gets the existing entry plus
-*only the evidence it has not seen*, and returns the revised text, a changelog, and
-any contradictions it noticed. Cheaper than re-reading everything, and it leaves a
-record of how the picture shifted when each book arrived — visible under **History**.
+Regenerating is a rewrite from all of the evidence, with the previous version in
+front of the writer so that what still holds is kept. It returns the revised text,
+a changelog, and any contradictions it noticed — a record of how the picture
+shifted when each book arrived, visible under **History**.
+
+**An entry is written whole, from a plan.** The writer is given every passage, the
+dated events and the recorded relations, and decides the shape of the entry before
+writing a word of it: a spine of time for a person or an event, of theme for an
+institution or a place. It used to be assembled forty quotes at a time, each pass
+bolting new material onto the last, and the result read as an index — a man's
+schooling, a lawsuit and a shipping contract in one paragraph because three quotes
+came from one book. Facts now share a paragraph only when they share a subject, a
+period, or a connection the sources actually state.
 
 **Stale entries are rewritten on their own.** Every ingest ends by queueing the
 entries its new evidence affected, and the worker sweeps for anything else the
 moment its queue is clear — so staleness caused by something other than an ingest
 (a merge you made by hand, a source you removed, a run interrupted before its
 planning step) is picked up too rather than waiting for the next book.
+
+**Staleness is about evidence, and nothing else.** There was once a second rule:
+an entry citing under 85% of its passages counted as out of date. It could not be
+satisfied — the writer is told, correctly, that it is not scored on how much
+evidence it uses — so the same two dozen entries were rewritten on every quiet
+minute, for weeks, and that one rule accounted for most of the tokens this
+application had ever spent. Coverage is now reported on the Library and queues
+nothing, and an entry rewritten three times against unchanged evidence is not
+rewritten a fourth.
 
 Two rules, deliberately separate: a **new** entry is only written once an entity
 clears the mention threshold, so the hundreds of names a book produces do not each
@@ -199,13 +228,40 @@ Every parked run also resumes with one button on the Library page, and resuming
 after three days is the same code path as resuming after a crash. Runs carry a token
 ledger and an optional cap; hitting the cap parks the run rather than surprising you.
 
+## Watching a beat
+
+**Feeds** takes an address — an outlet's politics page, a committee, a wire, a
+YouTube channel — or a phrase to watch, which becomes a news-query feed. Each feed
+carries its own interval and a daily cap, because a feed that suddenly republishes
+its archive is the failure worth guarding against and it costs tokens per item. A
+feed added today reads what comes next rather than what it already holds, unless
+you say otherwise.
+
+Polling is ordinary queue work, so a closed laptop picks up where it left off. An
+item already in the library — the same story from a second feed, matched on its
+address with the tracking parameters stripped — is recorded and not fetched again.
+
+**Stories** group accounts of one development: six outlets on one wire report is
+one story and six sources. Grouping needs two signals to agree, headline overlap
+and shared entities inside three days, and is one click from corrected — rename a
+story, pin it, or say "not this story" of an account.
+
+**The watchlist** is the shortlist the brief is built around: star a person, an
+institution, a topic, or a phrase.
+
+**The brief** is assembled from the database — which passages arrived, about whom,
+from which outlet, at what time — and only then written up, under the same rule as
+an entry: every claim carries a marker, and a marker the writer was not given is
+stripped. It says when only one outlet has something, and never merges two
+outlets' numbers into one figure.
+
 ## Tests
 
 ```bash
 npm test
 ```
 
-150 assertions, no API key needed. `test-resume.mjs` drives the real worker against
+1,420 assertions across 25 suites, no API key needed. `test-resume.mjs` drives the real worker against
 a scratch database with injected handlers, including a simulated kill mid-run and a
 real Gemini quota-error payload. `test-tags.mjs` covers the property that matters
 most — an entity in two topics stays one entity — plus derivation, overrides and
@@ -229,7 +285,15 @@ lib/
   ai/errors.ts       the error taxonomy that makes resuming possible
   ai/openai.ts       one adapter for every non-Gemini provider
   ingest/            pdf, epub, text, web parsers, and the token cleaner
-  pipeline/          extract, resolve, entry, tag, ocr, transcribe
+  pipeline/          extract, resolve, entry, verify, tag, ocr, transcribe, poll, brief
+  markers.ts         the one citation grammar every reader of an entry agrees on
+  sentences.ts       sentence splitting that knows "U.S." is not the end of one
+  feeds.ts           feeds, their items, and what has already been read
+  stories.ts         grouping accounts of one development
+  watchlist.ts       what you follow
+  brief.ts           the query the daily brief is made of
+  net.ts             outbound fetching that refuses private addresses
+  lan.ts             the token that guards LAN mode
 data/                your library, database and keys — gitignored
 ```
 
@@ -242,3 +306,11 @@ data/                your library, database and keys — gitignored
   your decision is recorded and no later pass will undo it.
 - OCR and media transcription are implemented but have not been exercised against a
   real scanned book or a long recording.
+- Story grouping reads headlines and entities, not text. Two rounds of the same
+  negotiation a week apart are two stories, which is usually what you want and
+  occasionally is not.
+- The brief covers what your feeds brought in. It cannot tell you about something
+  that no feed you follow reported.
+- With the shared key pool enabled, prompts pass through it rather than going to
+  the provider directly. Settings says so; turn it off to keep every call on your
+  own keys.
