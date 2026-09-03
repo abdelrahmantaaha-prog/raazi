@@ -1,7 +1,7 @@
 import type { Schema } from "@google/genai";
 import { spec, type ProviderId } from "../providers";
 import { toJsonSchema, dropNulls } from "./schema";
-import { TruncatedOutputError } from "./errors";
+import { TruncatedOutputError, SchemaUnsupportedError, isSchemaFailure } from "./errors";
 
 /**
  * One adapter for every provider that is not Gemini. Groq, Cerebras,
@@ -182,6 +182,11 @@ export async function chatJson<T>(opts: {
         opts.baseUrl,
         opts.timeoutMs
       );
+    } else if (isSchemaFailure((err as HttpError)?.status, String((err as Error)?.message ?? "").toLowerCase())) {
+      // The endpoint understands json_schema and this model could not fill it.
+      // A second key on the same provider reaches the same model, so this is
+      // raised as its own error and the router moves to the next provider.
+      throw new SchemaUnsupportedError(String((err as Error).message).slice(0, 300));
     } else {
       throw err;
     }

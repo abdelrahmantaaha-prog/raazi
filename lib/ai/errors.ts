@@ -52,6 +52,24 @@ export class TruncatedOutputError extends Error {
   }
 }
 
+/**
+ * The model could not produce the schema it was asked for.
+ *
+ * Distinct from a bad request, and distinct from a key problem: the request is
+ * well formed and the key is fine, but this particular model cannot hold the
+ * shape. Groq's gpt-oss-120b answers a rich extraction schema with
+ * "json_validate_failed" and an empty generation — it spends its output budget
+ * reasoning and never closes the object. Rotating keys inside that provider is
+ * pointless (every key reaches the same model); the answer is the next
+ * provider, which is what the router does with this.
+ */
+export class SchemaUnsupportedError extends Error {
+  constructor(readonly detail: string) {
+    super("This model could not produce the requested JSON shape.");
+    this.name = "SchemaUnsupportedError";
+  }
+}
+
 export class SafetyBlockError extends Error {
   constructor(detail: string) {
     super(`Blocked by safety filters: ${detail}`);
@@ -125,6 +143,21 @@ function isFilePermissionError(status: number | undefined, raw: string): boolean
 }
 
 /**
+ * Whether the provider refused because its model could not produce the shape.
+ *
+ * Groq says so explicitly; a model that returns an empty completion for a
+ * structured call has done the same thing without saying it.
+ */
+export function isSchemaFailure(status: number | undefined, raw: string): boolean {
+  if (status !== 400 && status !== 422) return false;
+  return (
+    raw.includes("json_validate_failed") ||
+    raw.includes("failed to validate json") ||
+    raw.includes("failed_generation")
+  );
+}
+
+/**
  * What one key's failure says about that key, as opposed to what it says about
  * the run. Used by the client to decide whether to set a key aside and reach for
  * the next one.
@@ -169,6 +202,7 @@ export function keyFailure(err: unknown): KeyFailure {
 
   // Not the key's fault, and no other key can fix it — see the helper.
   if (isFilePermissionError(status, raw)) return { kind: "other" };
+  if (isSchemaFailure(status, raw)) return { kind: "other" };
 
   if (
     status === 401 ||
@@ -295,9 +329,15 @@ export function classify(err: unknown, attempts: number): Disposition {
     };
   }
 
-  // Network blips look like generic fetch failures.
+  // Network blips look like generic fetch failures. A call this app aborted
+  // because it ran past its own timeout belongs here too: the request was
+  // fine and the answer was slow, which is a reason to try again rather than
+  // to give up on the passage — a long entry against a busy provider is
+  // exactly the call that trips it.
   if (raw.includes("fetch failed") || raw.includes("econnreset") ||
-      raw.includes("etimedout") || raw.includes("socket hang up")) {
+      raw.includes("etimedout") || raw.includes("socket hang up") ||
+      raw.includes("operation was aborted") || raw.includes("aborterror") ||
+      raw.includes("timeouterror") || raw.includes("the operation timed out")) {
     if (attempts >= MAX_ATTEMPTS) {
       return { kind: "fail", reason: "Network kept failing." };
     }

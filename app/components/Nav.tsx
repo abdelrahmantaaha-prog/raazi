@@ -36,35 +36,6 @@ const NAV = [
   { href: "/settings", label: "Settings", icon: Gear },
 ];
 
-function Sun(props: React.SVGProps<SVGSVGElement>) {
-  return (
-    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={1.6} {...props}>
-      <circle cx="12" cy="12" r="4" />
-      <path d="M12 2v2M12 20v2M2 12h2M20 12h2M4.9 4.9l1.4 1.4M17.7 17.7l1.4 1.4M19.1 4.9l-1.4 1.4M6.3 17.7l-1.4 1.4" />
-    </svg>
-  );
-}
-
-function Thread(props: React.SVGProps<SVGSVGElement>) {
-  return (
-    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={1.6} {...props}>
-      <circle cx="6" cy="6" r="2" />
-      <circle cx="6" cy="18" r="2" />
-      <circle cx="18" cy="12" r="2" />
-      <path d="M8 6h4a4 4 0 0 1 4 4v0M8 18h4a4 4 0 0 0 4-4v0" />
-    </svg>
-  );
-}
-
-function Rss(props: React.SVGProps<SVGSVGElement>) {
-  return (
-    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={1.6} {...props}>
-      <path d="M5 19a1 1 0 1 0 0-2 1 1 0 0 0 0 2z" fill="currentColor" />
-      <path d="M5 11a8 8 0 0 1 8 8M5 5a14 14 0 0 1 14 14" />
-    </svg>
-  );
-}
-
 export function Nav() {
   const path = usePathname();
 
@@ -136,6 +107,35 @@ const box = {
   strokeLinejoin: "round" as const,
   "aria-hidden": true,
 };
+
+function Sun({ active }: IconProps) {
+  return (
+    <svg {...box} strokeWidth={active ? 2 : 1.7}>
+      <circle cx="12" cy="12" r="4" />
+      <path d="M12 2v2M12 20v2M2 12h2M20 12h2M4.9 4.9l1.4 1.4M17.7 17.7l1.4 1.4M19.1 4.9l-1.4 1.4M6.3 17.7l-1.4 1.4" />
+    </svg>
+  );
+}
+
+function Thread({ active }: IconProps) {
+  return (
+    <svg {...box} strokeWidth={active ? 2 : 1.7}>
+      <circle cx="6" cy="6" r="2" />
+      <circle cx="6" cy="18" r="2" />
+      <circle cx="18" cy="12" r="2" />
+      <path d="M8 6h4a4 4 0 0 1 4 4M8 18h4a4 4 0 0 0 4-4" />
+    </svg>
+  );
+}
+
+function Rss({ active }: IconProps) {
+  return (
+    <svg {...box} strokeWidth={active ? 2 : 1.7}>
+      <circle cx="5.5" cy="18.5" r="1.4" fill="currentColor" stroke="none" />
+      <path d="M4 11a9 9 0 0 1 9 9M4 5a15 15 0 0 1 15 15" />
+    </svg>
+  );
+}
 
 function Books({ active }: IconProps) {
   return (

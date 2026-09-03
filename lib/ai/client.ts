@@ -19,6 +19,7 @@ import { spec, type ProviderId, type Stage } from "../providers";
 import { chatJson, chatText, validateOpenAiKey } from "./openai";
 import {
   AllKeysExhaustedError,
+  SchemaUnsupportedError,
   MissingKeyError,
   NoUsableKeysError,
   SafetyBlockError,
@@ -119,11 +120,25 @@ export function isNonLatin(lang?: string, sample?: string): boolean {
  * spare; a recording or a scanned page is a different animal, and gets ten.
  */
 export const CALL_TIMEOUT_MS = 180_000;
+
+/**
+ * Writing and checking an entry gets longer.
+ *
+ * Since the writer sees all of a subject's evidence at once — with its
+ * timeline and relations — the prompt for a well-documented person is several
+ * times what any other stage sends, and a busy provider can take minutes over
+ * it. Three minutes was enough when the entry was written forty quotes at a
+ * time; it is not now, and a timeout there throws away a call that was about
+ * to succeed.
+ */
+const LONG_TIMEOUT_MS = 420_000;
+const LONG_STAGES = new Set(["entry"]);
 export const MEDIA_TIMEOUT_MS = 600_000;
 
-function timeoutFor(need: Need, explicit?: number): number {
+function timeoutFor(need: Need, explicit?: number, stage?: Stage): number {
   if (explicit && explicit > 0) return explicit;
-  return need === "audio" || need === "vision" ? MEDIA_TIMEOUT_MS : CALL_TIMEOUT_MS;
+  if (need === "audio" || need === "vision") return MEDIA_TIMEOUT_MS;
+  return stage && LONG_STAGES.has(stage) ? LONG_TIMEOUT_MS : CALL_TIMEOUT_MS;
 }
 
 // ---------------------------------------------------------------------------
@@ -276,6 +291,17 @@ async function withRotation<T>(
         return { value, key };
       } catch (err) {
         lastError = err;
+
+        // This provider's model cannot produce the shape. Every key here
+        // reaches the same model, so the whole provider is skipped rather
+        // than each of its keys refused in turn.
+        if (err instanceof SchemaUnsupportedError) {
+          console.warn(
+            `[corpus] ${spec(provider).label} could not produce the JSON shape; trying the next provider`
+          );
+          break;
+        }
+
         const failure = keyFailure(err);
 
         if (isBrokerKey(key.id)) {
@@ -530,7 +556,7 @@ export async function generateJson<T>(opts: {
   timeoutMs?: number;
 }): Promise<CallResult<T>> {
   const candidates = providersFor(opts.stage, { lang: opts.lang, sample: opts.sample });
-  const timeoutMs = timeoutFor(undefined, opts.timeoutMs);
+  const timeoutMs = timeoutFor(undefined, opts.timeoutMs, opts.stage);
 
   const { value, key } = await withRotation(candidates, async (k): Promise<CallResult<T>> => {
     const provider = k.provider ?? "gemini";
@@ -599,7 +625,7 @@ export async function generateText(opts: {
     lang: opts.lang,
     sample: opts.sample,
   });
-  const timeoutMs = timeoutFor(opts.need, opts.timeoutMs);
+  const timeoutMs = timeoutFor(opts.need, opts.timeoutMs, opts.stage);
 
   const call = async (k: ApiKey): Promise<CallResult<string>> => {
     const provider = k.provider ?? "gemini";

@@ -3,14 +3,20 @@
   "configurations": [
     {
       "name": "corpus",
-      "runtimeExecutable": "npm",
-      "runtimeArgs": ["run", "dev"],
+      "runtimeExecutable": "node",
+      "runtimeArgs": ["node_modules/next/dist/bin/next", "dev", "--port", "5400", "--hostname", "127.0.0.1"],
+      "port": 5400
+    },
+    {
+      "name": "corpus-prod",
+      "runtimeExecutable": "node",
+      "runtimeArgs": ["node_modules/next/dist/bin/next", "start", "--port", "5400", "--hostname", "127.0.0.1"],
       "port": 5400
     },
     {
       "name": "corpus-check",
-      "runtimeExecutable": "npx",
-      "runtimeArgs": ["next", "dev", "--port", "5401"],
+      "runtimeExecutable": "node",
+      "runtimeArgs": ["node_modules/next/dist/bin/next", "dev", "--port", "5401", "--hostname", "127.0.0.1"],
       "port": 5401
     }
   ]
