@@ -3,11 +3,13 @@
   "version": "0.1.0",
   "private": true,
   "scripts": {
-    "dev": "next dev --port 5400 --hostname 0.0.0.0",
+    "dev": "next dev --port 5400 --hostname 127.0.0.1",
+    "dev:lan": "node scripts/lan.mjs dev",
     "build": "next build",
-    "start": "next start --port 5400 --hostname 0.0.0.0",
+    "start": "next start --port 5400 --hostname 127.0.0.1",
+    "start:lan": "node scripts/lan.mjs start",
     "lint": "next lint",
-    "test": "tsx scripts/test-resume.mjs && tsx scripts/test-keys.mjs && tsx scripts/test-broker.mjs && tsx scripts/test-routing.mjs && tsx scripts/test-refresh.mjs && tsx scripts/test-names.mjs && tsx scripts/test-graph.mjs && tsx scripts/test-portraits.mjs && tsx scripts/test-geo.mjs && tsx scripts/test-network.mjs && tsx scripts/test-tags.mjs && tsx scripts/test-formats.mjs && tsx scripts/test-reading.mjs && tsx scripts/test-writing.mjs && tsx scripts/test-docx.mjs && tsx scripts/test-render.mjs && tsx scripts/test-audit.mjs && tsx scripts/test-context.mjs && tsx scripts/test-speech.mjs && tsx scripts/test-fidelity.mjs && tsx scripts/test-hardening.mjs",
+    "test": "tsx scripts/test-resume.mjs && tsx scripts/test-keys.mjs && tsx scripts/test-broker.mjs && tsx scripts/test-routing.mjs && tsx scripts/test-refresh.mjs && tsx scripts/test-names.mjs && tsx scripts/test-graph.mjs && tsx scripts/test-portraits.mjs && tsx scripts/test-geo.mjs && tsx scripts/test-network.mjs && tsx scripts/test-tags.mjs && tsx scripts/test-formats.mjs && tsx scripts/test-reading.mjs && tsx scripts/test-writing.mjs && tsx scripts/test-docx.mjs && tsx scripts/test-render.mjs && tsx scripts/test-audit.mjs && tsx scripts/test-context.mjs && tsx scripts/test-speech.mjs && tsx scripts/test-fidelity.mjs && tsx scripts/test-hardening.mjs && tsx scripts/test-entry.mjs && tsx scripts/test-extract.mjs && tsx scripts/test-feeds.mjs && tsx scripts/test-api.mjs",
     "test:reading": "tsx scripts/test-reading.mjs",
     "test:writing": "tsx scripts/test-writing.mjs",
     "test:resume": "tsx scripts/test-resume.mjs",
@@ -27,7 +29,11 @@
     "test:speech": "tsx scripts/test-speech.mjs",
     "test:fidelity": "tsx scripts/test-fidelity.mjs",
     "prebuild": "node scripts/guard-build.mjs",
-    "test:broker": "tsx scripts/test-broker.mjs"
+    "test:broker": "tsx scripts/test-broker.mjs",
+    "test:api": "tsx scripts/test-api.mjs",
+    "test:entry": "tsx scripts/test-entry.mjs",
+    "test:extract": "tsx scripts/test-extract.mjs",
+    "test:feeds": "tsx scripts/test-feeds.mjs"
   },
   "dependencies": {
     "@google/genai": "^1.9.0",

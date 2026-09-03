@@ -217,6 +217,38 @@ check("lists survive", /^- First point$/m.test(articleMd));
 check("quotes survive", /^> We wanted the army/m.test(articleMd));
 check("figures and captions are dropped", !/A caption/.test(articleMd));
 
+// ---------------------------------------------------------------------------
+section("URL — what the page says about itself");
+// ---------------------------------------------------------------------------
+{
+  const { readMeta, canonicalUrl, normaliseLang } = await import("../lib/ingest/web.ts");
+  const { JSDOM } = await import("jsdom");
+  const html = `<html lang="en-CA"><head>
+    <title>Fallback title</title>
+    <meta property="og:title" content="Tariff talks stall">
+    <meta property="og:site_name" content="The Globe and Mail">
+    <meta name="author" content="Jane Doe">
+    <meta property="article:published_time" content="2026-03-04T14:00:00-05:00">
+    <meta property="article:section" content="Politics">
+    <link rel="canonical" href="https://www.theglobeandmail.com/politics/article-tariffs/">
+  </head><body><p>x</p></body></html>`;
+  const page = "https://www.theglobeandmail.com/politics/article-tariffs/?utm_source=twitter#comments";
+  const meta = readMeta(new JSDOM(html, { url: page }).window.document, page);
+  check("published_at is the full timestamp in UTC", meta.publishedAt === "2026-03-04T19:00:00.000Z", meta.publishedAt);
+  check("year follows from it", meta.year === "2026");
+  check("the outlet is og:site_name", meta.outlet === "The Globe and Mail");
+  check("the section is read", meta.section === "Politics");
+  check("the canonical URL is the declared one", meta.canonicalUrl === "https://www.theglobeandmail.com/politics/article-tariffs");
+  check("the language is a primary tag", meta.lang === "en");
+  check("the title prefers og:title", meta.title === "Tariff talks stall");
+
+  const bare = readMeta(new JSDOM("<html><head><title>T</title></head><body></body></html>", { url: "https://News.Example.com/a?gclid=1" }).window.document, "https://News.Example.com/a?gclid=1");
+  check("without og:site_name the outlet is the host", bare.outlet === "news.example.com");
+  check("without a canonical link the URL is cleaned", bare.canonicalUrl === "https://news.example.com/a");
+  check("without a date there is no year", bare.year === undefined && bare.publishedAt === undefined);
+  check("the helpers are re-exported for callers of web.ts", typeof canonicalUrl === "function" && normaliseLang("eng") === "en");
+}
+
 fs.rmSync(path.join(root, "data", "__fmt__"), { recursive: true, force: true });
 console.log(`\n${failed === 0 ? "All passed" : "FAILURES PRESENT"}: ${passed} passed, ${failed} failed\n`);
 process.exit(failed === 0 ? 0 : 1);

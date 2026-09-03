@@ -1,5 +1,5 @@
 import { NextResponse } from "next/server";
-import { asId, badRequest, readBody } from "@/lib/http";
+import { asId, badRequest, exists, notFound, optionalString, readBody } from "@/lib/http";
 import { db } from "@/lib/db";
 
 export const dynamic = "force-dynamic";
@@ -19,9 +19,11 @@ export async function POST(req: Request, ctx: { params: Promise<{ id: string }> 
   if (id === null) return badRequest("Not a valid id.");
   const parsed = await readBody<{ name?: string; unlock?: boolean }>(req);
   if (parsed === null) return badRequest("Malformed JSON body.");
-  const { name, unlock } = parsed;
+  const name = optionalString(parsed.name);
+  if (name === null) return badRequest("name must be a string.");
+  if (!exists("entities", id)) return notFound("No such entity.");
 
-  if (unlock) {
+  if (parsed.unlock) {
     db().prepare("UPDATE entities SET name_locked=0 WHERE id=?").run(id);
     return NextResponse.json({ ok: true, locked: false });
   }

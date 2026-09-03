@@ -1,19 +1,19 @@
 import { NextResponse } from "next/server";
-import { listRuns, wakeDueRuns } from "@/lib/queue";
-import { kickWorker, workerStatus } from "@/lib/worker";
+import { listRuns } from "@/lib/queue";
+import { workerStatus } from "@/lib/worker";
 import { db } from "@/lib/db";
 
 export const dynamic = "force-dynamic";
 
+/**
+ * The Library's poll. Reads only: it used to start the worker whenever it saw
+ * queued work, so that a page load after a restart would pick things up, but a
+ * GET that sets work going is a GET anyone on the network can set going. The
+ * launcher now does that once with POST /api/worker/kick, and every action
+ * that queues work kicks the worker itself.
+ */
 export async function GET() {
   const runs = listRuns();
-  // Any queued work means the worker should be alive; a page load is as good a
-  // trigger as any after a server restart. Parked runs count too — one whose
-  // timer has passed needs someone to notice, and the worker is what checks.
-  const due = wakeDueRuns();
-  if (due > 0 || runs.some((r) => ["queued", "running", "paused_quota"].includes(r.state))) {
-    kickWorker();
-  }
 
   const sources = db()
     .prepare(

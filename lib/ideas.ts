@@ -1,6 +1,6 @@
 import { db, tx } from "./db";
 import { createDraft } from "./drafts";
-import { MAX_OUTLINE_DEPTH, type IdeaState } from "./idea-states";
+import { IDEA_STATES, MAX_OUTLINE_DEPTH, type IdeaState } from "./idea-states";
 
 /**
  * The notebook that comes before the draft.
@@ -76,6 +76,30 @@ export function outlineFor(ideaId: number): OutlinePoint[] {
   return db()
     .prepare("SELECT * FROM outline_points WHERE idea_id=? ORDER BY seq, id")
     .all(ideaId) as OutlinePoint[];
+}
+
+/**
+ * The point, if it belongs to this idea.
+ *
+ * The outline route names the idea in its URL and the point in its body, and
+ * used to act on the point alone — so any idea's URL could edit or delete any
+ * other idea's points. Every point operation goes through this first.
+ */
+export function pointOf(ideaId: number, pointId: number): OutlinePoint | undefined {
+  return db()
+    .prepare("SELECT * FROM outline_points WHERE id=? AND idea_id=?")
+    .get(pointId, ideaId) as OutlinePoint | undefined;
+}
+
+export function isIdeaState(v: unknown): v is IdeaState {
+  return IDEA_STATES.some((s) => s.id === v);
+}
+
+/** A depth the outline can hold, or undefined for anything else. */
+export function asDepth(v: unknown): number | undefined {
+  return typeof v === "number" && Number.isInteger(v) && v >= 0 && v <= MAX_OUTLINE_DEPTH
+    ? v
+    : undefined;
 }
 
 export function createIdea(title = "", note = ""): number {

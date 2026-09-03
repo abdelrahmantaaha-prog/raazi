@@ -166,9 +166,25 @@ export function hasUsableKey(provider?: ProviderId): boolean {
   return usableKeys(provider).length > 0;
 }
 
-/** Which providers you have at least one working key for. */
+/**
+ * Which providers you have at least one working key for.
+ *
+ * The shared pool counts only for Gemini. It offers a Groq surface too, but
+ * whether anything answers there depends on what the broker holds, and
+ * Settings reporting "Groq configured" the moment the pool is switched on —
+ * with no Groq key anywhere you can see — was misleading people into routing
+ * stages to a provider they never set up.
+ */
 export function configuredProviders(): ProviderId[] {
-  return [...new Set(listKeys().map((k) => k.provider ?? "gemini"))];
+  const out = new Set<ProviderId>();
+  for (const k of listKeys()) {
+    if (isBrokerKey(k.id)) {
+      if (k.provider === "gemini") out.add("gemini");
+      continue;
+    }
+    out.add(k.provider ?? "gemini");
+  }
+  return [...out];
 }
 
 export function modelFor(key: ApiKey): string {
@@ -180,10 +196,16 @@ export function modelFor(key: ApiKey): string {
  * should sleep until then, not until the last one resets.
  */
 export function earliestReset(provider?: ProviderId): Date | undefined {
-  const waiting = liveKeys(provider)
-    .map((k) => k.exhaustedUntil ?? k.cooldownUntil)
-    .filter((t): t is string => Boolean(t) && !past(t))
-    .map((t) => new Date(t).getTime());
+  // Each key is waiting on whichever of its two clocks is still in the
+  // future. Taking exhaustedUntil ?? cooldownUntil used to let a stale,
+  // already-past exhaustion hide a live cooldown on the same key — the key
+  // then counted as "not waiting", the ring reported no reset at all, and
+  // the run was parked for an hour over a twenty-second window.
+  const waiting = liveKeys(provider).flatMap((k) =>
+    [k.exhaustedUntil, k.cooldownUntil]
+      .filter((t): t is string => Boolean(t) && !past(t))
+      .map((t) => new Date(t).getTime())
+  );
   return waiting.length ? new Date(Math.min(...waiting)) : undefined;
 }
 
@@ -264,8 +286,12 @@ export function markUsed(id: string, tokensIn: number, tokensOut: number) {
     tokensOut: (key.tokensOut ?? 0) + tokensOut,
     // A call that worked clears whatever was wrong before, including the
     // escalating quota backoff — the next refusal starts from one hour again.
+    // Both clocks, not just the short one: a key that answered is not out of
+    // quota, whatever a stale exhaustedUntil says, and leaving that behind is
+    // what let it mask a later cooldown in earliestReset.
     lastError: null,
     cooldownUntil: null,
+    exhaustedUntil: null,
     quotaStrikes: 0,
     coolStrikes: 0,
   });

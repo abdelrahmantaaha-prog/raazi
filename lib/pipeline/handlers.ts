@@ -20,6 +20,8 @@ import { handleAsk } from "./ask";
 import { handleFactcheck } from "./factcheck";
 import { handleCards } from "./cards";
 import { handlePortrait, handlePlanPortraits } from "./portrait";
+import { handlePlanPolls, handlePoll, handleFetchItem } from "./poll";
+import { handleBrief } from "./brief";
 
 /**
  * Costs nothing and decides a lot: which entries this ingest has left out of
@@ -75,4 +77,8 @@ export const handlers: Record<string, Handler> = {
   plan_entries: handlePlanEntries,
   portrait: handlePortrait,
   plan_portraits: handlePlanPortraits,
+  plan_polls: handlePlanPolls,
+  poll: handlePoll,
+  fetch_item: handleFetchItem,
+  brief: handleBrief,
 };

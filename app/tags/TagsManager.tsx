@@ -224,20 +224,34 @@ function SourceRowEditor({
 }) {
   const [selected, setSelected] = useState<number[]>(source.tagIds);
   const [saving, setSaving] = useState(false);
+  const [error, setError] = useState<string | null>(null);
 
   const toggle = async (tagId: number) => {
+    const before = selected;
     const next = selected.includes(tagId)
       ? selected.filter((x) => x !== tagId)
       : [...selected, tagId];
     setSelected(next);
     setSaving(true);
-    await fetch(`/api/sources/${source.id}/tags`, {
-      method: "POST",
-      headers: { "content-type": "application/json" },
-      body: JSON.stringify({ tagIds: next }),
-    });
-    setSaving(false);
-    onDone();
+    setError(null);
+    try {
+      const res = await fetch(`/api/sources/${source.id}/tags`, {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ tagIds: next }),
+      });
+      if (!res.ok) {
+        const data = await res.json().catch(() => ({}));
+        throw new Error(data.error ?? "Could not change that.");
+      }
+      onDone();
+    } catch (err) {
+      // Back to what the server still has, and say why.
+      setSelected(before);
+      setError((err as Error).message);
+    } finally {
+      setSaving(false);
+    }
   };
 
   return (
@@ -276,6 +290,7 @@ function SourceRowEditor({
           <span className="text-xs text-[var(--color-muted)]">unfiled</span>
         )}
       </div>
+      {error && <span className="w-full text-xs text-red-700">{error}</span>}
     </div>
   );
 }

@@ -3,6 +3,7 @@
 import { useCallback, useEffect, useState } from "react";
 import Link from "next/link";
 import { Button, Card, Empty, inputClass } from "../components/ui";
+import { RunChip } from "../components/RunChip";
 import { dirOf } from "@/lib/dir";
 
 interface StudyCard {
@@ -38,21 +39,30 @@ export default function StudyPage() {
   const [picked, setPicked] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
   const [note, setNote] = useState<string | null>(null);
+  const [error, setError] = useState<string | null>(null);
+  /** The card-building run in flight, if any. */
+  const [run, setRun] = useState<number | null>(null);
   const [session, setSession] = useState({ right: 0, wrong: 0 });
 
   const load = useCallback(async () => {
-    const [s, t] = await Promise.all([
-      fetch(`/api/study?mode=${mode}${tagId ? `&tag=${tagId}` : ""}`, { cache: "no-store" }).then((r) =>
-        r.json()
-      ),
-      fetch("/api/tags", { cache: "no-store" }).then((r) => r.json()),
-    ]);
-    setQueue(s.due ?? []);
-    setCounts(s.counts ?? []);
-    setTags(t.tags ?? []);
-    setI(0);
-    setRevealed(false);
-    setPicked(null);
+    try {
+      const [s, t] = await Promise.all([
+        fetch(`/api/study?mode=${mode}${tagId ? `&tag=${tagId}` : ""}`, { cache: "no-store" }).then((r) =>
+          r.ok ? r.json() : null
+        ),
+        fetch("/api/tags", { cache: "no-store" }).then((r) => (r.ok ? r.json() : null)),
+      ]);
+      if (s) {
+        setQueue(s.due ?? []);
+        setCounts(s.counts ?? []);
+        setI(0);
+        setRevealed(false);
+        setPicked(null);
+      }
+      if (t) setTags(t.tags ?? []);
+    } catch (err) {
+      setError((err as Error).message);
+    }
   }, [mode, tagId]);
 
   useEffect(() => {
@@ -64,11 +74,16 @@ export default function StudyPage() {
   const answer = async (correct: boolean) => {
     if (!card) return;
     setSession((s) => ({ right: s.right + (correct ? 1 : 0), wrong: s.wrong + (correct ? 0 : 1) }));
-    await fetch("/api/study", {
-      method: "POST",
-      headers: { "content-type": "application/json" },
-      body: JSON.stringify({ action: "review", cardId: card.id, correct }),
-    });
+    try {
+      await fetch("/api/study", {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ action: "review", cardId: card.id, correct }),
+      });
+    } catch {
+      // The deck moves on regardless; a lost review costs one repetition.
+      setError("That answer was not recorded — the server did not respond.");
+    }
     setRevealed(false);
     setPicked(null);
     setI((n) => n + 1);
@@ -78,25 +93,37 @@ export default function StudyPage() {
     // the end of the deck — not after every card, which would be a request per
     // answer for a number nobody is watching mid-run.
     if (i + 1 >= queue.length) {
-      const s = await fetch(`/api/study?mode=${mode}${tagId ? `&tag=${tagId}` : ""}`, {
-        cache: "no-store",
-      }).then((r) => r.json());
-      setCounts(s.counts ?? []);
+      try {
+        const s = await fetch(`/api/study?mode=${mode}${tagId ? `&tag=${tagId}` : ""}`, {
+          cache: "no-store",
+        }).then((r) => (r.ok ? r.json() : null));
+        if (s) setCounts(s.counts ?? []);
+      } catch {
+        // The counts are cosmetic; the next load corrects them.
+      }
     }
   };
 
   const generate = async () => {
     setBusy(true);
     setNote(null);
-    const res = await fetch("/api/study", {
-      method: "POST",
-      headers: { "content-type": "application/json" },
-      body: JSON.stringify({ action: "generate", tagId: tagId || undefined, limit: 24 }),
-    });
-    const data = await res.json();
-    setNote(data.note ?? data.error);
-    setBusy(false);
-    setTimeout(() => void load(), 6000);
+    setError(null);
+    try {
+      const res = await fetch("/api/study", {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ action: "generate", tagId: tagId || undefined, limit: 24 }),
+      });
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok) throw new Error(data.error ?? "Could not start building cards.");
+      setNote(data.note ?? null);
+      // The chip below follows the run and reloads the deck when it finishes.
+      setRun(data.runId ?? data.run?.id ?? null);
+    } catch (err) {
+      setError((err as Error).message);
+    } finally {
+      setBusy(false);
+    }
   };
 
   const total = counts.reduce((n, c) => n + c.total, 0);
@@ -165,6 +192,12 @@ export default function StudyPage() {
           )}
         </div>
         {note && <p className="mt-3 text-sm text-[var(--color-accent)]">{note}</p>}
+        {error && <p className="mt-3 text-sm text-red-700">{error}</p>}
+        {run && (
+          <div className="mt-3">
+            <RunChip runId={run} onDone={() => void load()} />
+          </div>
+        )}
       </Card>
 
       {!card ? (
@@ -255,7 +288,13 @@ export default function StudyPage() {
                 <button
                   className="text-sm text-[var(--color-muted)] hover:text-red-700"
                   onClick={async () => {
-                    await fetch(`/api/study?id=${card.id}`, { method: "DELETE" });
+                    try {
+                      const res = await fetch(`/api/study?id=${card.id}`, { method: "DELETE" });
+                      if (!res.ok) throw new Error("Could not remove that card.");
+                    } catch (err) {
+                      setError((err as Error).message);
+                      return;
+                    }
                     setI((n) => n + 1);
                     setRevealed(false);
                     setPicked(null);

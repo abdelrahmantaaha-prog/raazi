@@ -15,6 +15,7 @@ import {
   type Voice,
 } from "@/lib/speech";
 import { Lookup, type LookupAt } from "./Lookup";
+import { ReaderParagraph } from "./ReaderParagraph";
 
 export interface Passage {
   id: number;
@@ -111,6 +112,7 @@ export function Reader({
   position,
   marks,
   readAlong,
+  initialChunk = null,
   onClose,
 }: {
   passages: Passage[];
@@ -121,6 +123,12 @@ export function Reader({
   marks: Mark[];
   /** Whether Corpus reads this source as you go, and how far behind it is. */
   readAlong: { on: boolean; remaining: number };
+  /**
+   * A passage to open at, from a search hit or a citation's "Read in". Wins
+   * over the saved position for this one opening, and is lit for a moment so
+   * the eye lands on it.
+   */
+  initialChunk?: number | null;
   onClose: () => void;
 }) {
   const [prefs, setPrefs] = useState<Prefs>(DEFAULTS);
@@ -145,6 +153,13 @@ export function Reader({
   }).current;
   const saveTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
   const lastSaved = useRef<number | null>(null);
+  /**
+   * Where the reading line was at the last scroll tick. The unmount flush runs
+   * after React has detached the scroller ref, so it cannot measure anything —
+   * this is what it saves instead. Without it the last "Finished reading"
+   * before closing was lost whenever you closed within its 600 ms debounce.
+   */
+  const lastPosition = useRef<{ id: number; offset: number } | null>(null);
   /** Passages already known to be read, so they are never re-sent. */
   const read = useRef<Set<number>>(new Set(position.read));
   /** Read since the last save, waiting to be reported. */
@@ -200,6 +215,17 @@ export function Reader({
   const [listening, setListening] = useState(false);
   const [paused, setPaused] = useState(false);
   const [voices, setVoices] = useState<Voice[]>([]);
+  /**
+   * The voice list as the speaking effect reads it, and the voice it last
+   * spoke with. Chrome and Edge fire `voiceschanged` more than once, and with
+   * the list as a dependency each firing tore down the utterance and read the
+   * paragraph again from its first word. Now a change in the list only
+   * restarts the paragraph when the voice in use has actually gone — or when
+   * there was none to pick from yet.
+   */
+  const voicesRef = useRef<Voice[]>([]);
+  const spokenVoice = useRef<string | null>(null);
+  const [voiceEpoch, setVoiceEpoch] = useState(0);
   const speaker = useRef<Speaker | null>(null);
   if (speaker.current === null && typeof window !== "undefined") {
     speaker.current = new Speaker();
@@ -267,7 +293,9 @@ export function Reader({
    */
   const save = useCallback(
     async (force = false) => {
-      const at = currentPassage();
+      const measured = currentPassage();
+      if (measured) lastPosition.current = measured;
+      const at = measured ?? lastPosition.current;
       const newlyRead = [...pendingRead.current];
       // Nothing moved and nothing was read: no reason to say anything.
       if (!at) return;
@@ -280,6 +308,9 @@ export function Reader({
           method: "POST",
           headers: { "content-type": "application/json" },
           body: JSON.stringify({ chunkId: at.id, offset: at.offset, read: newlyRead }),
+          // Survives the page going away mid-request, which is exactly when
+          // the unmount flush sends it.
+          keepalive: true,
         });
         const data = (await res.json()) as { remaining?: number };
         if (typeof data.remaining === "number") setPending(data.remaining);
@@ -328,20 +359,39 @@ export function Reader({
   useLayoutEffect(() => {
     if (!ready) return;
     const el = scroller.current;
-    if (!el || position.chunkId === null) return;
+    if (!el) return;
 
-    const target = el.querySelector<HTMLElement>(`section[data-chunk="${position.chunkId}"]`);
+    // A passage asked for by the link that opened the reader comes first;
+    // otherwise the place you left off.
+    const asked =
+      initialChunk !== null
+        ? el.querySelector<HTMLElement>(`section[data-chunk="${initialChunk}"]`)
+        : null;
+    const chunkId = asked ? initialChunk : position.chunkId;
+    if (chunkId === null) return;
+
+    const target = asked ?? el.querySelector<HTMLElement>(`section[data-chunk="${chunkId}"]`);
     if (!target) return;
 
-    const into = (target.offsetHeight || 0) * (position.offset ?? 0);
+    const into = asked ? 0 : (target.offsetHeight || 0) * (position.offset ?? 0);
     el.scrollTop = target.offsetTop - READING_LINE + into;
-    lastSaved.current = position.chunkId;
+    lastSaved.current = chunkId;
     setProgress(fraction());
 
-    const seq = passages.find((p) => p.id === position.chunkId)?.seq;
-    setRestored(seq === undefined ? "where you left off" : `passage ${seq + 1} of ${passages.length}`);
+    const seq = passages.find((p) => p.id === chunkId)?.seq;
+    const where = seq === undefined ? "where you left off" : `passage ${seq + 1} of ${passages.length}`;
+    setRestored(asked ? `${where}, from the link you followed` : where);
     const t = setTimeout(() => setRestored(null), 5000);
-    return () => clearTimeout(t);
+
+    let flash: ReturnType<typeof setTimeout> | null = null;
+    if (asked) {
+      target.classList.add("chunk-flash");
+      flash = setTimeout(() => target.classList.remove("chunk-flash"), 2000);
+    }
+    return () => {
+      clearTimeout(t);
+      if (flash) clearTimeout(flash);
+    };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [ready]);
 
@@ -353,7 +403,9 @@ export function Reader({
     if (!el || !ready) return;
 
     const onScroll = () => {
-      setHere(currentPassage()?.id ?? null);
+      const at = currentPassage();
+      if (at) lastPosition.current = at;
+      setHere(at?.id ?? null);
       if (saveTimer.current) clearTimeout(saveTimer.current);
       saveTimer.current = setTimeout(() => void save(), 1200);
     };
@@ -362,7 +414,15 @@ export function Reader({
     el.addEventListener("scroll", onScroll, { passive: true });
     return () => {
       el.removeEventListener("scroll", onScroll);
-      if (saveTimer.current) clearTimeout(saveTimer.current);
+      // A save still waiting on its debounce is sent, not thrown away: a
+      // passage marked read in the last second before closing must reach
+      // the server, and the flush below cannot measure anything by the time
+      // it runs.
+      if (saveTimer.current) {
+        clearTimeout(saveTimer.current);
+        saveTimer.current = null;
+        void save(true);
+      }
     };
   }, [ready, save, currentPassage]);
 
@@ -506,11 +566,12 @@ export function Reader({
       return;
     }
 
-    const wanted = pickVoice(voices, langOf(text), prefs.voice);
+    const wanted = pickVoice(voicesRef.current, langOf(text), prefs.voice);
     const native =
       wanted && typeof window !== "undefined"
         ? window.speechSynthesis.getVoices().find((v) => v.voiceURI === wanted.uri) ?? null
         : null;
+    spokenVoice.current = native?.voiceURI ?? null;
 
     s.speak(text, {
       voice: native,
@@ -526,7 +587,7 @@ export function Reader({
     listening,
     cursor,
     ready,
-    voices,
+    voiceEpoch,
     prefs.voice,
     prefs.rate,
     textAt,
@@ -555,6 +616,17 @@ export function Reader({
 
   // The voices the machine has, once the browser admits to them.
   useEffect(() => watchVoices(setVoices), []);
+
+  useEffect(() => {
+    voicesRef.current = voices;
+    if (!listening) return;
+    const using = spokenVoice.current;
+    const vanished = using !== null && !voices.some((v) => v.uri === using);
+    // Speaking with no voice picked means the list was empty when it began;
+    // now that there is one, the right voice may be very different.
+    const nowAvailable = using === null && voices.length > 0;
+    if (vanished || nowAvailable) setVoiceEpoch((e) => e + 1);
+  }, [voices, listening]);
 
   // Leaving the reader must not leave a voice talking to an empty room.
   useEffect(() => () => speaker.current?.stop(), []);
@@ -717,8 +789,16 @@ export function Reader({
   // Space and arrows page through, the way a reader expects. B marks the place.
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
+      // A shortcut with a modifier is someone else's shortcut.
+      if (e.ctrlKey || e.metaKey || e.altKey) return;
       const target = e.target as HTMLElement;
-      if (target.tagName === "INPUT" || target.tagName === "TEXTAREA" || target.isContentEditable) {
+      // Its own controls first: Enter on a focused button presses the button,
+      // arrows on the chapter select open the list. Only Escape reaches past
+      // them, and a dialog handles that itself.
+      const control = target.closest?.(
+        'button, select, a[href], input, textarea, [contenteditable="true"], [role="dialog"]'
+      );
+      if (control && (e.key !== "Escape" || control.matches('[role="dialog"], input, textarea'))) {
         return;
       }
       if (e.key === " " || e.key === "PageDown" || e.key === "ArrowDown" || e.key === "Enter") {
@@ -1151,55 +1231,20 @@ export function Reader({
               // Its position in the whole book, which is what reading mode
               // counts in.
               const at = paraIndex.get(`${b.key}:${i}`) ?? -1;
-              const lit = prefs.mode !== "focus" || at === cursor;
               return (
-                <p
+                <ReaderParagraph
                   key={i}
-                  data-para={at}
-                  className="relative mb-[0.9em]"
-                  dir={dirOf(p)}
-                  style={{
-                    textIndent: i > 0 && !b.divider ? "1.4em" : undefined,
-                    // Dimmed rather than hidden: the shape of the page stays
-                    // put, so the paragraph you are on does not jump around as
-                    // you advance, and you can still see roughly where you are.
-                    opacity: lit ? 1 : 0.13,
-                    transition: "opacity 260ms ease",
-                  }}
-                >
-                  {/*
-                   * Which paragraph the voice is on.
-                   *
-                   * A rule in the margin rather than a wash over the text: the
-                   * page is already carrying entity highlights in this colour,
-                   * and tinting a whole paragraph on top of them turned the
-                   * thing you were listening to into the busiest block on the
-                   * page. Sitting in the gutter, it is absolutely positioned
-                   * and so cannot reflow a word — the alternative, a border on
-                   * the text edge, would have nudged the measure inward every
-                   * time the voice moved on.
-                   */}
-                  {listening && at === cursor && (
-                    <span
-                      aria-hidden
-                      className="absolute select-none"
-                      style={{
-                        // Follows the script: the start of the line is the left
-                        // in English and the right in Arabic, and this book can
-                        // be either. Inside the article's own gutter, so it is
-                        // never clipped on a narrow screen.
-                        insetInlineStart: "-0.85em",
-                        top: "0.2em",
-                        bottom: "0.2em",
-                        width: "2px",
-                        borderRadius: "1px",
-                        background: theme.fg,
-                        opacity: 0.5,
-                      }}
-                    />
-                  )}
-                  {prefs.highlights ? highlight(p, b.mentions, theme.mark, setOpenEntity) : p}
-                </p>
+                  text={p}
+                  at={at}
+                  lit={prefs.mode !== "focus" || at === cursor}
+                  speaking={listening && at === cursor}
+                  indent={i > 0 && !b.divider}
+                  highlights={prefs.highlights}
+                  mentions={b.mentions}
+                  mark={theme.mark}
+                  ink={theme.fg}
+                  onOpen={setOpenEntity}
+                />
               );
             })}
           </section>
@@ -1369,6 +1414,9 @@ function truncate(s: string, n: number): string {
   return flat.length > n ? `${flat.slice(0, n - 1)}…` : flat;
 }
 
+/** How many paragraphs at the end of a chunk the next one may repeat. */
+const SEAM = 3;
+
 /**
  * Turns overlapping chunks back into continuous prose.
  *
@@ -1376,23 +1424,30 @@ function truncate(s: string, n: number): string {
  * spanning the seam stays readable to the model. On the page that repetition
  * reads as a stutter, so it is trimmed here — the last paragraphs of one chunk
  * are dropped from the start of the next when they match.
+ *
+ * Only the seam is compared. The first version kept every signature it had
+ * ever seen, so a refrain, a recurring subheading or a repeated formula was
+ * shown once in the whole book and silently gone from everywhere else.
  */
-function joinPassages(passages: Passage[]): Block[] {
+export function joinPassages(passages: Passage[]): Block[] {
   const blocks: Block[] = [];
   let lastLabel: string | null = null;
-  const seen = new Set<string>();
+  /** Signatures of the previous chunk's last few paragraphs. */
+  let tail = new Set<string>();
 
   for (const p of passages) {
     const paragraphs: string[] = [];
+    const sigs: string[] = [];
     for (const para of p.text.split(/\n\s*\n/)) {
       const text = para.trim();
       if (!text) continue;
       // The overlap is verbatim, so a signature of its opening is enough.
       const sig = text.slice(0, 90).replace(/\s+/g, " ");
-      if (seen.has(sig)) continue;
-      seen.add(sig);
+      if (tail.has(sig)) continue;
       paragraphs.push(text);
+      sigs.push(sig);
     }
+    if (sigs.length) tail = new Set(sigs.slice(-SEAM));
     if (!paragraphs.length) continue;
 
     // A divider only where the reader would expect one: a new chapter, or a
@@ -1404,46 +1459,6 @@ function joinPassages(passages: Passage[]): Block[] {
     blocks.push({ key: `p${p.id}`, chunkId: p.id, divider, paragraphs, mentions: p.mentions });
   }
   return blocks;
-}
-
-function highlight(
-  text: string,
-  mentions: Passage["mentions"],
-  mark: string,
-  onOpen: (entityId: number) => void
-) {
-  const unique = new Map<string, Passage["mentions"][number]>();
-  for (const m of mentions) if (m.surface.trim().length > 2) unique.set(m.surface, m);
-  const surfaces = [...unique.keys()].sort((a, b) => b.length - a.length);
-  if (!surfaces.length) return text;
-
-  const re = new RegExp(
-    `(${surfaces.map((s) => s.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")).join("|")})`,
-    "g"
-  );
-
-  return text.split(re).map((part, i) => {
-    const hit = unique.get(part);
-    if (!hit) return part;
-    // Opens beside the book rather than replacing it. Following a name used to
-    // navigate to /pedia, which meant leaving the page you were reading and
-    // finding your way back to the sentence you were on.
-    return (
-      <button
-        key={i}
-        type="button"
-        onClick={(e) => {
-          e.preventDefault();
-          onOpen(hit.entityId);
-        }}
-        title={`Open ${hit.name}`}
-        className="cursor-pointer rounded-sm text-inherit"
-        style={{ background: mark, boxShadow: `0 0 0 2px ${mark}`, color: "inherit" }}
-      >
-        {part}
-      </button>
-    );
-  });
 }
 
 /**

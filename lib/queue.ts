@@ -62,6 +62,13 @@ export const PRIORITY: Record<string, number> = {
   ask: 0,
   cards: 0,
   factcheck: 0,
+  // The brief is what you opened the app for; the poll that feeds it comes
+  // first of all, since a brief written before the morning's articles are in
+  // is a brief about yesterday.
+  poll: 0,
+  plan_polls: 0,
+  fetch_item: 1,
+  brief: 0,
   portrait: 2,
   plan_portraits: 2,
 };
@@ -72,6 +79,11 @@ const PRIORITY_SQL = `CASE t.kind ${Object.entries(PRIORITY)
   .join(" ")} ELSE ${DEFAULT_PRIORITY} END`;
 
 export function claimNext(): Task | undefined {
+  // A task waiting out a retry (not_before) is passed over, not slept on:
+  // the loop goes on to whatever else is due, which is how a question typed
+  // into Ask gets answered while an extraction waits for its rate limit.
+  // order_hint, where set, is a fractional place in the run's order — the
+  // halves of a split chunk sit between the original's seq and the next.
   return db()
     .prepare(
       `UPDATE tasks
@@ -81,12 +93,13 @@ export function claimNext(): Task | undefined {
             JOIN runs r ON r.id = t.run_id
            WHERE t.state = 'pending'
              AND r.state IN ('queued', 'running')
-           ORDER BY ${PRIORITY_SQL}, r.id, t.seq
+             AND (t.not_before IS NULL OR t.not_before <= ?)
+           ORDER BY ${PRIORITY_SQL}, r.id, COALESCE(t.order_hint, t.seq), t.id
            LIMIT 1
         )
     RETURNING *`
     )
-    .get() as Task | undefined;
+    .get(now()) as Task | undefined;
 }
 
 /** Marks the task done and bills its tokens to the run, atomically with the
@@ -117,9 +130,28 @@ export function finishTask(
 export function releaseTask(taskId: number, error?: string) {
   db()
     .prepare(
-      "UPDATE tasks SET state='pending', last_error=?, updated_at=datetime('now') WHERE id=?"
+      "UPDATE tasks SET state='pending', last_error=?, not_before=NULL, updated_at=datetime('now') WHERE id=?"
     )
     .run(error ?? null, taskId);
+}
+
+/**
+ * Back in the queue, but not before the given moment. This is what a retry
+ * with a real wait behind it becomes — the worker used to sleep the wait out
+ * in the loop, and everything behind the task, whatever its priority, slept
+ * with it.
+ */
+export function deferTask(taskId: number, notBefore: Date, error?: string) {
+  db()
+    .prepare(
+      "UPDATE tasks SET state='pending', last_error=?, not_before=?, updated_at=datetime('now') WHERE id=?"
+    )
+    .run(error ?? null, notBefore.toISOString(), taskId);
+}
+
+/** Records which model actually answered a task, when a call reported it. */
+export function noteTaskModel(taskId: number, model: string) {
+  db().prepare("UPDATE tasks SET model=? WHERE id=?").run(model.slice(0, 120), taskId);
 }
 
 export function failTask(taskId: number, error: string) {
@@ -147,11 +179,25 @@ export function pauseRun(runId: number, state: RunState, reason: string, resumeA
     .run(state, reason, resumeAt?.toISOString() ?? null, runId);
 }
 
-export function resumeRun(runId: number) {
-  tx(() => {
+/**
+ * Puts a run back in the queue.
+ *
+ * A run you paused yourself stays paused unless the caller says `force` —
+ * that is the Resume button speaking, and nothing else gets to speak for
+ * you. Every other paused state is the app's own doing (quota, key, budget)
+ * and any caller may lift it. Returns whether anything changed.
+ */
+export function resumeRun(runId: number, opts: { force?: boolean } = {}): boolean {
+  return tx(() => {
+    const run = db().prepare("SELECT state FROM runs WHERE id=?").get(runId) as
+      | { state: RunState }
+      | undefined;
+    if (!run) return false;
+    if (run.state === "paused_user" && !opts.force) return false;
+
     // A task that was mid-flight when the run was paused goes back in the queue.
     db()
-      .prepare("UPDATE tasks SET state='pending' WHERE run_id=? AND state='running'")
+      .prepare("UPDATE tasks SET state='pending', not_before=NULL WHERE run_id=? AND state='running'")
       .run(runId);
     db()
       .prepare(
@@ -159,19 +205,29 @@ export function resumeRun(runId: number) {
                 updated_at=datetime('now') WHERE id=?`
       )
       .run(runId);
+    return true;
   });
 }
 
-/** Retry every task that failed outright, without redoing completed work. */
-export function retryFailedTasks(runId: number): number {
+/**
+ * Retry every task that failed outright, without redoing completed work.
+ * The tasks go back to pending either way; the run itself only leaves a
+ * user-imposed pause when told to, for the reason resumeRun gives.
+ */
+export function retryFailedTasks(runId: number, opts: { force?: boolean } = {}): number {
   return tx(() => {
     const r = db()
       .prepare(
-        "UPDATE tasks SET state='pending', attempts=0 WHERE run_id=? AND state='failed'"
+        "UPDATE tasks SET state='pending', attempts=0, not_before=NULL WHERE run_id=? AND state='failed'"
       )
       .run(runId);
     if (r.changes > 0) {
-      db().prepare("UPDATE runs SET state='queued' WHERE id=?").run(runId);
+      db()
+        .prepare(
+          `UPDATE runs SET state='queued', updated_at=datetime('now')
+            WHERE id=? AND (state != 'paused_user' OR ?)`
+        )
+        .run(runId, opts.force ? 1 : 0);
     }
     return r.changes;
   });
@@ -196,10 +252,18 @@ export function wakeDueRuns(): number {
  * stayed parked until something else happened to start the worker.
  */
 export function nextDueAt(): Date | undefined {
+  // Two kinds of clock: a run parked on quota, and a task deferred for a
+  // retry inside a run that is otherwise live. Whichever is sooner.
   const row = db()
     .prepare(
-      `SELECT MIN(resume_at) AS due FROM runs
-        WHERE state='paused_quota' AND resume_at IS NOT NULL`
+      `SELECT MIN(due) AS due FROM (
+         SELECT resume_at AS due FROM runs
+          WHERE state='paused_quota' AND resume_at IS NOT NULL
+         UNION ALL
+         SELECT t.not_before AS due FROM tasks t JOIN runs r ON r.id = t.run_id
+          WHERE t.state='pending' AND t.not_before IS NOT NULL
+            AND r.state IN ('queued','running')
+       )`
     )
     .get() as { due: string | null };
   return row.due ? new Date(row.due) : undefined;
@@ -209,6 +273,18 @@ export function nextDueAt(): Date | undefined {
 export function hasParkedRuns(): boolean {
   const row = db()
     .prepare("SELECT COUNT(*) AS n FROM runs WHERE state='paused_quota'")
+    .get() as { n: number };
+  return row.n > 0;
+}
+
+/** True when a live run has a task waiting out a retry, due or not. */
+export function hasDeferredTasks(): boolean {
+  const row = db()
+    .prepare(
+      `SELECT COUNT(*) AS n FROM tasks t JOIN runs r ON r.id = t.run_id
+        WHERE t.state='pending' AND t.not_before IS NOT NULL
+          AND r.state IN ('queued','running')`
+    )
     .get() as { n: number };
   return row.n > 0;
 }
@@ -238,8 +314,13 @@ export function settleRun(runId: number): boolean {
   const failed = db()
     .prepare("SELECT COUNT(*) AS n FROM tasks WHERE run_id=? AND state='failed'")
     .get(runId) as { n: number };
+  // A run you paused keeps saying so, even once its last in-flight task has
+  // landed: "done" would be the app overruling you, and Resume is the only
+  // thing that should.
   db()
-    .prepare("UPDATE runs SET state=?, updated_at=datetime('now') WHERE id=?")
+    .prepare(
+      "UPDATE runs SET state=?, updated_at=datetime('now') WHERE id=? AND state != 'paused_user'"
+    )
     .run(failed.n > 0 ? "failed" : "done", runId);
 
   // The source is only readable once nothing is still queued against it —
@@ -266,22 +347,25 @@ export interface RunProgress extends Run {
   source_title: string | null;
 }
 
-export function listRuns(limit = 50): RunProgress[] {
-  return db()
-    .prepare(
-      `SELECT r.*, s.title AS source_title,
+const RUN_PROGRESS_SQL = `SELECT r.*, s.title AS source_title,
               (SELECT COUNT(*) FROM tasks t WHERE t.run_id=r.id) AS total,
               (SELECT COUNT(*) FROM tasks t WHERE t.run_id=r.id AND t.state IN ('done','skipped','superseded')) AS done,
               (SELECT COUNT(*) FROM tasks t WHERE t.run_id=r.id AND t.state='failed') AS failed,
               (SELECT COUNT(*) FROM tasks t WHERE t.run_id=r.id AND t.state IN ('pending','running')) AS pending
-         FROM runs r LEFT JOIN sources s ON s.id = r.source_id
-        ORDER BY r.id DESC LIMIT ?`
-    )
+         FROM runs r LEFT JOIN sources s ON s.id = r.source_id`;
+
+export function listRuns(limit = 50): RunProgress[] {
+  return db()
+    .prepare(`${RUN_PROGRESS_SQL} ORDER BY r.id DESC LIMIT ?`)
     .all(limit) as RunProgress[];
 }
 
+/** One run with its progress. Used to be the thousand-run listing filtered
+ *  in memory — four subselects per run, on every poll of one run's page. */
 export function getRun(runId: number): RunProgress | undefined {
-  return listRuns(1000).find((r) => r.id === runId);
+  return db()
+    .prepare(`${RUN_PROGRESS_SQL} WHERE r.id = ?`)
+    .get(runId) as RunProgress | undefined;
 }
 
 /** True when the run has spent its allowance. */

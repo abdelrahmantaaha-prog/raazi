@@ -1,5 +1,5 @@
 import { NextResponse } from "next/server";
-import { asId, badRequest, readBody } from "@/lib/http";
+import { accepted, asId, badRequest, inFlight, notFound, optionalString, readBody } from "@/lib/http";
 import { db } from "@/lib/db";
 import { discardEvidence, restoreEvidence, type DiscardReason, type DiscardScope } from "@/lib/audit";
 import { createRun, enqueue } from "@/lib/queue";
@@ -27,18 +27,37 @@ export async function POST(req: Request, ctx: { params: Promise<{ id: string }> 
     rewrite?: boolean;
   }>(req);
   if (body === null) return badRequest("Malformed JSON body.");
+  const note = optionalString(body.note);
+  if (note === null) return badRequest("note must be a string.");
+  if (body.scope !== undefined && body.scope !== "entity" && body.scope !== "library") {
+    return badRequest("scope must be 'entity' or 'library'.");
+  }
 
   const result = discardEvidence({
     mentionId,
     reason: body.reason,
-    note: body.note,
+    note,
     scope: body.scope,
   });
 
-  if (!result.ok) return NextResponse.json({ error: result.error }, { status: 400 });
+  // "No longer here" is a missing row, not a malformed request.
+  if (!result.ok) {
+    return /no longer here/i.test(result.error)
+      ? notFound(result.error)
+      : badRequest(result.error);
+  }
 
   let runId: number | null = null;
-  if (body.rewrite) runId = rewriteEntry(result.entityId);
+  if (body.rewrite) {
+    const already = inFlight("entry", { entityId: result.entityId });
+    if (already) {
+      return accepted(already, "That entry is already being rewritten.", {
+        ok: true,
+        entityId: result.entityId,
+      });
+    }
+    runId = rewriteEntry(result.entityId);
+  }
 
   return NextResponse.json({ ok: true, entityId: result.entityId, runId });
 }
@@ -50,9 +69,13 @@ export async function DELETE(req: Request, ctx: { params: Promise<{ id: string }
   const rewrite = new URL(req.url).searchParams.get("rewrite") === "1";
 
   const result = restoreEvidence(mentionId);
-  if (!result.ok) return NextResponse.json({ error: "That passage is no longer here." }, { status: 404 });
+  if (!result.ok) return notFound("That passage is no longer here.");
 
-  const runId = rewrite && result.entityId ? rewriteEntry(result.entityId) : null;
+  let runId: number | null = null;
+  if (rewrite && result.entityId) {
+    const already = inFlight("entry", { entityId: result.entityId });
+    runId = already ?? rewriteEntry(result.entityId);
+  }
   return NextResponse.json({ ok: true, entityId: result.entityId, runId });
 }
 

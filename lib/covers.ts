@@ -1,6 +1,7 @@
 import fs from "node:fs";
 import path from "node:path";
 import { DATA_DIR, db } from "./db";
+import { safeFetch } from "./net";
 import { fillMeta, thumbnailUrl, videoId } from "./youtube";
 
 /**
@@ -141,7 +142,10 @@ export async function fetchCover(sourceId: number): Promise<string | null> {
       return null;
     }
 
-    const res = await fetch(url, { headers: { "user-agent": "Corpus/0.1 (personal research)" } });
+    // The image address may be one the fetched page declared, so it is held
+    // to the same rule as the page itself: no internal addresses, whatever
+    // og:image says.
+    const res = await safeFetch(url, { headers: { "user-agent": "Corpus/0.1 (personal research)" } });
     if (!res.ok) throw new Error(`cover fetch ${res.status}`);
     const buf = Buffer.from(await res.arrayBuffer());
 
@@ -243,7 +247,7 @@ function normalise(s: string): string {
 async function siteImage(url: string | null): Promise<string | null> {
   if (!url) return null;
   try {
-    const res = await fetch(url, {
+    const res = await safeFetch(url, {
       headers: {
         "user-agent":
           "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0 Safari/537.36",

@@ -1,5 +1,5 @@
 import { NextResponse } from "next/server";
-import { asId, badRequest } from "@/lib/http";
+import { asId, attachment, badRequest, notFound } from "@/lib/http";
 import { buildDocx } from "@/lib/docx";
 import { citationsFor, getDraft } from "@/lib/drafts";
 import { htmlToDocx } from "@/lib/richtext";
@@ -18,7 +18,7 @@ export async function GET(_req: Request, ctx: { params: Promise<{ id: string }> 
   const id = asId((await ctx.params).id);
   if (id === null) return badRequest("Not a valid id.");
   const draft = getDraft(id);
-  if (!draft) return NextResponse.json({ error: "No such draft." }, { status: 404 });
+  if (!draft) return notFound("No such draft.");
 
   const citations = citationsFor(id);
   const { blocks, notes } = htmlToDocx(draft.body_html || `<p>${draft.body_md}</p>`, citations);
@@ -34,14 +34,16 @@ export async function GET(_req: Request, ctx: { params: Promise<{ id: string }> 
     })}`,
   });
 
-  // A filename Word will accept on any platform.
+  // A filename Word will accept on any platform. The header carries it twice:
+  // an ASCII rendering, and the real name UTF-8 encoded — an Arabic title used
+  // to throw from inside the response constructor and export nothing.
   const name = (draft.title || "draft").replace(/[^\p{L}\p{N} _-]/gu, "").trim() || "draft";
 
   return new NextResponse(new Uint8Array(file), {
     headers: {
       "content-type":
         "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
-      "content-disposition": `attachment; filename="${name}.docx"`,
+      "content-disposition": attachment(`${name}.docx`, `draft-${id}.docx`),
       "content-length": String(file.length),
     },
   });

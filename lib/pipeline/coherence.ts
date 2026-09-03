@@ -17,6 +17,12 @@ import type { Task } from "../types";
  * So a separate pass reads the whole thing at once — which the writer never
  * does, since it only ever sees the new evidence — and reorganises it.
  *
+ * Since 2026-09-03 this no longer runs after every entry. The writer now sees
+ * all of its evidence at once and plans the entry before writing it, which
+ * removes the cause this pass was treating; and measured over 5,311 runs it
+ * answered "fine" nine times, so it was churning every entry it saw into a new
+ * revision. It stays available for a manual "tidy" of an entry you dislike.
+ *
  * The hard constraint is that this pass may not *know* anything. It moves
  * sentences, groups them, writes headings and joins, and cuts repetition. It
  * does not add facts, and every citation marker it emits must be one the entry

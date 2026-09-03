@@ -73,10 +73,34 @@ export function ensureTag(name: string, description?: string): number {
   );
 }
 
-export function renameTag(id: number, name: string, description?: string) {
-  db()
-    .prepare("UPDATE tags SET name=COALESCE(NULLIF(?,''), name), description=? WHERE id=?")
-    .run(name.trim(), description?.trim() || null, id);
+/**
+ * Changes what was sent and leaves the rest alone.
+ *
+ * Renaming used to write the description too, so a rename that did not resend
+ * it wiped it. Now a field that is absent is untouched; a description sent as
+ * an empty string is a deliberate clearing. Returns false when there is no
+ * such tag, so the route can say so instead of answering success.
+ */
+export function renameTag(
+  id: number,
+  patch: { name?: string; description?: string | null }
+): boolean {
+  const sets: string[] = [];
+  const params: unknown[] = [];
+  if (patch.name !== undefined && patch.name.trim()) {
+    sets.push("name=?");
+    params.push(patch.name.trim().replace(/\s+/g, " "));
+  }
+  if (patch.description !== undefined) {
+    sets.push("description=?");
+    params.push(patch.description?.trim() || null);
+  }
+  if (!sets.length) return Boolean(getTag(id));
+  return (
+    db()
+      .prepare(`UPDATE tags SET ${sets.join(", ")} WHERE id=?`)
+      .run(...params, id).changes > 0
+  );
 }
 
 /** Deleting a tag never deletes anything it was attached to. */

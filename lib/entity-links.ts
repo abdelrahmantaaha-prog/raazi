@@ -30,11 +30,36 @@ export interface LinkedSpan {
  * Below this a name matches inside other words and inside itself: "Ali" in
  * "alliance", "UN" in "under". The sweep uses the same floor for the same
  * reason.
+ *
+ * An acronym is the exception: the boundaries are Unicode letter boundaries,
+ * so "CIA" cannot match inside "special", and three capitals are a name in a
+ * way three lowercase letters are not. Two-letter ones ("UN", "US") stay out —
+ * they are too often a word in another language or a stray initialism.
  */
 const MIN_NAME = 4;
+const MIN_ACRONYM = 3;
+const ACRONYM = /^[\p{Lu}][\p{Lu}\p{N}.&-]*$/u;
 
 /** Words that are names in form and furniture in practice. */
-const NOT_WORTH_LINKING = /^(the|a|an|his|her|their|this|that|it|they|he|she)\b/i;
+const FURNITURE = /^(the|a|an|his|her|their|this|that|it|they|he|she)\b(.*)$/is;
+
+/**
+ * "The White House" and "The Globe and Mail" are names; "the party" is not.
+ * The article alone used to disqualify the whole surface, which silently
+ * unlinked every organisation whose name begins with one. A surface that opens
+ * with furniture is now allowed through when what follows the article is
+ * capitalised — that is, when the sources treated it as a proper name.
+ */
+function worthLinking(surface: string): boolean {
+  const m = FURNITURE.exec(surface);
+  if (!m) return true;
+  return /\p{Lu}/u.test(m[2]);
+}
+
+function longEnough(surface: string): boolean {
+  if (surface.length >= MIN_NAME) return true;
+  return surface.length >= MIN_ACRONYM && ACRONYM.test(surface);
+}
 
 /**
  * Splits text into spans, marking the ones that name a known entity.
@@ -51,8 +76,8 @@ export function linkEntities(text: string, targets: LinkTarget[]): LinkedSpan[] 
   for (const t of targets) {
     for (const surface of [t.name, ...(t.aliases ?? [])]) {
       const s = surface?.trim();
-      if (!s || s.length < MIN_NAME) continue;
-      if (NOT_WORTH_LINKING.test(s)) continue;
+      if (!s || !longEnough(s)) continue;
+      if (!worthLinking(s)) continue;
       // First claim wins, and targets arrive heaviest-first, so an ambiguous
       // surface goes to the entity with the most evidence behind it rather
       // than to whichever happened to be last.

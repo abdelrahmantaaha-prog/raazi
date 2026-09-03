@@ -1,8 +1,8 @@
 "use client";
 
-import { useRouter } from "next/navigation";
+import { useRouter, useSearchParams } from "next/navigation";
 import Link from "next/link";
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import type { EntityDetail } from "@/lib/queries";
 import type { EffectiveTag, TagWithCounts } from "@/lib/tags";
 import { ENTITY_LABEL } from "@/lib/types";
@@ -17,9 +17,14 @@ import { WhereCard } from "../../components/MapView";
 import { DiscardButton, RestoreButton } from "./Discard";
 import { reasonLabel } from "@/lib/discard-reasons";
 import { EntityDrawer } from "../../components/EntityDrawer";
-import { linkEntities, type LinkTarget } from "@/lib/entity-links";
+import { NameLinks } from "../../components/NameLinks";
+import { RunChip } from "../../components/RunChip";
+import type { LinkTarget } from "@/lib/entity-links";
+import { formatDateTime, relativeDate } from "@/lib/dates";
 
 type Tab = "entry" | "evidence" | "timeline" | "connections" | "history";
+const TABS: Tab[] = ["entry", "evidence", "timeline", "connections", "history"];
+const isTab = (v: string | null): v is Tab => TABS.includes(v as Tab);
 
 export function EntityView({
   detail,
@@ -30,6 +35,7 @@ export function EntityView({
   where,
   pictured,
   links,
+  watching,
 }: {
   detail: EntityDetail;
   /** Other subjects whose names, appearing in this entry, become openable. */
@@ -40,11 +46,30 @@ export function EntityView({
   portrait: { has: boolean; credit: { wikidata?: string; commons?: string; byYou: boolean } };
   where: { lat: number; lon: number; zoom?: number; wikidata?: string } | null;
   pictured: number[];
+  /** Whether this subject is on the watchlist the brief is built around. */
+  watching: boolean;
 }) {
   const router = useRouter();
-  const [tab, setTab] = useState<Tab>("entry");
+  // The tab is in the URL — `/pedia/12?tab=evidence` — so Evidence, Timeline
+  // and Connections can be linked to and come back on reload. It used to be
+  // local state that nothing could reach.
+  const params = useSearchParams();
+  const asked = params.get("tab");
+  const [tab, setTabState] = useState<Tab>(isTab(asked) ? asked : "entry");
+  const setTab = (next: Tab) => {
+    setTabState(next);
+    const url = new URL(window.location.href);
+    if (next === "entry") url.searchParams.delete("tab");
+    else url.searchParams.set("tab", next);
+    window.history.replaceState(window.history.state, "", url);
+  };
+  useEffect(() => {
+    if (isTab(asked)) setTabState(asked);
+  }, [asked]);
   const [busy, setBusy] = useState(false);
   const [message, setMessage] = useState<string | null>(null);
+  /** The run the last Generate started, so the page can say how it is going. */
+  const [run, setRun] = useState<number | null>(null);
   /**
    * Which citation the reader is currently checking, and the marker it hangs
    * off — the quote opens beside the sentence, not at the foot of the entry.
@@ -71,8 +96,12 @@ export function EntityView({
         headers: { "content-type": "application/json" },
         body: JSON.stringify(body),
       });
-      if (!res.ok) throw new Error((await res.json()).error ?? "Failed.");
+      const data = (await res.json().catch(() => ({}))) as { error?: string; runId?: number; run?: { id?: number } };
+      if (!res.ok) throw new Error(data.error ?? "Failed.");
       setMessage(note);
+      if ((body as { action?: string }).action === "generate") {
+        setRun(data.runId ?? data.run?.id ?? null);
+      }
       router.refresh();
     } catch (err) {
       setMessage((err as Error).message);
@@ -84,7 +113,7 @@ export function EntityView({
   const generate = () =>
     post(
       { action: "generate" },
-      entry ? "Queued a revision — it will appear here shortly." : "Queued. The entry will appear here shortly."
+      entry ? "Queued a revision." : "Queued. The entry will appear here when the run finishes."
     );
 
   const openCount = contradictions.filter((c) => !c.resolved).length;
@@ -158,6 +187,9 @@ export function EntityView({
           >
             {entity.starred ? "★ Starred" : "☆ Star"}
           </Button>
+          {/* Watching is not starring. A star says "write an entry for this
+              however small it is"; a watch says "lead the brief with it". */}
+          <WatchButton entityId={entity.id} watching={watching} />
           <Button variant="primary" onClick={generate} disabled={busy}>
             {entry ? (entity.entry_state === "stale" ? "Update entry" : "Regenerate") : "Write entry"}
           </Button>
@@ -171,7 +203,10 @@ export function EntityView({
       </div>
 
       {message && (
-        <p className="rounded border border-[var(--color-rule)] bg-white px-3 py-2 text-sm">{message}</p>
+        <p className="flex flex-wrap items-center gap-3 rounded border border-[var(--color-rule)] bg-white px-3 py-2 text-sm">
+          <span>{message}</span>
+          {run && <RunChip runId={run} />}
+        </p>
       )}
 
       {/* The rejected-evidence warning takes precedence over the ordinary stale
@@ -283,7 +318,7 @@ export function EntityView({
             <Card>
               <p className="font-medium">No entry written yet.</p>
               <p className="mt-1 text-sm text-[var(--color-muted)]">
-                This entity has {evidence.length} quote{evidence.length === 1 ? "" : "s"} behind it.
+                This entity has {evidence.length} passage{evidence.length === 1 ? "" : "s"} behind it.
                 Entries are written on demand for anything below the automatic threshold, so
                 nothing is spent on names mentioned once in passing.
               </p>
@@ -321,8 +356,8 @@ export function EntityView({
                 <p className="mt-6 border-t border-[var(--color-rule)] pt-3 text-xs text-[var(--color-muted)]">
                   Written from {evidence.length} passage{evidence.length === 1 ? "" : "s"} across{" "}
                   {evidenceBySource.length} source{evidenceBySource.length === 1 ? "" : "s"}. Last
-                  updated {entry.updated_at}. Click any numbered citation to see the exact quote it
-                  rests on.
+                  updated <span title={formatDateTime(entry.updated_at)}>{relativeDate(entry.updated_at)}</span>.
+                  Click any numbered citation to see the exact quote it rests on.
                 </p>
               </Card>
 
@@ -566,7 +601,9 @@ export function EntityView({
                       {r.trigger_title && (
                         <span className="font-normal text-[var(--color-muted)]"> after adding “{r.trigger_title}”</span>
                       )}
-                      <span className="ml-2 text-xs font-normal text-[var(--color-muted)]">{r.created_at}</span>
+                      <span className="ml-2 text-xs font-normal text-[var(--color-muted)]" title={formatDateTime(r.created_at)}>
+                        {formatDateTime(r.created_at)}
+                      </span>
                     </p>
                     {r.changelog_md && (
                       <div className="mt-1 whitespace-pre-wrap text-sm text-[var(--color-muted)]">
@@ -594,43 +631,6 @@ export function EntityView({
  * that topic. You can add one that isn't, or hide a derived one that is
  * technically true but not useful on this entity.
  */
-/**
- * Names in the prose that the library knows, made openable.
- *
- * They open beside the entry rather than replacing it: following a reference
- * three deep and wanting the original back is the normal shape of reading an
- * encyclopedia, and browser history is a poor substitute for it.
- */
-function NameLinks({
-  text,
-  links,
-  onOpen,
-}: {
-  text: string;
-  links: LinkTarget[];
-  onOpen: (id: number) => void;
-}) {
-  return (
-    <>
-      {linkEntities(text, links).map((s, i) =>
-        s.entityId === undefined ? (
-          <span key={i}>{s.text}</span>
-        ) : (
-          <button
-            key={i}
-            type="button"
-            onClick={() => onOpen(s.entityId!)}
-            title={`Open ${s.entityName}`}
-            className="cursor-pointer border-b border-dotted border-[var(--color-accent)] text-inherit hover:bg-[var(--color-accent-soft)]"
-          >
-            {s.text}
-          </button>
-        )
-      )}
-    </>
-  );
-}
-
 function EntityTags({
   entityId,
   tags,
@@ -643,15 +643,29 @@ function EntityTags({
   onDone: () => void;
 }) {
   const [open, setOpen] = useState(false);
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState<string | null>(null);
   const on = new Set(tags.map((t) => t.id));
 
   const toggle = async (tagId: number, next: boolean) => {
-    await fetch(`/api/entities/${entityId}`, {
-      method: "POST",
-      headers: { "content-type": "application/json" },
-      body: JSON.stringify({ action: "tag", tagId, on: next }),
-    });
-    onDone();
+    setBusy(true);
+    setError(null);
+    try {
+      const res = await fetch(`/api/entities/${entityId}`, {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ action: "tag", tagId, on: next }),
+      });
+      if (!res.ok) {
+        const data = await res.json().catch(() => ({}));
+        throw new Error(data.error ?? "Could not change that topic.");
+      }
+      onDone();
+    } catch (err) {
+      setError((err as Error).message);
+    } finally {
+      setBusy(false);
+    }
   };
 
   return (
@@ -674,15 +688,17 @@ function EntityTags({
       {open && (
         <div className="mt-2 w-full rounded border border-[var(--color-rule)] bg-white p-3">
           <p className="mb-2 text-xs text-[var(--color-muted)]">
-            Dotted tags come from the sources this entity appears in. Turning one off hides it here
-            only; it stays on the source.
+            Dotted topics come from the sources this entity appears in. Turning one off hides it
+            here only; it stays on the source.
           </p>
+          {error && <p className="mb-2 text-xs text-red-700">{error}</p>}
           <div className="flex flex-wrap gap-1.5">
             {allTags.map((t) => {
               const active = on.has(t.id);
               return (
                 <button
                   key={t.id}
+                  disabled={busy}
                   onClick={() => toggle(t.id, !active)}
                   className={`rounded-full border px-2.5 py-0.5 text-xs transition ${
                     active ? "text-white" : "bg-white text-[var(--color-muted)] hover:bg-[var(--color-accent-soft)]"
@@ -704,6 +720,62 @@ function EntityTags({
   );
 }
 
+/**
+ * Follow this subject, or stop.
+ *
+ * The watchlist is what the morning brief is organised by, so this is the one
+ * control that changes what you are shown tomorrow rather than what is stored
+ * today.
+ */
+function WatchButton({ entityId, watching }: { entityId: number; watching: boolean }) {
+  const router = useRouter();
+  const [on, setOn] = useState(watching);
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+
+  async function toggle() {
+    setBusy(true);
+    setError(null);
+    const next = !on;
+    try {
+      const res = next
+        ? await fetch("/api/watchlist", {
+            method: "POST",
+            headers: { "content-type": "application/json" },
+            body: JSON.stringify({ entityId }),
+          })
+        : await fetch(`/api/watchlist?id=${await watchIdFor(entityId)}`, { method: "DELETE" });
+      if (!res.ok) {
+        const data = (await res.json().catch(() => ({}))) as { error?: string };
+        throw new Error(data.error ?? "That did not work.");
+      }
+      setOn(next);
+      router.refresh();
+    } catch (err) {
+      setError((err as Error).message);
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  return (
+    <span className="inline-flex flex-col">
+      <Button onClick={toggle} disabled={busy} title="Lead the brief with this subject">
+        {on ? "Watching" : "Watch"}
+      </Button>
+      {error ? <span className="text-xs text-red-700">{error}</span> : null}
+    </span>
+  );
+}
+
+/** The watchlist row for an entity, which DELETE needs by id. */
+async function watchIdFor(entityId: number): Promise<number | null> {
+  const res = await fetch("/api/watchlist");
+  if (!res.ok) return null;
+  const data = (await res.json()) as { watchlist: { id: number; entity_id: number | null }[] };
+  return data.watchlist.find((w) => w.entity_id === entityId)?.id ?? null;
+}
+
 function StarQuote({ id, starred }: { id: number; starred: boolean }) {
   const [on, setOn] = useState(starred);
   return (
@@ -711,11 +783,17 @@ function StarQuote({ id, starred }: { id: number; starred: boolean }) {
       onClick={async () => {
         const next = !on;
         setOn(next);
-        await fetch(`/api/mentions/${id}`, {
-          method: "POST",
-          headers: { "content-type": "application/json" },
-          body: JSON.stringify({ starred: next }),
-        });
+        try {
+          const res = await fetch(`/api/mentions/${id}`, {
+            method: "POST",
+            headers: { "content-type": "application/json" },
+            body: JSON.stringify({ starred: next }),
+          });
+          if (!res.ok) throw new Error();
+        } catch {
+          // The star goes back to what the server still believes.
+          setOn(!next);
+        }
       }}
       className="hover:text-[var(--color-accent)]"
       title={on ? "Remove from quote bank" : "Save to quote bank"}
@@ -737,7 +815,53 @@ function MergePanel({
   onDone: () => void;
 }) {
   const [other, setOther] = useState("");
+  const [filter, setFilter] = useState("");
   const [busy, setBusy] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+
+  // Four hundred options is not a list anyone scrolls; the box above the
+  // select narrows it to the names that contain what you typed.
+  const needle = filter.trim().toLowerCase();
+  const shown = needle ? siblings.filter((s) => s.name.toLowerCase().includes(needle)) : siblings;
+
+  const merge = async () => {
+    setBusy(true);
+    setError(null);
+    try {
+      const res = await fetch(`/api/entities/${entityId}`, {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ action: "merge", otherId: Number(other) }),
+      });
+      if (!res.ok) {
+        const data = await res.json().catch(() => ({}));
+        throw new Error(data.error ?? "The merge did not go through.");
+      }
+      setOther("");
+      onDone();
+    } catch (err) {
+      setError((err as Error).message);
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const split = async (mergeId: number) => {
+    setBusy(true);
+    setError(null);
+    try {
+      const res = await fetch(`/api/merges/${mergeId}`, { method: "DELETE" });
+      if (!res.ok) {
+        const data = await res.json().catch(() => ({}));
+        throw new Error(data.error ?? "Could not split that back out.");
+      }
+      onDone();
+    } catch (err) {
+      setError((err as Error).message);
+    } finally {
+      setBusy(false);
+    }
+  };
 
   return (
     <Card>
@@ -749,35 +873,37 @@ function MergePanel({
       </p>
 
       <div className="mt-3 flex flex-wrap gap-2">
+        <input
+          value={filter}
+          onChange={(e) => {
+            setFilter(e.target.value);
+            setOther("");
+          }}
+          placeholder="Filter by name…"
+          aria-label="Filter merge candidates"
+          className="min-w-[10rem] rounded border border-[var(--color-rule)] bg-white px-3 py-2 text-sm focus:outline-none focus:ring-1 focus:ring-[var(--color-accent)]"
+        />
         <select
           value={other}
           onChange={(e) => setOther(e.target.value)}
           className="min-w-[16rem] flex-1 rounded border border-[var(--color-rule)] bg-white px-3 py-2 text-sm"
         >
-          <option value="">Fold another entity into this one…</option>
-          {siblings.map((s) => (
+          <option value="">
+            {shown.length === 0
+              ? "Nothing matches that"
+              : `Fold another entity into this one… (${shown.length})`}
+          </option>
+          {shown.map((s) => (
             <option key={s.id} value={s.id}>
               {s.name} ({s.mentions})
             </option>
           ))}
         </select>
-        <Button
-          disabled={!other || busy}
-          onClick={async () => {
-            setBusy(true);
-            await fetch(`/api/entities/${entityId}`, {
-              method: "POST",
-              headers: { "content-type": "application/json" },
-              body: JSON.stringify({ action: "merge", otherId: Number(other) }),
-            });
-            setOther("");
-            setBusy(false);
-            onDone();
-          }}
-        >
-          Merge
+        <Button disabled={!other || busy} onClick={() => void merge()}>
+          {busy ? "Working…" : "Merge"}
         </Button>
       </div>
+      {error && <p className="mt-2 text-sm text-red-700">{error}</p>}
 
       {merges.length > 0 && (
         <ul className="mt-4 space-y-2">
@@ -790,13 +916,7 @@ function MergePanel({
                   — {m.reason} ({m.actor})
                 </span>
               </span>
-              <Button
-                variant="ghost"
-                onClick={async () => {
-                  await fetch(`/api/merges/${m.id}`, { method: "DELETE" });
-                  onDone();
-                }}
-              >
+              <Button variant="ghost" disabled={busy} onClick={() => void split(m.id)}>
                 Split back out
               </Button>
             </li>
@@ -832,35 +952,32 @@ function NameChooser({
   const [busy, setBusy] = useState(false);
   const others = aliases.filter((a) => a !== current);
 
-  const choose = async (name: string) => {
+  const [error, setError] = useState<string | null>(null);
+
+  const send = async (body: unknown) => {
     setBusy(true);
+    setError(null);
     try {
-      await fetch(`/api/entities/${entityId}/name`, {
+      const res = await fetch(`/api/entities/${entityId}/name`, {
         method: "POST",
         headers: { "content-type": "application/json" },
-        body: JSON.stringify({ name }),
+        body: JSON.stringify(body),
       });
+      if (!res.ok) {
+        const data = await res.json().catch(() => ({}));
+        throw new Error(data.error ?? "Could not change the heading.");
+      }
       setOpen(false);
       onDone();
+    } catch (err) {
+      setError((err as Error).message);
     } finally {
       setBusy(false);
     }
   };
 
-  const release = async () => {
-    setBusy(true);
-    try {
-      await fetch(`/api/entities/${entityId}/name`, {
-        method: "POST",
-        headers: { "content-type": "application/json" },
-        body: JSON.stringify({ unlock: true }),
-      });
-      setOpen(false);
-      onDone();
-    } finally {
-      setBusy(false);
-    }
-  };
+  const choose = (name: string) => send({ name });
+  const release = () => send({ unlock: true });
 
   return (
     <div className="mt-1 text-sm text-[var(--color-muted)]">
@@ -878,6 +995,7 @@ function NameChooser({
           <p className="mb-2 text-xs">
             Choose the form to head this entry. Only names your sources used are offered.
           </p>
+          {error && <p className="mb-2 text-xs text-red-700">{error}</p>}
           <div className="flex flex-wrap gap-1.5">
             {aliases.map((a) => (
               <button

@@ -1,9 +1,10 @@
 import { db, tx } from "../db";
 import { generateJson } from "../ai/client";
+import { getConfig } from "../config";
 import { finishTask } from "../queue";
 import type { ChunkExtraction, Task } from "../types";
 import { formatLocator } from "../chunk";
-import { SCHEMA, SYSTEM, persist, precedingText, quoteKey } from "./extract";
+import { SCHEMA, persist, precedingText, quoteKey, sourceHeader, systemFor } from "./extract";
 
 /**
  * A second look at a passage that has already been read.
@@ -20,9 +21,7 @@ import { SCHEMA, SYSTEM, persist, precedingText, quoteKey } from "./extract";
  * exhausted passage costs one call and writes nothing.
  */
 
-const ENHANCE_SYSTEM = `${SYSTEM}
-
-THIS IS A SECOND PASS.
+const SECOND_PASS = `THIS IS A SECOND PASS.
 
 You will be given ALREADY RECORDED: everything a previous reading of this same
 passage extracted. Your job is only what it missed.
@@ -47,7 +46,11 @@ export async function handleEnhance(task: Task): Promise<void> {
   const chunk = db()
     .prepare(
       `SELECT c.id, c.source_id, c.seq, c.text, c.locator_json, c.extracted_at,
-              s.title AS source_title, s.lang AS source_lang, d.label AS doc_label
+              s.title AS source_title, s.lang AS source_lang, s.author AS source_author,
+              s.publisher AS source_publisher, s.outlet AS source_outlet,
+              s.published_at AS source_published_at, s.year AS source_year,
+              s.dateline AS source_dateline, s.kind AS source_kind,
+              d.label AS doc_label
          FROM chunks c
          JOIN sources s ON s.id = c.source_id
     LEFT JOIN documents d ON d.id = c.doc_id
@@ -63,6 +66,13 @@ export async function handleEnhance(task: Task): Promise<void> {
         extracted_at: string | null;
         source_title: string;
         source_lang: string | null;
+        source_author: string | null;
+        source_publisher: string | null;
+        source_outlet: string | null;
+        source_published_at: string | null;
+        source_year: string | null;
+        source_dateline: string | null;
+        source_kind: string;
         doc_label: string | null;
       }
     | undefined;
@@ -114,16 +124,29 @@ export async function handleEnhance(task: Task): Promise<void> {
 
   const where = formatLocator(JSON.parse(chunk.locator_json), chunk.doc_label);
   const earlier = precedingText(chunk.source_id, chunk.seq);
+  const header = sourceHeader(
+    {
+      title: chunk.source_title,
+      author: chunk.source_author,
+      publisher: chunk.source_publisher,
+      outlet: chunk.source_outlet,
+      published_at: chunk.source_published_at,
+      year: chunk.source_year,
+      dateline: chunk.source_dateline,
+      kind: chunk.source_kind,
+    },
+    where
+  );
 
   const { data, usage } = await generateJson<ChunkExtraction>({
     stage: "extract",
     lang: chunk.source_lang ?? undefined,
     sample: chunk.text.slice(0, 600),
-    system: ENHANCE_SYSTEM,
+    system: `${systemFor(getConfig().entryLanguage)}\n\n${SECOND_PASS}`,
     schema: SCHEMA,
     parts: [
       [
-        `Source: ${chunk.source_title}${where ? ` — ${where}` : ""}`,
+        header,
         earlier
           ? `\nEARLIER TEXT (context only — do not extract or quote from this):\n"""\n${earlier}\n"""`
           : "",

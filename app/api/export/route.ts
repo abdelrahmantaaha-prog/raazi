@@ -1,4 +1,6 @@
+import path from "node:path";
 import { NextResponse } from "next/server";
+import { attachment, badRequest, notFound, queryId } from "@/lib/http";
 import { db } from "@/lib/db";
 import { citationOf, evidenceFor, listEntities } from "@/lib/queries";
 import { formatCitation } from "@/lib/citation";
@@ -15,21 +17,24 @@ export const dynamic = "force-dynamic";
 export async function GET(req: Request) {
   const url = new URL(req.url);
   const format = url.searchParams.get("format") ?? "markdown";
-  const entityId = Number(url.searchParams.get("entity") ?? 0) || undefined;
+  const entityId = queryId(req, "entity");
+  if (entityId !== null && !db().prepare("SELECT 1 FROM entities WHERE id=?").get(entityId)) {
+    return notFound("No such entity.");
+  }
 
   switch (format) {
     case "markdown":
-      return text(entriesMarkdown(entityId), "corpus-entries.md");
+      return text(entriesMarkdown(entityId ?? undefined), "corpus-entries.md");
     case "quotes":
       return text(quotesMarkdown(), "corpus-quotes.md");
     case "bibtex":
       return text(bibtex(), "corpus-sources.bib");
     case "json":
       return NextResponse.json(graph(), {
-        headers: { "content-disposition": 'attachment; filename="corpus-graph.json"' },
+        headers: { "content-disposition": attachment("corpus-graph.json") },
       });
     default:
-      return NextResponse.json({ error: "Unknown format." }, { status: 400 });
+      return badRequest("Unknown format.");
   }
 }
 
@@ -37,7 +42,7 @@ function text(body: string, filename: string) {
   return new NextResponse(body, {
     headers: {
       "content-type": "text/markdown; charset=utf-8",
-      "content-disposition": `attachment; filename="${filename}"`,
+      "content-disposition": attachment(filename),
     },
   });
 }
@@ -165,10 +170,24 @@ function bibtex(): string {
     .join("\n\n");
 }
 
+/**
+ * The whole graph as JSON.
+ *
+ * `SELECT *` on sources ships the `path` column, which is an absolute path
+ * into this machine's home directory — a detail of where Corpus happens to be
+ * installed, in a file whose whole purpose is to be sent somewhere else. The
+ * file name is what identifies the source; the directory is nobody's business.
+ */
 function graph() {
+  const sources = (
+    db().prepare("SELECT * FROM sources").all() as (Record<string, unknown> & {
+      path: string | null;
+    })[]
+  ).map((s) => ({ ...s, path: s.path ? path.basename(s.path) : null }));
+
   return {
     exportedAt: new Date().toISOString(),
-    sources: db().prepare("SELECT * FROM sources").all(),
+    sources,
     entities: db().prepare("SELECT id, type, canonical_name, disambiguator, entry_state FROM entities WHERE merged_into IS NULL").all(),
     entries: db().prepare("SELECT * FROM entries").all(),
     mentions: db().prepare("SELECT id, entity_id, source_id, surface, quote, claim FROM live_mentions").all(),

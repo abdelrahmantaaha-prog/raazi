@@ -110,19 +110,18 @@ function quotaIds(details: QuotaDetail[]): string {
 }
 
 /**
- * Gemini's free-tier daily quotas reset at midnight US Pacific, not local
- * midnight — so a run that dies at 9pm Riyadh time is eligible again at 10am,
- * not in three hours. Getting this wrong means the auto-resume fires into a
- * still-exhausted key.
+ * A 403 that is about a file, not about the key.
+ *
+ * The Files API hands back a URI that only the uploading key can read, and
+ * asking for it with any other key — or with the pool, which picks a fresh
+ * key per request — gets PERMISSION_DENIED with the file named in the
+ * message. That is the caller's mistake, and classifying it as "the provider
+ * rejected this key" marked every local key invalid, permanently, on the
+ * first busy minute of a transcription.
  */
-export function nextPacificMidnight(now = new Date()): Date {
-  const pacificNow = new Date(
-    now.toLocaleString("en-US", { timeZone: "America/Los_Angeles" })
-  );
-  const offsetMs = now.getTime() - pacificNow.getTime();
-  const nextMidnightPacific = new Date(pacificNow);
-  nextMidnightPacific.setHours(24, 5, 0, 0); // +5min of slack
-  return new Date(nextMidnightPacific.getTime() + offsetMs);
+function isFilePermissionError(status: number | undefined, raw: string): boolean {
+  if (status !== 403 && !raw.includes("permission_denied")) return false;
+  return /\bfile\b|\bfiles\/|fileuri|file_uri|generativelanguage\.googleapis\.com\/v1beta\/files/.test(raw);
 }
 
 /**
@@ -167,6 +166,9 @@ export function keyFailure(err: unknown): KeyFailure {
       reason: "This account needs billing enabled before it will answer.",
     };
   }
+
+  // Not the key's fault, and no other key can fix it — see the helper.
+  if (isFilePermissionError(status, raw)) return { kind: "other" };
 
   if (
     status === 401 ||
@@ -234,6 +236,16 @@ export function classify(err: unknown, attempts: number): Disposition {
   const status = statusOf(err);
   const raw = (err instanceof Error ? err.message : String(err)).toLowerCase();
   const details = detailsOf(err);
+
+  // A file the key cannot read is this task's problem, not the ring's:
+  // parking the whole run for a key nobody needs to replace would be wrong.
+  if (isFilePermissionError(status, raw)) {
+    return {
+      kind: "fail",
+      reason: "The provider refused access to the uploaded file — it belongs to a different key. " +
+        (err instanceof Error ? err.message.slice(0, 300) : String(err).slice(0, 300)),
+    };
+  }
 
   if (status === 401 || status === 403 || raw.includes("api key not valid") ||
       raw.includes("unauthenticated") || raw.includes("permission_denied")) {

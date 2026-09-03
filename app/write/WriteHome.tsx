@@ -17,9 +17,12 @@ import type { IdeaSummary } from "@/lib/ideas";
 export function WriteHome({
   drafts,
   ideas,
+  openDraft,
 }: {
   drafts: DraftSummary[];
   ideas: IdeaSummary[];
+  /** The draft the URL asked for, if it asked for one. */
+  openDraft?: number | null;
 }) {
   const [tab, setTab] = useState<"drafts" | "ideas">("drafts");
 
@@ -47,7 +50,7 @@ export function WriteHome({
       {/* Both stay mounted: switching tabs must not throw away an unsaved
           title you were halfway through typing. */}
       <div hidden={tab !== "drafts"}>
-        <WritingDesk initial={drafts} />
+        <WritingDesk initial={drafts} openDraft={openDraft} />
       </div>
       <div hidden={tab !== "ideas"}>
         <Ideas initial={ideas} />

@@ -21,6 +21,27 @@ opens automatically.
 
 Failing all that, you can type the address by hand.
 
+## Before it can work: LAN mode and the token
+
+Corpus listens on `127.0.0.1` by default, which means your phone cannot reach
+it at all — deliberately, because the alternative is a library that anyone on
+the same Wi-Fi can delete sources from and spend your quota on.
+
+To use it from a phone, on the computer:
+
+1. Settings → turn on **LAN mode**. That records the choice and generates a
+   token (32 random bytes, kept in `data/config.json` beside the API keys).
+2. Restart Corpus, so it binds every interface instead of just this machine.
+   The launcher reads the setting and starts `npm run start:lan` for you; from
+   a terminal it is `npm run dev:lan` or `npm run start:lan`.
+3. Settings shows the sign-in link — `http://<address>:5400/login?token=…` —
+   as a link to scan or a code to type.
+
+On the phone, the helper finds the machine as before (`/api/hello` stays open,
+because a phone has to find a library before it can sign in to it) and asks for
+the token once. It is remembered per machine, and the WebView carries it as a
+cookie afterwards. Anything without it gets a 401.
+
 ## Before it can work: the firewall
 
 **Windows blocks incoming connections by default**, so a freshly installed

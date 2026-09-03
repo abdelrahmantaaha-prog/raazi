@@ -33,9 +33,15 @@ export function readStore<T extends object>(): Partial<T> {
   let raw: string;
   try {
     raw = fs.readFileSync(CONFIG_PATH, "utf8");
-  } catch {
-    // Genuinely absent — first run. Empty is the truth, not a guess.
-    return {};
+  } catch (err) {
+    // Only "no such file" is first run, where empty is the truth. Anything
+    // else — EBUSY while another process renames over it, EPERM from a
+    // scanner holding it, EISDIR — is a file that exists and could not be
+    // read this instant. Returning {} there is the parse-failure disaster in
+    // a different coat: the next markUsed would persist the empty object
+    // over every key. So the caller gets the error, and nothing is written.
+    if ((err as NodeJS.ErrnoException)?.code === "ENOENT") return {};
+    throw err;
   }
 
   try {

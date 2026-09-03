@@ -3,8 +3,11 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import Link from "next/link";
 import { dirOf } from "@/lib/dir";
+import { formatDateTime, relativeDate } from "@/lib/dates";
 import { Button } from "../components/ui";
+import { Modal } from "../components/Modal";
 import { Editor } from "./Editor";
+import { citationMarker, renumberDom, renumberHtml } from "./citations";
 
 interface Reference {
   id: number;
@@ -90,16 +93,26 @@ const VERDICT: Record<Verdict["verdict"], { label: string; className: string }> 
  * draft you have already written, and reports rather than edits. Checking what
  * you wrote against your sources is the opposite of having it written for you.
  */
-export function WritingDesk({ initial }: { initial: DraftSummary[] }) {
+export function WritingDesk({
+  initial,
+  openDraft,
+}: {
+  initial: DraftSummary[];
+  /** A draft asked for by id — `/write?draft=ID`, as the Ideas page links. */
+  openDraft?: number | null;
+}) {
   const [drafts, setDrafts] = useState<DraftSummary[]>(initial);
-  const [id, setId] = useState<number | null>(initial[0]?.id ?? null);
-  const [title, setTitle] = useState(initial[0]?.title ?? "");
+  const first = openDraft ?? initial[0]?.id ?? null;
+  const [id, setId] = useState<number | null>(first);
+  const [title, setTitle] = useState(initial.find((d) => d.id === first)?.title ?? "");
   const [body, setBody] = useState("");
   const [refs, setRefs] = useState<Reference[]>([]);
   const [citeOpen, setCiteOpen] = useState(false);
   const [notes, setNotes] = useState<Note[]>([]);
   const [loaded, setLoaded] = useState(false);
-  const [saved, setSaved] = useState<"idle" | "saving" | "saved">("idle");
+  const [saved, setSaved] = useState<"idle" | "saving" | "saved" | "failed">("idle");
+  /** What went wrong with the last request from the pane, if anything. */
+  const [paneError, setPaneError] = useState<string | null>(null);
 
   const [q, setQ] = useState("");
   const [hits, setHits] = useState<Hit[]>([]);
@@ -108,25 +121,59 @@ export function WritingDesk({ initial }: { initial: DraftSummary[] }) {
 
   const [report, setReport] = useState<Report | null>(null);
   const [checking, setChecking] = useState(false);
+  const [checkError, setCheckError] = useState<string | null>(null);
   const [pane, setPane] = useState<"sources" | "check">("sources");
 
-  const editor = useRef<HTMLTextAreaElement>(null);
   const saveTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+  /** The title and body as last written to disk, so a no-op is never saved. */
+  const lastSaved = useRef<{ id: number | null; title: string; body: string }>({
+    id: null,
+    title: "",
+    body: "",
+  });
+  /** The draft on screen, readable from callbacks that outlive a render. */
+  const idRef = useRef<number | null>(first);
+  idRef.current = id;
+  /** The fact-check in flight, so switching drafts can cancel it. */
+  const checkAbort = useRef<AbortController | null>(null);
 
   // ---- loading a draft ---------------------------------------------------
 
   const open = useCallback(async (draftId: number) => {
+    // A check started on the previous draft must not write its report here.
+    checkAbort.current?.abort();
+    checkAbort.current = null;
+    setChecking(false);
+    setCheckError(null);
     setLoaded(false);
-    const res = await fetch(`/api/drafts/${draftId}`, { cache: "no-store" });
-    const data = await res.json();
-    if (!data.draft) return;
-    setId(draftId);
-    setTitle(data.draft.title);
-    setBody(data.draft.body_html || (data.draft.body_md ? `<p>${escapeHtml(data.draft.body_md)}</p>` : ""));
-    setRefs(data.citations ?? []);
-    setNotes(data.notes ?? []);
-    setReport(data.draft.check_json ? JSON.parse(data.draft.check_json) : null);
-    setLoaded(true);
+    setPaneError(null);
+    try {
+      const res = await fetch(`/api/drafts/${draftId}`, { cache: "no-store" });
+      const data = res.ok ? await res.json() : null;
+      if (!data?.draft) {
+        setPaneError("That draft is no longer here.");
+        return;
+      }
+      const citations: Reference[] = data.citations ?? [];
+      const html = renumberHtml(
+        data.draft.body_html || (data.draft.body_md ? `<p>${escapeHtml(data.draft.body_md)}</p>` : ""),
+        citations
+      );
+      setId(draftId);
+      setTitle(data.draft.title);
+      setBody(html);
+      setRefs(citations);
+      setNotes(data.notes ?? []);
+      setReport(data.draft.check_json ? JSON.parse(data.draft.check_json) : null);
+      // Opening is not editing: what came off the disk is what is on the disk,
+      // so the autosave below has nothing to do until you type.
+      lastSaved.current = { id: draftId, title: data.draft.title, body: html };
+      setSaved("idle");
+    } catch (err) {
+      setPaneError((err as Error).message);
+    } finally {
+      setLoaded(true);
+    }
   }, []);
 
   useEffect(() => {
@@ -134,44 +181,96 @@ export function WritingDesk({ initial }: { initial: DraftSummary[] }) {
     else setLoaded(true);
   }, [/* first draft only */ open]); // eslint-disable-line react-hooks/exhaustive-deps
 
+  // A different draft asked for by the URL while this page is already open.
+  useEffect(() => {
+    if (openDraft && openDraft !== idRef.current) void open(openDraft);
+  }, [openDraft, open]);
+
   // ---- saving ------------------------------------------------------------
 
   // Only after the draft is in the box. Autosaving before then would write an
-  // empty body over the file you just opened.
+  // empty body over the file you just opened — and only when something has
+  // actually changed, because a PUT of the same bytes still bumps the draft's
+  // timestamp and shuffled the list every time one was opened.
   useEffect(() => {
     if (!loaded || id === null) return;
+    const last = lastSaved.current;
+    if (last.id === id && last.title === title && last.body === body) return;
     setSaved("saving");
     if (saveTimer.current) clearTimeout(saveTimer.current);
     saveTimer.current = setTimeout(async () => {
-      await fetch(`/api/drafts/${id}`, {
-        method: "PUT",
-        headers: { "content-type": "application/json" },
-        body: JSON.stringify({ title, body_html: body }),
-      });
-      setSaved("saved");
-      setDrafts((ds) =>
-        ds.map((d) => (d.id === id ? { ...d, title, words: countWords(body) } : d))
-      );
+      try {
+        const res = await fetch(`/api/drafts/${id}`, {
+          method: "PUT",
+          headers: { "content-type": "application/json" },
+          body: JSON.stringify({ title, body_html: body }),
+        });
+        if (!res.ok) throw new Error("save failed");
+        lastSaved.current = { id, title, body };
+        setSaved("saved");
+        setDrafts((ds) =>
+          ds.map((d) => (d.id === id ? { ...d, title, words: countWords(body) } : d))
+        );
+      } catch {
+        // Said on the page rather than swallowed: "saved" on a draft that is
+        // not would be the worst lie the desk could tell.
+        setSaved("failed");
+      }
     }, 700);
     return () => {
       if (saveTimer.current) clearTimeout(saveTimer.current);
     };
   }, [title, body, id, loaded]);
 
+  // Keep the in-text markers honest whenever the reference list changes:
+  // the number each shows and the index the export reads are both derived from
+  // the list's current order, never stored. Done on the live DOM so the caret
+  // stays put, and emitted as a body change so it is saved.
+  useEffect(() => {
+    const box = document.querySelector<HTMLElement>('[role="textbox"][aria-label="Draft"]');
+    if (!box) return;
+    if (renumberDom(box, refs)) setBody(box.innerHTML);
+  }, [refs]);
+
+  /**
+   * Reads one list out of a pane response, or throws with the server's reason.
+   * An error response used to be read as an empty list, which wiped Gathered
+   * and References off the screen while the in-text markers stayed.
+   */
+  const listFrom = async <T,>(res: Response, key: string): Promise<T[]> => {
+    const data = (await res.json().catch(() => ({}))) as Record<string, unknown> & { error?: string };
+    if (!res.ok) throw new Error(data.error ?? "That didn't work.");
+    return (data[key] as T[] | undefined) ?? [];
+  };
+
   const newDraft = async () => {
-    const res = await fetch("/api/drafts", {
-      method: "POST",
-      headers: { "content-type": "application/json" },
-      body: JSON.stringify({ title: "Untitled" }),
-    });
-    const data = await res.json();
-    setDrafts(data.drafts ?? []);
-    await open(data.id);
+    setPaneError(null);
+    try {
+      const res = await fetch("/api/drafts", {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ title: "Untitled" }),
+      });
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.error ?? "Could not start a draft.");
+      setDrafts(data.drafts ?? []);
+      await open(data.id);
+    } catch (err) {
+      setPaneError((err as Error).message);
+    }
   };
 
   const removeDraft = async (draftId: number, name: string) => {
     if (!confirm(`Delete "${name}"? The draft and its gathered material go with it.`)) return;
-    await fetch(`/api/drafts/${draftId}`, { method: "DELETE" });
+    setPaneError(null);
+    try {
+      const res = await fetch(`/api/drafts/${draftId}`, { method: "DELETE" });
+      if (!res.ok && res.status !== 404) throw new Error("Could not delete it.");
+    } catch (err) {
+      setPaneError((err as Error).message);
+      return;
+    }
+    checkAbort.current?.abort();
     const rest = drafts.filter((d) => d.id !== draftId);
     setDrafts(rest);
     if (rest.length) await open(rest[0].id);
@@ -180,6 +279,10 @@ export function WritingDesk({ initial }: { initial: DraftSummary[] }) {
       setBody("");
       setTitle("");
       setNotes([]);
+      setRefs([]);
+      setReport(null);
+      setChecking(false);
+      lastSaved.current = { id: null, title: "", body: "" };
     }
   };
 
@@ -198,9 +301,12 @@ export function WritingDesk({ initial }: { initial: DraftSummary[] }) {
         const res = await fetch(`/api/drafts/search?q=${encodeURIComponent(term)}`, {
           cache: "no-store",
         });
+        if (!res.ok) throw new Error("Search failed.");
         const data = await res.json();
         setHits(data.quotes ?? []);
         setEntryHits(data.entries ?? []);
+      } catch (err) {
+        setPaneError((err as Error).message);
       } finally {
         setSearching(false);
       }
@@ -210,26 +316,36 @@ export function WritingDesk({ initial }: { initial: DraftSummary[] }) {
 
   const keep = async (hit: Hit) => {
     if (id === null) return;
-    const res = await fetch(`/api/drafts/${id}/notes`, {
-      method: "POST",
-      headers: { "content-type": "application/json" },
-      body: JSON.stringify({
-        text: hit.quote,
-        kind: "quote",
-        citation: hit.citation,
-        entityId: hit.entity_id,
-        mentionId: hit.id,
-        chunkId: hit.chunk_id,
-        sourceId: hit.source_id,
-      }),
-    });
-    setNotes((await res.json()).notes ?? []);
+    setPaneError(null);
+    try {
+      const res = await fetch(`/api/drafts/${id}/notes`, {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({
+          text: hit.quote,
+          kind: "quote",
+          citation: hit.citation,
+          entityId: hit.entity_id,
+          mentionId: hit.id,
+          chunkId: hit.chunk_id,
+          sourceId: hit.source_id,
+        }),
+      });
+      setNotes(await listFrom<Note>(res, "notes"));
+    } catch (err) {
+      setPaneError((err as Error).message);
+    }
   };
 
   const drop = async (noteId: number) => {
     if (id === null) return;
-    const res = await fetch(`/api/drafts/${id}/notes?note=${noteId}`, { method: "DELETE" });
-    setNotes((await res.json()).notes ?? []);
+    setPaneError(null);
+    try {
+      const res = await fetch(`/api/drafts/${id}/notes?note=${noteId}`, { method: "DELETE" });
+      setNotes(await listFrom<Note>(res, "notes"));
+    } catch (err) {
+      setPaneError((err as Error).message);
+    }
   };
 
   /** Puts a block quote where the cursor is, in the editor's own markup. */
@@ -259,51 +375,96 @@ export function WritingDesk({ initial }: { initial: DraftSummary[] }) {
    */
   const cite = async (ref: Partial<Reference> & { quote?: string; sourceId?: number; mentionId?: number }) => {
     if (id === null) return;
-    const res = await fetch(`/api/drafts/${id}/citations`, {
-      method: "POST",
-      headers: { "content-type": "application/json" },
-      body: JSON.stringify(ref),
-    });
-    const data = (await res.json()) as { citations: Reference[] };
-    setRefs(data.citations ?? []);
+    setPaneError(null);
+    try {
+      const res = await fetch(`/api/drafts/${id}/citations`, {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify(ref),
+      });
+      const citations = await listFrom<Reference>(res, "citations");
+      setRefs(citations);
 
-    const index = (data.citations ?? []).length - 1;
-    if (index >= 0) {
-      insert(
-        `<span data-note="${index}" contenteditable="false" ` +
-          `style="vertical-align:super;font-size:0.72em;color:var(--color-accent);padding:0 1px">` +
-          `[${index + 1}]</span>&nbsp;`
-      );
+      // The marker carries the reference's id; the number it shows is only
+      // the id's position in the list today, and is redrawn when that moves.
+      const index = citations.length - 1;
+      if (index >= 0) insert(citationMarker(citations[index].id, index));
+      setCiteOpen(false);
+    } catch (err) {
+      setPaneError((err as Error).message);
     }
-    setCiteOpen(false);
   };
 
   const dropRef = async (refId: number) => {
     if (id === null) return;
-    const res = await fetch(`/api/drafts/${id}/citations?citation=${refId}`, { method: "DELETE" });
-    setRefs((await res.json()).citations ?? []);
+    setPaneError(null);
+    try {
+      const res = await fetch(`/api/drafts/${id}/citations?citation=${refId}`, { method: "DELETE" });
+      // The effect on `refs` renumbers every marker still in the text and
+      // removes the ones that pointed at what was just dropped.
+      setRefs(await listFrom<Reference>(res, "citations"));
+    } catch (err) {
+      setPaneError((err as Error).message);
+    }
   };
 
   // ---- the one thing that does call a model ------------------------------
 
+  /**
+   * Starts a check and waits for its report.
+   *
+   * Bound to the draft it was started on: the poll carries that id and only
+   * writes a report if that draft is still the one open — switching drafts
+   * aborts it outright. Any failure clears "checking", which used to stick
+   * for ever after one bad response.
+   */
   const check = async () => {
     if (id === null) return;
+    const draftId = id;
+    checkAbort.current?.abort();
+    const ctl = new AbortController();
+    checkAbort.current = ctl;
     setChecking(true);
+    setCheckError(null);
     setPane("check");
-    await fetch(`/api/drafts/${id}/check`, { method: "POST" });
 
-    const poll = async () => {
-      const res = await fetch(`/api/drafts/${id}/check`, { cache: "no-store" });
-      const data = await res.json();
-      if (data.running) {
-        setTimeout(poll, 1500);
-        return;
+    try {
+      const res = await fetch(`/api/drafts/${draftId}/check`, { method: "POST", signal: ctl.signal });
+      const started = (await res.json().catch(() => ({}))) as { error?: string };
+      if (!res.ok) throw new Error(started.error ?? "Could not start the check.");
+
+      const began = Date.now();
+      while (!ctl.signal.aborted) {
+        // Brisk at first; a check parked on quota is not worth hammering.
+        await wait(Date.now() - began < 60_000 ? 1500 : 5000, ctl.signal);
+        const poll = await fetch(`/api/drafts/${draftId}/check`, {
+          cache: "no-store",
+          signal: ctl.signal,
+        });
+        const data = (await poll.json().catch(() => ({}))) as {
+          running?: boolean;
+          report?: Report | null;
+          error?: string;
+        };
+        if (!poll.ok) throw new Error(data.error ?? "Lost track of the check.");
+        if (data.running) continue;
+        if (idRef.current === draftId) setReport(data.report ?? null);
+        break;
       }
-      setReport(data.report);
-      setChecking(false);
-    };
-    setTimeout(poll, 1200);
+    } catch (err) {
+      if (!ctl.signal.aborted && idRef.current === draftId) {
+        setCheckError((err as Error).message);
+      }
+    } finally {
+      if (checkAbort.current === ctl) {
+        checkAbort.current = null;
+        setChecking(false);
+      }
+    }
   };
+
+  // Leaving the page should not leave a poll running against it.
+  useEffect(() => () => checkAbort.current?.abort(), []);
 
   const counts = report
     ? report.claims.reduce<Record<string, number>>((acc, c) => {
@@ -341,6 +502,12 @@ export function WritingDesk({ initial }: { initial: DraftSummary[] }) {
 
       {citeOpen && <CiteDialog onCancel={() => setCiteOpen(false)} onAdd={cite} />}
 
+      {paneError && (
+        <p className="rounded border border-red-200 bg-red-50 px-3 py-2 text-sm text-red-800">
+          {paneError}
+        </p>
+      )}
+
       {id === null ? (
         <div className="rounded-lg border border-dashed border-[var(--color-rule)] p-10 text-center">
           <p className="text-sm text-[var(--color-muted)]">
@@ -365,7 +532,13 @@ export function WritingDesk({ initial }: { initial: DraftSummary[] }) {
               />
               <span className="shrink-0 text-xs tabular-nums text-[var(--color-muted)]">
                 {countWords(body)} words
-                {saved === "saving" ? " · saving…" : saved === "saved" ? " · saved" : ""}
+                {saved === "saving"
+                  ? " · saving…"
+                  : saved === "saved"
+                    ? " · saved"
+                    : saved === "failed"
+                      ? " · not saved"
+                      : ""}
               </span>
               <button
                 onClick={() => removeDraft(id, title)}
@@ -420,6 +593,8 @@ export function WritingDesk({ initial }: { initial: DraftSummary[] }) {
                       <button
                         onClick={() => void dropRef(r.id)}
                         className="shrink-0 text-xs text-[var(--color-muted)] hover:text-red-700"
+                        aria-label={`Remove reference ${i + 1}`}
+                        title="Remove this reference and its markers from the text"
                       >
                         ✕
                       </button>
@@ -598,6 +773,12 @@ export function WritingDesk({ initial }: { initial: DraftSummary[] }) {
                   </p>
                 )}
 
+                {checkError && (
+                  <p className="rounded border border-red-200 bg-red-50 px-3 py-2 text-sm text-red-800">
+                    {checkError}
+                  </p>
+                )}
+
                 {!checking && !report && (
                   <p className="text-sm text-[var(--color-muted)]">
                     Nothing checked yet. The check reads each factual claim in the draft and says
@@ -612,6 +793,11 @@ export function WritingDesk({ initial }: { initial: DraftSummary[] }) {
                       {report.claims.length} claim(s) · {counts.supported ?? 0} supported ·{" "}
                       {counts.partly ?? 0} partly · {counts.contradicted ?? 0} contradicted ·{" "}
                       {counts.unsupported ?? 0} not in your sources
+                      {report.checkedAt && (
+                        <span title={formatDateTime(report.checkedAt)}>
+                          {" "}· checked {relativeDate(report.checkedAt)}
+                        </span>
+                      )}
                     </p>
                     <ul className="space-y-2">
                       {[...report.claims]
@@ -663,7 +849,23 @@ function escapeHtml(s: string): string {
 
 /** The editor stores HTML; direction and word counts want the words. */
 function stripTags(html: string): string {
-  return html.replace(/<[^>]*>/g, " ").replace(/&nbsp;/g, " ").replace(/s+/g, " ").trim();
+  return html.replace(/<[^>]*>/g, " ").replace(/&nbsp;/g, " ").replace(/\s+/g, " ").trim();
+}
+
+/** A pause that a cancelled check can cut short. */
+function wait(ms: number, signal: AbortSignal): Promise<void> {
+  return new Promise((resolve, reject) => {
+    if (signal.aborted) return reject(new DOMException("Aborted", "AbortError"));
+    const onAbort = () => {
+      clearTimeout(t);
+      reject(new DOMException("Aborted", "AbortError"));
+    };
+    const t = setTimeout(() => {
+      signal.removeEventListener("abort", onAbort);
+      resolve();
+    }, ms);
+    signal.addEventListener("abort", onAbort, { once: true });
+  });
 }
 
 function countWords(s: string): number {
@@ -706,14 +908,7 @@ function CiteDialog({
   const preview = [author, title, year, locator].filter((s) => s.trim()).join(", ");
 
   return (
-    <div
-      className="fixed inset-0 z-50 flex items-start justify-center bg-black/25 p-6 pt-24"
-      onMouseDown={onCancel}
-    >
-      <div
-        className="w-full max-w-md rounded-lg border border-[var(--color-rule)] bg-white p-4 shadow-xl"
-        onMouseDown={(e) => e.stopPropagation()}
-      >
+    <Modal label="Add a reference" onClose={onCancel}>
         <h3 className="font-serif text-lg font-semibold">Add a reference</h3>
         <p className="mt-0.5 text-xs text-[var(--color-muted)]">
           For something not in your library. To cite your own sources, use <em>Cite</em> beside a
@@ -760,7 +955,6 @@ function CiteDialog({
             Add and cite
           </Button>
         </div>
-      </div>
-    </div>
+    </Modal>
   );
 }

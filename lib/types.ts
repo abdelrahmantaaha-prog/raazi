@@ -97,7 +97,15 @@ export type TaskKind =
   | "plan_portraits"
   /** Free bookkeeping step: decides which entities have earned an entry and
    *  queues them. Runs after resolution, when the entity set has settled. */
-  | "plan_entries";
+  | "plan_entries"
+  /** Free: which feeds are due a look. See lib/pipeline/poll.ts. */
+  | "plan_polls"
+  /** Fetches one feed and records what it carries. Costs no tokens. */
+  | "poll"
+  /** Turns one feed item into a source, which starts the ordinary ingest. */
+  | "fetch_item"
+  /** Writes the daily brief from what arrived. See lib/pipeline/brief.ts. */
+  | "brief";
 
 export interface Locator {
   page?: number;
@@ -121,6 +129,15 @@ export interface Source {
   note: string | null;
   meta_json: string;
   added_at: string;
+  /** When it was published, as ISO; a book has only its year. */
+  published_at?: string | null;
+  outlet?: string | null;
+  section?: string | null;
+  dateline?: string | null;
+  /** The address with tracking stripped; what duplicate stories are matched on. */
+  canonical_url?: string | null;
+  /** Your own note on how far to trust this source. */
+  reliability?: string | null;
 }
 
 export interface Chunk {
@@ -160,6 +177,10 @@ export interface Mention {
   context: string | null;
   starred: number;
   confidence: number;
+  /** Who is asserting the claim, and what kind of claim it is. Null on rows
+   *  written before extraction recorded them. */
+  attribution?: string | null;
+  claim_kind?: string | null;
 }
 
 export interface Run {
@@ -189,7 +210,23 @@ export interface Task {
   tokens_in: number;
   tokens_out: number;
   updated_at: string;
+  /** Do not run before this time (ISO); a retry waits here instead of
+   *  sleeping inside the worker and holding up the queue. */
+  not_before?: string | null;
+  /** Ordering within a priority; lower runs first. */
+  order_hint?: number | null;
+  /** The model this task is pinned to, when it is. */
+  model?: string | null;
 }
+
+/**
+ * What sort of assertion a passage makes. "Officials said the tariff would
+ * take effect Monday" is a report of someone else's claim, not the source's
+ * own; a newsroom lives on that difference, so extraction records it.
+ */
+export type ClaimKind = "fact" | "allegation" | "opinion" | "forecast" | "denial" | "quotation";
+
+export const CLAIM_KINDS: ClaimKind[] = ["fact", "allegation", "opinion", "forecast", "denial", "quotation"];
 
 /** What the extraction call returns for a single chunk. */
 export interface ExtractedEntity {
@@ -203,6 +240,10 @@ export interface ExtractedEntity {
   /** The passage discussed this entity without naming it; the name came from
    *  the preceding text. Recorded at lower confidence. */
   fromContext?: boolean;
+  /** Who asserts the claim: "source" for the text's own voice, otherwise the
+   *  person, body or document the text credits, as the text puts it. */
+  attribution?: string;
+  claimKind?: ClaimKind;
 }
 
 /**

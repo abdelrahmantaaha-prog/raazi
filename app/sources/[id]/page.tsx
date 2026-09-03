@@ -10,8 +10,18 @@ import type { Mark, Passage } from "./Reader";
 
 export const dynamic = "force-dynamic";
 
-export default async function SourcePage({ params }: { params: Promise<{ id: string }> }) {
+export default async function SourcePage({
+  params,
+  searchParams,
+}: {
+  params: Promise<{ id: string }>;
+  searchParams: Promise<{ chunk?: string }>;
+}) {
   const id = Number((await params).id);
+  // `?chunk=ID` opens the reader at that passage — what a search hit or a
+  // citation's "Read in" links to. Search hits used to point at an anchor
+  // that existed nowhere, so you landed at the top of the book.
+  const wantedChunk = Number((await searchParams).chunk ?? 0) || null;
 
   const source = db().prepare("SELECT * FROM sources WHERE id=?").get(id) as
     | {
@@ -100,6 +110,7 @@ export default async function SourcePage({ params }: { params: Promise<{ id: str
   return (
     <SourceView
       source={{ ...source, words, mode }}
+      initialChunk={wantedChunk && chunks.some((c) => c.id === wantedChunk) ? wantedChunk : null}
       position={{
         chunkId: source.bookmark_chunk,
         offset: source.bookmark_offset ?? 0,

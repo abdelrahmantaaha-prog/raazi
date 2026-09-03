@@ -204,6 +204,95 @@ check(
 keys.removeKey(cd.id);
 
 // ---------------------------------------------------------------------------
+section("A stale exhaustion cannot hide a live cooldown");
+// ---------------------------------------------------------------------------
+// The bug: success cleared cooldownUntil but left an old exhaustedUntil in
+// place. earliestReset read `exhaustedUntil ?? cooldownUntil`, found the
+// stale one, filtered it out as past, and reported the key as not waiting —
+// so a ring where every key was in that state had no reset time at all, the
+// client threw the raw error, and the run was parked for an hour.
+{
+  const st = keys.addKey("AIza-stalestalestale6666", "Stale");
+  keys.markExhausted(st.id, "Quota refused.", 60);
+  // Pretend that exhaustion was yesterday.
+  const cfgPath = path.join(SANDBOX, "config.json");
+  const raw = JSON.parse(fs.readFileSync(cfgPath, "utf8"));
+  raw.keys = raw.keys.map((k) =>
+    k.id === st.id ? { ...k, exhaustedUntil: new Date(Date.now() - 3600_000).toISOString() } : k
+  );
+  fs.writeFileSync(cfgPath, JSON.stringify(raw));
+
+  keys.markUsed(st.id, 1, 1);
+  check(
+    "a successful call clears the old exhaustion outright",
+    keys.listKeys().find((k) => k.id === st.id).exhaustedUntil === null
+  );
+
+  // Now a live cooldown, with a stale exhaustion put back beside it.
+  keys.markCooldown(st.id, 20_000, "Rate limited.");
+  const raw2 = JSON.parse(fs.readFileSync(cfgPath, "utf8"));
+  raw2.keys = raw2.keys.map((k) =>
+    k.id === st.id ? { ...k, exhaustedUntil: new Date(Date.now() - 3600_000).toISOString() } : k
+  );
+  fs.writeFileSync(cfgPath, JSON.stringify(raw2));
+  // Take every other key off the board so this one decides the answer.
+  for (const k of keys.listKeys()) if (k.id !== st.id) keys.setKey(k.id, { disabled: true });
+
+  const reset = keys.earliestReset();
+  check("the ring still reports a reset time", reset !== undefined);
+  check(
+    "and it is the twenty-second cooldown, not nothing",
+    reset && reset.getTime() <= Date.now() + 21_000,
+    reset?.toLocaleTimeString()
+  );
+
+  // The other way round: a live exhaustion and a stale cooldown.
+  keys.markExhausted(st.id, "Quota refused.", 60);
+  const raw3 = JSON.parse(fs.readFileSync(cfgPath, "utf8"));
+  raw3.keys = raw3.keys.map((k) =>
+    k.id === st.id ? { ...k, cooldownUntil: new Date(Date.now() - 1000).toISOString() } : k
+  );
+  fs.writeFileSync(cfgPath, JSON.stringify(raw3));
+  const reset2 = keys.earliestReset();
+  check(
+    "a past cooldown does not shadow a future exhaustion either",
+    reset2 && reset2.getTime() > Date.now() + 50 * 60_000,
+    reset2?.toLocaleTimeString()
+  );
+
+  for (const k of keys.listKeys()) if (k.id !== st.id) keys.setKey(k.id, { disabled: false });
+  keys.removeKey(st.id);
+}
+
+// ---------------------------------------------------------------------------
+section("A 403 about a file is not a bad key");
+// ---------------------------------------------------------------------------
+// The Files API hands back a URI only the uploading key can read. Any other
+// key asking for it gets this; reading it as "the provider rejected this key"
+// marked every local key invalid, permanently, on one busy minute.
+{
+  const fileDenied = new Error(
+    `403 ${JSON.stringify({
+      error: {
+        code: 403,
+        message: "You do not have permission to access the File abc123xyz or it may not exist.",
+        status: "PERMISSION_DENIED",
+      },
+    })}`
+  );
+  check("a file-permission 403 is the caller's problem", keyFailure(fileDenied).kind === "other", keyFailure(fileDenied).kind);
+  check(
+    "and the run is not parked for a key nobody needs to replace",
+    classify(fileDenied, 1).kind === "fail",
+    classify(fileDenied, 1).kind
+  );
+  const keyDenied = new Error(
+    `403 ${JSON.stringify({ error: { code: 403, message: "Your API key doesn't have the required permissions.", status: "PERMISSION_DENIED" } })}`
+  );
+  check("a 403 about the key itself still means the key is bad", keyFailure(keyDenied).kind === "invalid");
+}
+
+// ---------------------------------------------------------------------------
 section("Recovering");
 // ---------------------------------------------------------------------------
 keys.reviveKey(b.id);

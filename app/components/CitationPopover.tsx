@@ -28,7 +28,8 @@ export function CitationPopover({
   onClose,
   onShowInEvidence,
 }: {
-  citation?: Citation;
+  /** `chunkId` is the passage to open the source at, when the caller knows it. */
+  citation?: Citation & { chunkId?: number | null };
   anchor: HTMLElement | null;
   index?: number;
   onClose: () => void;
@@ -155,7 +156,7 @@ export function CitationPopover({
           Show in evidence
         </button>
         <Link
-          href={`/sources/${citation.sourceId}${citation.id ? `#m${citation.id}` : ""}`}
+          href={`/sources/${citation.sourceId}${citation.chunkId ? `?chunk=${citation.chunkId}` : ""}`}
           className="rounded border border-[var(--color-rule)] px-2.5 py-1 font-medium hover:bg-[var(--color-accent-soft)]"
         >
           Read in {citation.sourceTitle}

@@ -3,6 +3,7 @@ import { normalize } from "../normalize";
 import { finishTask } from "../queue";
 import { discardIndex, isDiscarded } from "../audit";
 import { needsContext } from "../deixis";
+import { refileSource } from "../stories";
 import type { Task } from "../types";
 
 /**
@@ -42,14 +43,19 @@ export async function handleSweep(task: Task): Promise<void> {
   const { sourceId } = JSON.parse(task.payload_json) as { sourceId: number };
   const found = sweepSource(sourceId);
 
+  // Now that this source has passages, ask again which running story it
+  // belongs to. When it was fetched there was nothing but a headline to go on.
+  const filed = refileSource(sourceId);
+
   finishTask(
     task.id,
     task.run_id,
     { tokensIn: 0, tokensOut: 0 },
     "done",
-    found === 0
+    (found === 0
       ? "No further appearances to record."
-      : `Recorded ${found} further appearance(s) that extraction passed over.`
+      : `Recorded ${found} further appearance(s) that extraction passed over.`) +
+      (filed?.moved ? " Filed with a story already running." : "")
   );
 }
 

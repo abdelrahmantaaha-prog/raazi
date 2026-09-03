@@ -72,10 +72,20 @@ export default async function SearchPage({
           {results.chunks.map((c) => (
             <Card key={c.id}>
               <div className="flex flex-wrap items-baseline gap-2 text-sm">
-                <Link href={`/sources/${c.source_id}`} className="font-medium hover:text-[var(--color-accent)]">
+                <Link
+                  href={`/sources/${c.source_id}?chunk=${c.id}`}
+                  className="font-medium hover:text-[var(--color-accent)]"
+                  title="Open the reader at this passage"
+                >
                   {c.source_title}
                 </Link>
                 <span className="text-[var(--color-muted)]">{c.locator}</span>
+                <Link
+                  href={`/sources/${c.source_id}?chunk=${c.id}`}
+                  className="text-xs text-[var(--color-muted)] hover:text-[var(--color-accent)] hover:underline"
+                >
+                  read this passage →
+                </Link>
               </div>
               <p className="mt-1 text-sm">
                 <Snippet text={c.snippet} />

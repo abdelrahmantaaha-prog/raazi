@@ -12,6 +12,20 @@ const DB_PATH = path.join(DATA_DIR, "corpus.db");
 const PID_PATH = path.join(DATA_DIR, "corpus.pid");
 
 /**
+ * How old the pid file may be before its pid is disbelieved, and how often a
+ * live worker refreshes it to stay inside that. Windows reuses pids freely:
+ * a server that crashed on Monday can leave a number that belongs to a
+ * browser tab by Tuesday, and `kill(pid, 0)` cannot tell them apart —
+ * comparing process start times would, but on Windows that means shelling
+ * out to WMI on every database open, which is not cheap enough for a guard.
+ * So the claim is a lease instead: the worker re-touches the file every few
+ * minutes while it runs, and a file nobody has touched in a day is treated
+ * as a crash's leftovers whatever pid it names.
+ */
+const PID_STALE_MS = 24 * 60 * 60_000;
+const PID_REFRESH_MS = 5 * 60_000;
+
+/**
  * Whether some other Corpus process is alive on this library right now.
  *
  * The worker claims the pid file when it starts (see claimWorkerPid); a crash
@@ -23,6 +37,7 @@ const PID_PATH = path.join(DATA_DIR, "corpus.pid");
  */
 function anotherInstanceAlive(): number | null {
   try {
+    if (Date.now() - fs.statSync(PID_PATH).mtimeMs > PID_STALE_MS) return null;
     const pid = Number(fs.readFileSync(PID_PATH, "utf8").trim());
     if (!Number.isInteger(pid) || pid <= 0 || pid === process.pid) return null;
     process.kill(pid, 0);
@@ -32,15 +47,20 @@ function anotherInstanceAlive(): number | null {
   }
 }
 
+let lastClaimAt = 0;
+
 /**
  * Records this process as the one running the worker. Called by startWorker,
  * not by open(): merely reading the library — a test, a script, a second dev
- * server — must not claim to own its queue.
+ * server — must not claim to own its queue. Called again from the worker
+ * loop, where it is a cheap no-op until the lease is due for renewal.
  */
 export function claimWorkerPid(): void {
+  if (Date.now() - lastClaimAt < PID_REFRESH_MS) return;
   try {
     fs.mkdirSync(DATA_DIR, { recursive: true });
     fs.writeFileSync(PID_PATH, String(process.pid), "utf8");
+    lastClaimAt = Date.now();
   } catch {
     // Losing the claim costs the guard, not the app.
   }

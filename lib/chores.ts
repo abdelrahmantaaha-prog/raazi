@@ -70,13 +70,21 @@ export function flaggedForRewrite(min = MIN_FLAGS_FOR_REWRITE): { entityId: numb
            FROM entry_flags f
            JOIN entities e ON e.id = f.entity_id AND e.merged_into IS NULL
            JOIN entries en ON en.entity_id = f.entity_id
+          -- An entry already rewritten twice for its flags, on the same
+          -- evidence, is not rewritten a third time: at that point the flags
+          -- are the verifier's opinion of the evidence, not of the prose, and
+          -- the morning routine was rewriting the same entries every day.
+          WHERE en.flag_rewrites < ?
           GROUP BY f.entity_id
          HAVING COUNT(*) >= ?
           ORDER BY COUNT(*) DESC, f.entity_id`
       )
-      .all(min) as { entityId: number; name: string; flags: number }[]
+      .all(MAX_FLAG_REWRITES, min) as { entityId: number; name: string; flags: number }[]
   );
 }
+
+/** How many flag-driven rewrites one evidence set may receive. */
+export const MAX_FLAG_REWRITES = 2;
 
 /**
  * Queues the morning's work as one run, and says what it queued.
@@ -92,10 +100,16 @@ export function queueMorningRun(): { runId: number; rewrites: number } {
       kind: "morning",
       label:
         flagged.length > 0
-          ? `Morning routine — rewriting ${flagged.length} flagged entr${flagged.length === 1 ? "y" : "ies"}, then looking for pictures`
-          : "Morning routine — looking for pictures",
+          ? `Morning routine — the feeds, then ${flagged.length} flagged entr${flagged.length === 1 ? "y" : "ies"}, then pictures`
+          : "Morning routine — the feeds, then pictures",
       budgetCap: getConfig().defaultBudget,
     });
+
+    // The feeds first: an entry rewritten before the morning's articles are in
+    // is an entry that will be stale by the time you read it.
+    if (getConfig().feedPolling) {
+      enqueue(runId, [{ kind: "plan_polls" as const, payload: {} }]);
+    }
 
     if (flagged.length > 0) {
       enqueue(
@@ -105,7 +119,7 @@ export function queueMorningRun(): { runId: number; rewrites: number } {
           // force the handler would answer "already current" and skip it. The
           // rewrite receives the flag verdicts and investigates each one.
           kind: "entry" as const,
-          payload: { entityId: f.entityId, force: true },
+          payload: { entityId: f.entityId, force: true, fromFlags: true },
         }))
       );
     }

@@ -1,4 +1,5 @@
 import { NextResponse } from "next/server";
+import { accepted, badRequest, inFlight, readBody } from "@/lib/http";
 import { db } from "@/lib/db";
 import { createRun, enqueue } from "@/lib/queue";
 import { kickWorker } from "@/lib/worker";
@@ -39,10 +40,18 @@ export async function GET() {
  * queue where it can be paused, closed and resumed like anything else.
  */
 export async function POST(req: Request) {
-  const { force } = (await req.json().catch(() => ({}))) as { force?: boolean };
+  const body = (await readBody<{ force?: boolean }>(req)) ?? {};
+  if (body.force !== undefined && typeof body.force !== "boolean") {
+    return badRequest("force must be true or false.");
+  }
+
+  // One hunt at a time. It is minutes of rate-limited work and a second one
+  // would ask Wikidata the same questions in parallel with the first.
+  const running = inFlight("plan_portraits") ?? inFlight("portrait");
+  if (running) return accepted(running, "Pictures are already being looked for.");
 
   const runId = createRun({ kind: "portraits", label: "Finding pictures" });
-  enqueue(runId, [{ kind: "plan_portraits", payload: { force: force === true } }]);
+  enqueue(runId, [{ kind: "plan_portraits", payload: { force: body.force === true } }]);
   kickWorker();
 
   return NextResponse.json({ runId, note: "Looking for pictures — watch the progress above." });

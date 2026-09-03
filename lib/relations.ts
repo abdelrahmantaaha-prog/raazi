@@ -223,18 +223,22 @@ const RULES: [Nature, RegExp][] = [
   [
     "contact",
     stems(
-      "met", "meet", "visit", "travell?ed", "correspond", "wrote to", "telephon",
+      "met", "meet", "visit", "travell?ed with", "correspond", "wrote to", "telephon",
       "call", "spoke", "talk", "interview", "dined", "attended", "accompan",
       "convey", "introduc", "host", "greet", "featured alongside",
       "connected with"
     ),
   ],
+  // Only phrasings that put someone somewhere. A bare "from" used to be in
+  // this list and dragged "took orders from" and "learned Arabic from" into
+  // geography; "from Cairo" is not detectable from the phrase alone, so the
+  // cluster relies on the verbs that name a place outright.
   [
     "place",
     stems(
       "born (in|at)", "died (in|at)", "based (in|at)", "locat", "headquarter",
-      "lives? in", "lived in", "moved to", "exiled", "buried", "from",
-      "operations in", "presence in"
+      "lives? in", "lived in", "moved to", "travell?ed to", "exiled", "buried",
+      "native of", "operations in", "presence in"
     ),
   ],
 ];

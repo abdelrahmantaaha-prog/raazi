@@ -25,6 +25,8 @@ interface ChatResponse {
     finish_reason?: string;
   }[];
   usage?: { prompt_tokens?: number; completion_tokens?: number };
+  /** What the endpoint says it ran — the resolved name, not the alias asked for. */
+  model?: string;
   error?: { message?: string; type?: string; code?: string };
 }
 
@@ -33,10 +35,24 @@ export class HttpError extends Error {
   constructor(
     public readonly status: number,
     body: string,
-    public readonly retryAfterMs?: number
+    public readonly retryAfterMs?: number,
+    /** The shared pool's x-broker-retry-at, when it answered "all spent". */
+    public readonly retryAt?: string
   ) {
     super(`${status} ${body.slice(0, 800)}`);
   }
+}
+
+/** The default ceiling on one call. A stalled socket used to freeze the
+ *  single worker until someone restarted the server; three minutes is longer
+ *  than any text call legitimately takes and shorter than anyone's patience. */
+export const DEFAULT_TIMEOUT_MS = 180_000;
+
+/** What a call comes back with, beyond the body: the model the pool reports
+ *  having actually used, when it went through the pool. */
+interface Posted {
+  body: unknown;
+  model?: string;
 }
 
 async function post(
@@ -44,8 +60,9 @@ async function post(
   apiKey: string,
   path: string,
   body: unknown,
-  baseUrlOverride?: string
-): Promise<unknown> {
+  baseUrlOverride?: string,
+  timeoutMs = DEFAULT_TIMEOUT_MS
+): Promise<Posted> {
   const s = spec(provider);
   const base = (baseUrlOverride || s.baseUrl).replace(/\/$/, "");
 
@@ -60,6 +77,10 @@ async function post(
         : {}),
     },
     body: JSON.stringify(body),
+    // The whole exchange, headers to last byte. A hung connection surfaces
+    // as a TimeoutError, which the worker's classifier reads as a network
+    // blip and retries — rather than as the worker sitting there for good.
+    signal: AbortSignal.timeout(timeoutMs),
   });
 
   if (!res.ok) {
@@ -71,11 +92,12 @@ async function post(
     throw new HttpError(
       res.status,
       text,
-      parseDelay(retryAfter) ?? parseDelay(resetTokens) ?? parseDelay(resetRequests)
+      parseDelay(retryAfter) ?? parseDelay(resetTokens) ?? parseDelay(resetRequests),
+      res.headers.get("x-broker-retry-at") ?? undefined
     );
   }
 
-  return res.json();
+  return { body: await res.json(), model: res.headers.get("x-broker-model") ?? undefined };
 }
 
 /** "20", "20s", "1m30s", "2.5s" -> milliseconds. */
@@ -96,6 +118,17 @@ function usageOf(res: ChatResponse): OpenAiUsage {
   };
 }
 
+/**
+ * Whether a 400 is the endpoint saying it does not do json_schema, as
+ * opposed to every other reason a request can be bad. Re-posting on any 4xx
+ * doubled the cost of a genuinely malformed request and hid what was wrong
+ * with it behind a second, differently-shaped failure.
+ */
+function rejectsJsonSchema(err: unknown): boolean {
+  if (!(err instanceof HttpError) || err.status !== 400) return false;
+  return /json_schema|response_format|structured output/i.test(err.message);
+}
+
 export async function chatJson<T>(opts: {
   provider: ProviderId;
   apiKey: string;
@@ -105,7 +138,8 @@ export async function chatJson<T>(opts: {
   prompt: string;
   schema: Schema;
   temperature?: number;
-}): Promise<{ data: T; usage: OpenAiUsage }> {
+  timeoutMs?: number;
+}): Promise<{ data: T; usage: OpenAiUsage; model?: string }> {
   const jsonSchema = toJsonSchema(opts.schema, true);
 
   const body = {
@@ -121,15 +155,16 @@ export async function chatJson<T>(opts: {
     },
   };
 
-  let res: ChatResponse;
+  let posted: Posted;
   try {
-    res = (await post(opts.provider, opts.apiKey, "/chat/completions", body, opts.baseUrl)) as ChatResponse;
+    posted = await post(opts.provider, opts.apiKey, "/chat/completions", body, opts.baseUrl, opts.timeoutMs);
   } catch (err) {
     // Not every endpoint implements json_schema. Fall back to plain JSON mode
     // with the schema described in the prompt rather than giving up — this is
-    // the difference between a provider working and not.
-    if (err instanceof HttpError && (err.status === 400 || err.status === 404 || err.status === 422)) {
-      res = (await post(
+    // the difference between a provider working and not. Only when the
+    // endpoint actually says that is what it objects to, though.
+    if (rejectsJsonSchema(err)) {
+      posted = await post(
         opts.provider,
         opts.apiKey,
         "/chat/completions",
@@ -144,20 +179,22 @@ export async function chatJson<T>(opts: {
             },
           ],
         },
-        opts.baseUrl
-      )) as ChatResponse;
+        opts.baseUrl,
+        opts.timeoutMs
+      );
     } else {
       throw err;
     }
   }
 
+  const res = posted.body as ChatResponse;
   const choice = res.choices?.[0];
   if (choice?.finish_reason === "length") throw new TruncatedOutputError();
 
   const content = choice?.message?.content;
   if (!content) throw new Error(`Empty response (finish_reason=${choice?.finish_reason ?? "none"}).`);
 
-  return { data: dropNulls(parseJson<T>(content)), usage: usageOf(res) };
+  return { data: dropNulls(parseJson<T>(content)), usage: usageOf(res), model: posted.model ?? res.model };
 }
 
 export async function chatText(opts: {
@@ -168,8 +205,9 @@ export async function chatText(opts: {
   system?: string;
   prompt: string;
   temperature?: number;
-}): Promise<{ data: string; usage: OpenAiUsage }> {
-  const res = (await post(
+  timeoutMs?: number;
+}): Promise<{ data: string; usage: OpenAiUsage; model?: string }> {
+  const posted = await post(
     opts.provider,
     opts.apiKey,
     "/chat/completions",
@@ -181,14 +219,16 @@ export async function chatText(opts: {
         { role: "user", content: opts.prompt },
       ],
     },
-    opts.baseUrl
-  )) as ChatResponse;
+    opts.baseUrl,
+    opts.timeoutMs
+  );
 
+  const res = posted.body as ChatResponse;
   const choice = res.choices?.[0];
   if (choice?.finish_reason === "length") throw new TruncatedOutputError();
   const content = choice?.message?.content;
   if (!content) throw new Error("Empty response.");
-  return { data: content, usage: usageOf(res) };
+  return { data: content, usage: usageOf(res), model: posted.model ?? res.model };
 }
 
 /** Some models still wrap JSON in a code fence despite being asked not to. */

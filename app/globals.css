@@ -36,20 +36,39 @@ body {
 .prose-entry h2 { font-size: 1.25rem; }
 .prose-entry h3 { font-size: 1.1rem; }
 .prose-entry p { margin: 0 0 1em; }
-.prose-entry ul, .prose-entry ol { margin: 0 0 1em 1.25em; list-style: disc; }
+/* Logical directions throughout: an Arabic entry indents its lists and rules
+   its quotes on the right, where the line starts. Physical `left` put both on
+   the wrong side of every RTL entry. */
+.prose-entry ul, .prose-entry ol { margin: 0 0 1em; padding-inline-start: 1.25em; list-style: disc; }
 .prose-entry ol { list-style: decimal; }
 .prose-entry li { margin-bottom: 0.35em; }
 .prose-entry strong { font-weight: 600; }
 .prose-entry em { font-style: italic; }
 .prose-entry blockquote {
-  border-left: 3px solid var(--color-rule);
-  padding-left: 1em;
+  border-inline-start: 3px solid var(--color-rule);
+  padding-inline-start: 1em;
   margin: 0 0 1em;
   color: var(--color-muted);
 }
 
 /* Sources can be Arabic; entries follow their sources. */
-[dir="rtl"] .prose-entry { text-align: right; }
+.prose-entry { text-align: start; }
+
+/* ---------------------------------------------------------------------------
+   Controls that appear on hover
+
+   Remove, the reading-state picker and the outline tools were opacity-0 until
+   the row was hovered, which on a phone is never — two of the three shelves
+   had no way at all to remove a source. So: hidden only where hovering is a
+   thing the device can do, and shown as well when focus lands inside the row,
+   so a keyboard user can find them too.
+   --------------------------------------------------------------------------- */
+.group .reveal { opacity: 0; transition: opacity 0.15s ease; }
+.group:hover .reveal,
+.group:focus-within .reveal { opacity: 1; }
+@media (hover: none) {
+  .group .reveal { opacity: 1; }
+}
 
 @media (prefers-reduced-motion: no-preference) {
   .fade-in { animation: fade 0.2s ease-out; }
@@ -59,10 +78,24 @@ body {
 /* Marks the passage a citation just jumped to, so it is findable in a long
    evidence list without the reader having to hunt for it. */
 .cite-flash {
-  border-left-color: var(--color-accent);
+  border-inline-start-color: var(--color-accent);
   background: var(--color-accent-soft);
   border-radius: 0 4px 4px 0;
   transition: background 0.4s ease-out, border-color 0.4s ease-out;
+}
+
+/* The passage the reader was opened at — from a search hit or a citation's
+   "Read in" — lit for a moment so the eye lands on it in a page of prose. The
+   wash is drawn in the reader's own ink at low opacity, so it works on paper,
+   sepia and night alike. */
+.chunk-flash {
+  animation: chunk-flash 1.8s ease-out both;
+  border-radius: 4px;
+}
+@keyframes chunk-flash {
+  from { box-shadow: 0 0 0 8px color-mix(in srgb, currentColor 22%, transparent);
+         background: color-mix(in srgb, currentColor 12%, transparent); }
+  to   { box-shadow: 0 0 0 8px transparent; background: transparent; }
 }
 
 /* ---------------------------------------------------------------------------

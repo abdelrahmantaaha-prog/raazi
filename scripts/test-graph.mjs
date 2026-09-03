@@ -92,6 +92,21 @@ nature("served", "office");
 nature("has diplomatic relations with", "political");
 nature("has operations in", "place");
 
+section("…and \"from\" on its own is not geography");
+// A bare "from" stem put "took orders from" and "learned Arabic from" in the
+// place cluster of the connections graph. Only explicit place verbs count.
+nature("took orders from", "other");
+nature("learned Arabic from", "other");
+nature("born in", "place");
+nature("was based in", "place");
+nature("moved to", "place");
+nature("lived in", "place");
+nature("located in", "place");
+nature("travelled to", "place");
+nature("traveled to", "place");
+nature("travelled with", "contact");
+nature("visited", "contact");
+
 section("…without inventing kin out of anything ending in a vowel");
 nature("Sony", "other");
 nature("sonar contract", "ownership");

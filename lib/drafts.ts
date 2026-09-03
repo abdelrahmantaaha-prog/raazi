@@ -59,7 +59,11 @@ export function listDrafts(): DraftSummary[] {
 }
 
 export function getDraft(id: number): Draft | undefined {
-  return db().prepare("SELECT * FROM drafts WHERE id=?").get(id) as Draft | undefined;
+  const row = db().prepare("SELECT * FROM drafts WHERE id=?").get(id) as Draft | undefined;
+  if (!row) return undefined;
+  // Belt and braces: rows written before the sanitiser existed, or by a hand
+  // on the database, are cleaned on the way out as well as on the way in.
+  return { ...row, body_html: sanitizeHtml(row.body_html ?? "") };
 }
 
 export function createDraft(title = "Untitled"): number {
@@ -94,7 +98,10 @@ export function saveDraft(
       : patch.body_md !== undefined && patch.body_md.trim() === "";
   const refuse = wouldEmpty && current.body_md.trim() !== "";
 
-  const html = refuse || patch.body_html === undefined ? current.body_html : patch.body_html;
+  // Reduced to the allowed markup before anything else reads it, so the
+  // plain-text form below and the row itself both come from the clean copy.
+  const html =
+    refuse || patch.body_html === undefined ? current.body_html : sanitizeHtml(patch.body_html);
 
   // The plain-text form is derived from the HTML rather than sent alongside it,
   // so the two cannot drift apart.
@@ -164,6 +171,178 @@ export function reorderNotes(draftId: number, ids: number[]): DraftNote[] {
   const stmt = db().prepare("UPDATE draft_notes SET seq=? WHERE id=? AND draft_id=?");
   ids.forEach((id, i) => stmt.run(i, id, draftId));
   return notesFor(draftId);
+}
+
+// ---------------------------------------------------------------------------
+// Sanitising
+// ---------------------------------------------------------------------------
+
+/**
+ * The markup a draft may contain, and nothing else.
+ *
+ * The editor stores HTML and renders it back with innerHTML, which means a
+ * draft body is code that runs in your browser. Anything that can reach
+ * PUT /api/drafts — a phone on the same network, in LAN mode — could plant an
+ * `<img onerror>` that, the next time you opened the desk, called every route
+ * as you. So the body is reduced to this list on the way in, and again on the
+ * way out for rows written before the list existed.
+ *
+ * The list is what the editor itself produces plus what the Word export
+ * understands (lib/richtext.ts). A tag not on it is removed and its text kept;
+ * a handful whose *contents* are not prose — script, style, iframe — lose the
+ * contents too. `b` and `i`, which contenteditable emits for bold and italic,
+ * are folded into `strong` and `em` so there is one spelling of each.
+ *
+ * Attributes are not filtered but rebuilt: the only ones that survive are
+ * `href` on a link, and only when it is http or https, and `data-note` on a
+ * span, and only when it is a number — the citation marker the export reads.
+ * Every event handler, style, class, id and src goes, whatever it was called.
+ *
+ * Written against the same tokeniser idea as lib/richtext.ts rather than a
+ * DOM library: this runs on the server, the input is small, and a parser we
+ * can read end to end is the point of the exercise.
+ */
+const ALLOWED = new Set([
+  "p", "h1", "h2", "h3", "h4", "ul", "ol", "li", "blockquote",
+  "strong", "em", "u", "s", "a", "span", "br", "hr", "code", "pre",
+]);
+const RENAMED: Record<string, string> = { b: "strong", i: "em", strike: "s", del: "s" };
+/** Tags whose inner text is not prose and must go with them. */
+const DROP_CONTENTS = new Set([
+  "script", "style", "iframe", "object", "embed", "template", "noscript",
+  "svg", "math", "textarea", "select", "head", "title",
+]);
+const VOID = new Set(["br", "hr"]);
+/**
+ * Blocks, and what they close on the way in.
+ *
+ * HTML does not allow a paragraph inside a paragraph, so a browser reading
+ * `<p>one<p>two` sees two siblings — while a sanitiser that only tracks its
+ * own stack would emit `<p>one<p>two</p></p>` and change the document's shape
+ * on the way through. An open `p` yields to any block; an open `li` yields to
+ * the next `li`.
+ */
+const BLOCKS = new Set(["p", "h1", "h2", "h3", "h4", "ul", "ol", "li", "blockquote", "pre", "hr"]);
+
+const TAG_RE = /<(\/?)([a-zA-Z][a-zA-Z0-9]*)((?:[^>"']|"[^"]*"|'[^']*')*)(\/?)>/g;
+
+function attr(attrs: string, name: string): string | null {
+  const m = new RegExp(`(?:^|\\s)${name}\\s*=\\s*(?:"([^"]*)"|'([^']*)'|([^\\s"'>]+))`, "i").exec(attrs);
+  if (!m) return null;
+  return m[1] ?? m[2] ?? m[3] ?? null;
+}
+
+function decodeEntities(s: string): string {
+  return s
+    .replace(/&#x([0-9a-f]+);/gi, (_, h) => String.fromCodePoint(parseInt(h, 16)))
+    .replace(/&#(\d+);/g, (_, d) => String.fromCodePoint(Number(d)))
+    .replace(/&lt;/g, "<")
+    .replace(/&gt;/g, ">")
+    .replace(/&quot;/g, '"')
+    .replace(/&amp;/g, "&");
+}
+
+function escapeAttr(s: string): string {
+  return s.replace(/&/g, "&amp;").replace(/"/g, "&quot;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
+}
+
+export function sanitizeHtml(html: string): string {
+  // Comments and anything else that opens with "<!" or "<?" are not markup
+  // the editor makes; drop them whole rather than let a stray "<!--" swallow
+  // the rest of the document in a browser's eyes.
+  const input = html.replace(/<!--[\s\S]*?-->/g, "").replace(/<[!?][^>]*>/g, "");
+
+  let out = "";
+  let last = 0;
+  /** Depth inside a tag whose contents are being dropped. */
+  let dropping: string | null = null;
+  let dropDepth = 0;
+  /** Open allowed tags, so a stray closer cannot be emitted unmatched. */
+  const open: string[] = [];
+
+  const text = (raw: string) => {
+    if (dropping) return;
+    // A "<" that did not form a tag is text, and stays text.
+    out += raw.replace(/</g, "&lt;");
+  };
+
+  TAG_RE.lastIndex = 0;
+  let m: RegExpExecArray | null;
+  while ((m = TAG_RE.exec(input))) {
+    if (m.index > last) text(input.slice(last, m.index));
+    last = m.index + m[0].length;
+
+    const closing = m[1] === "/";
+    const raw = m[2].toLowerCase();
+    const attrs = m[3] ?? "";
+
+    if (dropping) {
+      if (raw === dropping) {
+        if (closing) {
+          dropDepth--;
+          if (dropDepth === 0) dropping = null;
+        } else if (m[4] !== "/") {
+          dropDepth++;
+        }
+      }
+      continue;
+    }
+
+    if (DROP_CONTENTS.has(raw)) {
+      if (!closing && m[4] !== "/") {
+        dropping = raw;
+        dropDepth = 1;
+      }
+      continue;
+    }
+
+    const tag = RENAMED[raw] ?? raw;
+    if (!ALLOWED.has(tag)) continue;
+
+    // A block opening implicitly closes a paragraph, and a list item closes
+    // the item before it — the same reading a browser gives the markup.
+    if (!closing && BLOCKS.has(tag)) {
+      while (open.length && (open[open.length - 1] === "p" || (tag === "li" && open[open.length - 1] === "li"))) {
+        out += `</${open.pop()}>`;
+      }
+    }
+
+    if (VOID.has(tag)) {
+      if (!closing) out += `<${tag}>`;
+      continue;
+    }
+
+    if (closing) {
+      const at = open.lastIndexOf(tag);
+      if (at === -1) continue;
+      // Close whatever was left open inside it, innermost first, so the
+      // output nests properly whatever the input did.
+      while (open.length > at) out += `</${open.pop()}>`;
+      continue;
+    }
+
+    let rebuilt = "";
+    if (tag === "a") {
+      const href = attr(attrs, "href");
+      const clean = href ? decodeEntities(href).trim() : "";
+      // Only a web address. "javascript:" is the obvious one, but "data:" and
+      // a bare "vbscript:" are the same hole; anything else becomes plain text
+      // with the link removed rather than a link to somewhere we cannot vouch for.
+      if (!/^https?:\/\/[^\s]+$/i.test(clean)) continue;
+      rebuilt = ` href="${escapeAttr(clean)}" rel="noopener noreferrer"`;
+    } else if (tag === "span") {
+      const note = attr(attrs, "data-note");
+      // A span exists here for one reason: to carry a citation marker.
+      if (!note || !/^\d{1,6}$/.test(note.trim())) continue;
+      rebuilt = ` data-note="${note.trim()}"`;
+    }
+
+    out += `<${tag}${rebuilt}>`;
+    open.push(tag);
+  }
+  if (last < input.length) text(input.slice(last));
+  while (open.length) out += `</${open.pop()}>`;
+  return out;
 }
 
 // ---------------------------------------------------------------------------

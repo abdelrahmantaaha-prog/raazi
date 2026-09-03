@@ -1,6 +1,6 @@
 import fs from "node:fs";
 import { NextResponse } from "next/server";
-import { asId, badRequest, readBody } from "@/lib/http";
+import { asId, badRequest, exists, notFound, optionalString, readBody } from "@/lib/http";
 import {
   cachedPortrait,
   candidates,
@@ -30,7 +30,7 @@ export async function GET(req: Request, ctx: { params: Promise<{ id: string }> }
     const entity = db()
       .prepare("SELECT type, canonical_name FROM entities WHERE id=?")
       .get(id) as { type: string; canonical_name: string } | undefined;
-    if (!entity) return NextResponse.json({ error: "No such entity." }, { status: 404 });
+    if (!entity) return notFound("No such entity.");
 
     const q = url.searchParams.get("q")?.trim() || entity.canonical_name;
     try {
@@ -61,10 +61,13 @@ export async function POST(req: Request, ctx: { params: Promise<{ id: string }> 
   if (id === null) return badRequest("Not a valid id.");
   const parsed = await readBody<{ wikidata?: string; file?: string }>(req);
   if (parsed === null) return badRequest("Malformed JSON body.");
-  const { wikidata, file } = parsed;
+  const wikidata = optionalString(parsed.wikidata);
+  const file = optionalString(parsed.file);
+  if (wikidata === null || file === null) return badRequest("wikidata and file must be strings.");
   if (!wikidata || !file) {
     return NextResponse.json({ error: "Pick a record." }, { status: 400 });
   }
+  if (!exists("entities", id)) return notFound("No such entity.");
 
   try {
     await store(id, file, wikidata);
@@ -85,6 +88,7 @@ export async function POST(req: Request, ctx: { params: Promise<{ id: string }> 
 export async function DELETE(_req: Request, ctx: { params: Promise<{ id: string }> }) {
   const id = asId((await ctx.params).id);
   if (id === null) return badRequest("Not a valid id.");
+  if (!exists("entities", id)) return notFound("No such entity.");
   const file = cachedPortrait(id);
   if (file) await fs.promises.unlink(portraitPath(id)).catch(() => {});
 

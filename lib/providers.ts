@@ -40,8 +40,6 @@ export interface ProviderSpec {
   /** True when extra keys genuinely multiply your quota. Groq counts usage per
    *  organisation, so a second key there buys nothing. */
   keysMultiply: boolean;
-  /** Weak on non-Latin scripts; the router keeps Arabic away from these. */
-  weakNonLatin: boolean;
 }
 
 export const PROVIDERS: Record<ProviderId, ProviderSpec> = {
@@ -56,7 +54,6 @@ export const PROVIDERS: Record<ProviderId, ProviderSpec> = {
     note: "The only free tier that also does OCR, transcription and embeddings. Strong on Arabic.",
     freeTier: "~1,500 requests/day, 10/min",
     keysMultiply: true,
-    weakNonLatin: false,
   },
   groq: {
     id: "groq",
@@ -72,7 +69,6 @@ export const PROVIDERS: Record<ProviderId, ProviderSpec> = {
     note: "Very fast and a generous daily allowance, but a low tokens-per-minute ceiling.",
     freeTier: "~14,400 requests/day, 30/min, 6k tokens/min",
     keysMultiply: false,
-    weakNonLatin: true,
   },
   cerebras: {
     id: "cerebras",
@@ -87,7 +83,6 @@ export const PROVIDERS: Record<ProviderId, ProviderSpec> = {
     note: "Very high throughput, but inference now needs billing enabled on the account — a key alone may return 402.",
     freeTier: "billing required on newer accounts",
     keysMultiply: false,
-    weakNonLatin: true,
   },
   openrouter: {
     id: "openrouter",
@@ -100,7 +95,6 @@ export const PROVIDERS: Record<ProviderId, ProviderSpec> = {
     note: "Many models behind one key, but free models rotate out without notice — bad for repeatable research.",
     freeTier: "50 requests/day free (1,000 after a one-off $10)",
     keysMultiply: false,
-    weakNonLatin: true,
   },
   mistral: {
     id: "mistral",
@@ -113,7 +107,6 @@ export const PROVIDERS: Record<ProviderId, ProviderSpec> = {
     note: "A huge monthly token allowance at only ~2 requests/minute — and the free tier requires opting into training on your data.",
     freeTier: "~1B tokens/month, ~2 requests/min",
     keysMultiply: false,
-    weakNonLatin: true,
   },
   custom: {
     id: "custom",
@@ -126,7 +119,6 @@ export const PROVIDERS: Record<ProviderId, ProviderSpec> = {
     note: "Anything speaking the OpenAI API — Ollama, LM Studio, vLLM. No quota at all, and nothing leaves the machine.",
     freeTier: "whatever your hardware allows",
     keysMultiply: false,
-    weakNonLatin: true,
   },
 };
 

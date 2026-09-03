@@ -90,12 +90,22 @@ export function brokerKeys(): ApiKey[] {
  * broker_auth / broker_not_found, so the two are told apart rather than
  * guessed at. A model refusing a prompt must not send the run back to the
  * local keys — it would only be refused there too.
+ *
+ * Status codes on their own say nothing here, because the broker relays
+ * Google's and Groq's answers byte for byte: a 404 is almost always a retired
+ * model name, and a 5xx is the provider having a bad minute — both of which
+ * this machine's own keys would get too. Only a 5xx in the broker's own error
+ * shape (its body names the broker) is the broker itself failing. Cloudflare
+ * fronting the Worker also answers 502/503/504 in its own HTML when the
+ * Worker cannot be reached, and that HTML names Cloudflare, not the broker —
+ * so an unreachable Worker is caught by the network branch below on the next
+ * attempt rather than parking the pool on a page of markup.
  */
 export function brokerIsDown(err: unknown): boolean {
   const raw = (err instanceof Error ? err.message : String(err)).toLowerCase();
-  const status = (err as { status?: number })?.status;
+  const status = statusOf(err);
   if (raw.includes("broker_auth") || raw.includes("broker_not_found")) return true;
-  if (status === 404 || status === 502 || status === 503 || status === 504) return true;
+  if ((status === 502 || status === 503 || status === 504) && raw.includes("broker")) return true;
   return (
     raw.includes("fetch failed") ||
     raw.includes("econnrefused") ||
@@ -104,4 +114,34 @@ export function brokerIsDown(err: unknown): boolean {
     raw.includes("socket hang up") ||
     raw.includes("network")
   );
+}
+
+function statusOf(err: unknown): number | undefined {
+  const e = err as { status?: unknown };
+  if (typeof e?.status === "number") return e.status;
+  const m = /^\s*(\d{3})\b/.exec(err instanceof Error ? err.message : String(err));
+  return m ? Number(m[1]) : undefined;
+}
+
+/**
+ * When the pool says it will have something again.
+ *
+ * A broker_exhausted answer carries `retryAt` — the moment the first of its
+ * keys comes back — in the body and in an x-broker-retry-at header. The body
+ * is what survives into an SDK error message, so that is read first; the
+ * OpenAI adapter copies the header onto the error as `retryAt` for the case
+ * where the body was cut short. Absent both, the caller falls back to its own
+ * flat wait.
+ */
+export function brokerRetryAt(err: unknown): Date | undefined {
+  const fromHeader = (err as { retryAt?: unknown })?.retryAt;
+  if (typeof fromHeader === "string") {
+    const d = new Date(fromHeader);
+    if (!Number.isNaN(d.getTime())) return d;
+  }
+  const raw = err instanceof Error ? err.message : String(err);
+  const m = /"retryAt"\s*:\s*"([^"]+)"/.exec(raw);
+  if (!m) return undefined;
+  const d = new Date(m[1]);
+  return Number.isNaN(d.getTime()) ? undefined : d;
 }

@@ -3,15 +3,18 @@ package com.corpus.helper
 import android.app.DownloadManager
 import android.content.Context
 import android.graphics.Color
+import android.net.Uri
 import android.os.Bundle
 import android.util.TypedValue
 import android.view.View
 import android.webkit.WebView
 import android.webkit.WebViewClient
+import android.widget.EditText
 import android.widget.LinearLayout
 import android.widget.TextView
 import android.widget.Toast
 import androidx.activity.OnBackPressedCallback
+import androidx.appcompat.app.AlertDialog
 import androidx.appcompat.app.AppCompatActivity
 import androidx.core.content.ContextCompat
 import androidx.lifecycle.lifecycleScope
@@ -212,11 +215,68 @@ class MainActivity : AppCompatActivity() {
      * the moment it decides to open the one server it found.
      */
     private fun open(server: Server) {
+        // A Corpus in LAN mode wants its token before it will show anything.
+        // The WebView cannot be told to add a header to every request it makes
+        // — only to the first — so the token is handed over once through
+        // /login, which sets a cookie the WebView then carries by itself.
+        if (server.needsToken) {
+            val token = servers.tokenFor(server.host)
+            if (token.isNullOrBlank()) {
+                askForToken(server)
+                return
+            }
+            connected = server
+            servers.remember(server)
+            ui.progress.visibility = View.GONE
+            ui.web.loadUrl(server.url + "/login?token=" + Uri.encode(token))
+            showWeb()
+            return
+        }
+
         connected = server
         servers.remember(server)
         ui.progress.visibility = View.GONE
         ui.web.loadUrl(server.url)
         showWeb()
+    }
+
+    /**
+     * Asks for the token, once per machine.
+     *
+     * It is shown on the computer, in Settings, as a link to scan or a code to
+     * type. A wrong one is rejected here rather than by a page the WebView
+     * would render as a bare 401, which reads as "Corpus is broken".
+     */
+    private fun askForToken(server: Server) {
+        val input = EditText(this).apply {
+            hint = "Token from Settings on the computer"
+            isSingleLine = true
+            setTextColor(ContextCompat.getColor(context, R.color.ink))
+        }
+        AlertDialog.Builder(this)
+            .setTitle(server.name)
+            .setMessage(
+                "This Corpus is open to the network, so it needs its token. " +
+                    "Open Settings on the computer running it — the token is there, " +
+                    "with a link you can scan."
+            )
+            .setView(input)
+            .setPositiveButton("Connect") { _, _ ->
+                val typed = input.text.toString().trim()
+                if (typed.isEmpty()) return@setPositiveButton
+                showConnecting("Checking the token…")
+                lifecycleScope.launch {
+                    if (Discovery.tokenWorks(server.host, server.port, typed)) {
+                        servers.rememberToken(server.host, typed)
+                        open(server)
+                    } else {
+                        servers.forgetToken(server.host)
+                        showIdle("That token was not accepted by ${server.name}.")
+                    }
+                }
+            }
+            .setNegativeButton("Cancel") { _, _ -> showIdle("Not connected.") }
+            .show()
     }
 
     private fun setUpWebView() {

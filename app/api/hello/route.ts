@@ -1,7 +1,7 @@
 import os from "node:os";
 import { NextResponse } from "next/server";
 import { db } from "@/lib/db";
-import { kickWorker } from "@/lib/worker";
+import { lanEnabled } from "@/lib/lan";
 
 export const dynamic = "force-dynamic";
 
@@ -14,17 +14,16 @@ export const dynamic = "force-dynamic";
  * a reply cannot be confused with some other service that happens to sit on the
  * same port. Hence the literal `app` marker rather than inferring from shape.
  *
- * There is no authentication, deliberately: it reports what the library
- * contains, not anything from inside it, and it is only reachable by whoever is
- * already on the network.
+ * It is the one route the LAN-mode middleware leaves open, deliberately: it
+ * reports what the library contains, not anything from inside it, and a phone
+ * has to be able to find the machine before it can sign in to it. `lan` tells
+ * the phone whether it will need a token next.
+ *
+ * A GET does nothing but answer. It used to start the worker as a side effect,
+ * which meant a subnet sweep from any device — or a stranger's curl — set
+ * token-spending work in motion; that now takes POST /api/worker/kick.
  */
 export async function GET() {
-  // The launcher probes this at boot, which makes it the one route guaranteed
-  // to run before any page is opened. Kicking here is what arms the morning
-  // timer and resumes pending work on a headless start — and it is idempotent,
-  // so the Android helper sweeping a subnet costs one no-op call per probe.
-  kickWorker();
-
   let library = { sources: 0, entities: 0, entries: 0 };
   try {
     library = db()
@@ -44,6 +43,7 @@ export async function GET() {
       version: process.env.npm_package_version ?? "0.1.0",
       host: os.hostname(),
       port: Number(process.env.PORT ?? 5400),
+      lan: lanEnabled(),
       library,
     },
     // Discovery answers must never be served from a cache: the whole point is

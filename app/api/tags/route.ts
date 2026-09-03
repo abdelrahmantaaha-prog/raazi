@@ -1,5 +1,5 @@
 import { NextResponse } from "next/server";
-import { badRequest, readBody } from "@/lib/http";
+import { badRequest, optionalString, readBody } from "@/lib/http";
 import { db, tx } from "@/lib/db";
 import { createRun, enqueue } from "@/lib/queue";
 import { kickWorker } from "@/lib/worker";
@@ -34,6 +34,22 @@ export async function POST(req: Request) {
       return NextResponse.json({ queued: 0, note: "Everything with text is already filed." });
     }
 
+    // One filing pass at a time: a second click while the first is still
+    // queued would file every source twice.
+    const pending = db()
+      .prepare(
+        `SELECT t.run_id FROM tasks t JOIN runs r ON r.id = t.run_id
+          WHERE t.kind='tag' AND t.state IN ('pending','running')
+            AND r.state IN ('queued','running') LIMIT 1`
+      )
+      .get() as { run_id: number } | undefined;
+    if (pending) {
+      return NextResponse.json(
+        { runId: pending.run_id, queued: 0, inFlight: true, note: "Filing is already under way." },
+        { status: 202 }
+      );
+    }
+
     const runId = createRun({ kind: "tag", label: `Filing ${untagged.length} source(s)` });
     tx(() => {
       enqueue(
@@ -45,9 +61,12 @@ export async function POST(req: Request) {
     return NextResponse.json({ runId, queued: untagged.length });
   }
 
-  if (!body.name?.trim()) {
+  const name = optionalString(body.name);
+  const description = optionalString(body.description);
+  if (name === null || description === null) return badRequest("name and description must be strings.");
+  if (!name?.trim()) {
     return NextResponse.json({ error: "A tag needs a name." }, { status: 400 });
   }
-  const id = ensureTag(body.name, body.description);
+  const id = ensureTag(name, description);
   return NextResponse.json({ id, tags: listTags() });
 }

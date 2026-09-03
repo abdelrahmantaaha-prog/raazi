@@ -11,11 +11,14 @@ export const dynamic = "force-dynamic";
  */
 export async function GET(req: Request) {
   const params = new URL(req.url).searchParams;
-  const word = params.get("word") ?? "";
-  const lang = params.get("lang") ?? undefined;
+  // A word, not a sentence: the cache is keyed on it and the upstream path
+  // segment is built from it, so the length and shape are bounded here.
+  const word = (params.get("word") ?? "").trim().slice(0, 80);
+  const raw = params.get("lang")?.trim().toLowerCase();
+  const lang = raw && /^[a-z]{2,3}$/.test(raw) ? raw : undefined;
 
-  if (!word.trim()) return NextResponse.json({ definition: null });
+  if (!word) return NextResponse.json({ definition: null });
 
-  const definition = await define(word, lang ?? undefined);
+  const definition = await define(word, lang);
   return NextResponse.json({ definition });
 }

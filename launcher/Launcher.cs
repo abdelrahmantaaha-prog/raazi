@@ -71,6 +71,12 @@ static class Corpus
                 return;
             }
 
+            // The health probe is a plain GET now: it reports what the library
+            // holds and starts nothing. Resuming pending work on a headless
+            // start is this call, once, from the one client that is entitled
+            // to make it.
+            KickWorker();
+
             Open();
             Notify(alreadyRunning
                 ? "Corpus was already running — opened it for you."
@@ -168,6 +174,40 @@ static class Corpus
         return null;
     }
 
+    /**
+     * Whether data/config.json asks for LAN mode.
+     *
+     * Read here rather than passed in because the setting is changed from the
+     * Settings page, in the running app, and takes effect the next time the
+     * launcher starts the server. Deliberately a substring test rather than a
+     * JSON parser: this file is 15 KB of framework-free C# and the question is
+     * "does the object have lan.enabled true", which survives the formatting
+     * writeStore produces. A file we cannot read means off, which is the
+     * setting that keeps the server on this machine only.
+     */
+    static bool LanWanted()
+    {
+        try
+        {
+            var path = Path.Combine(Root, "data", "config.json");
+            if (!File.Exists(path)) return false;
+            var text = File.ReadAllText(path);
+            int at = text.IndexOf("\"lan\"", StringComparison.Ordinal);
+            if (at < 0) return false;
+            int end = text.IndexOf('}', at);
+            if (end < 0) end = text.Length;
+            var section = text.Substring(at, end - at);
+            // Whitespace out, so the check does not depend on how the JSON
+            // happened to be formatted when it was written.
+            var packed = new System.Text.StringBuilder();
+            foreach (var c in section) if (!char.IsWhiteSpace(c)) packed.Append(c);
+            return packed.ToString().Contains("\"enabled\":true");
+        }
+        catch { return false; }
+    }
+
+    static bool lanMode;
+
     static bool Start(string node, string nextBin)
     {
         // A production build is faster and quieter; fall back to dev if the
@@ -182,10 +222,18 @@ static class Corpus
         bool built = File.Exists(Path.Combine(Root, ".next", "BUILD_ID"));
         string mode = built ? "start" : "dev";
 
+        // LAN mode binds every interface AND demands a token; the two must
+        // never come apart, so both live in one script rather than in a
+        // hostname flag here. See scripts/lan.mjs and middleware.ts.
+        lanMode = LanWanted();
+        string arguments = lanMode
+            ? "\"" + Path.Combine(Root, "scripts", "lan.mjs") + "\" " + mode
+            : "\"" + nextBin + "\" " + mode + " --port " + Port + " --hostname 127.0.0.1";
+
         var psi = new ProcessStartInfo
         {
             FileName = node,
-            Arguments = "\"" + nextBin + "\" " + mode + " --port " + Port,
+            Arguments = arguments,
             WorkingDirectory = Root,
             UseShellExecute = false,
             CreateNoWindow = true,
@@ -193,6 +241,7 @@ static class Corpus
             RedirectStandardError = true,
         };
         psi.EnvironmentVariables["NODE_ENV"] = built ? "production" : "development";
+        psi.EnvironmentVariables["PORT"] = Port.ToString();
 
         try
         {
@@ -363,6 +412,51 @@ static class Corpus
         catch { return false; }
     }
 
+    /**
+     * Sets the worker going once the server is up.
+     *
+     * GET /api/hello used to do this as a side effect, which meant a phone
+     * sweeping the subnet — or anything else that could reach the port —
+     * started token-spending work. It is a POST now, and this is its caller.
+     * A failure is not worth reporting: the first action in the app kicks the
+     * worker too, so the cost of missing it is a delay, not lost work.
+     */
+    static void KickWorker()
+    {
+        try
+        {
+            var req = (HttpWebRequest)WebRequest.Create("http://127.0.0.1:" + Port + "/api/worker/kick");
+            req.Method = "POST";
+            req.ContentLength = 0;
+            req.Timeout = 15000;
+            req.ReadWriteTimeout = 15000;
+            // In LAN mode every route but /api/hello wants the token. We are on
+            // the machine that owns it, so read it from the same file.
+            var token = LanToken();
+            if (token != null) req.Headers.Add("x-corpus-token", token);
+            using (var res = (HttpWebResponse)req.GetResponse()) { }
+        }
+        catch { }
+    }
+
+    /** The LAN token from data/config.json, or null when there is none yet. */
+    static string LanToken()
+    {
+        try
+        {
+            var path = Path.Combine(Root, "data", "config.json");
+            if (!File.Exists(path)) return null;
+            var text = File.ReadAllText(path);
+            int at = text.IndexOf("\"token\"", StringComparison.Ordinal);
+            if (at < 0) return null;
+            int open = text.IndexOf('"', text.IndexOf(':', at) + 1);
+            int close = open < 0 ? -1 : text.IndexOf('"', open + 1);
+            if (open < 0 || close < 0) return null;
+            return text.Substring(open + 1, close - open - 1);
+        }
+        catch { return null; }
+    }
+
     // Whoever is holding the port, so we can name them or end them.
     static int PortOwner()
     {
@@ -463,7 +557,9 @@ static class Corpus
         var icon = new NotifyIcon
         {
             Icon = LoadIcon(),
-            Text = "Corpus — running on localhost:" + Port,
+            Text = lanMode
+                ? "Corpus — on this network, port " + Port + " (token required)"
+                : "Corpus — running on localhost:" + Port,
             ContextMenuStrip = menu,
             Visible = true,
         };

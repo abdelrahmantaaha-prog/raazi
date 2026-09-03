@@ -1,6 +1,7 @@
 "use client";
 
 import { useCallback, useEffect, useRef } from "react";
+import { citationMarker } from "./citations";
 
 export interface CitationRef {
   id: number;
@@ -18,9 +19,10 @@ export interface CitationRef {
  * so far refused every dependency it could write instead.
  *
  * The one thing execCommand cannot do is citations, so those are inserted
- * directly as a marked, uneditable span. They carry only an index — the note
- * text lives with the draft — so correcting a reference updates every place it
- * appears rather than the first one you find.
+ * directly as a marked, uneditable span. They carry the reference's id — the
+ * note text lives with the draft — so correcting a reference updates every
+ * place it appears rather than the first one you find, and the number shown
+ * is recomputed from the list's order whenever that changes.
  */
 export function Editor({
   html,
@@ -70,18 +72,15 @@ export function Editor({
   const insertCitation = useCallback(
     (index: number) => {
       const el = box.current;
-      if (!el) return;
+      const ref = citations[index];
+      if (!el || !ref) return;
       el.focus();
       // contenteditable="false" keeps the marker atomic: backspace removes the
       // whole thing rather than eating the number a digit at a time.
-      const marker =
-        `<span data-note="${index}" contenteditable="false" ` +
-        `style="vertical-align:super;font-size:0.72em;color:var(--color-accent);` +
-        `padding:0 1px;cursor:default">[${index + 1}]</span>&nbsp;`;
-      document.execCommand("insertHTML", false, marker);
+      document.execCommand("insertHTML", false, citationMarker(ref.id, index));
       emit();
     },
-    [emit]
+    [emit, citations]
   );
 
   // Paste as plain text. Pasting from a web page otherwise drags in fonts,

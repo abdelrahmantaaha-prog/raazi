@@ -57,7 +57,10 @@ real entity. You are given the evidence sentences each name appears in.
 Answer true only when the passages make it clear they are the same. A shared
 surname, a shared first name, or merely a similar spelling is not enough — two
 different people in one book often share a name, and wrongly fusing them corrupts
-the record in a way that is hard to notice later. When the evidence does not
+the record in a way that is hard to notice later. Each side carries the date
+span of its evidence: two names whose evidence sits decades apart, or on
+different sides of a change of office, are usually two people, and a span is a
+reason to doubt, never on its own a reason to merge. When the evidence does not
 settle it, answer false. A missed merge is a nuisance; a wrong merge is a lie.`;
 
 /**
@@ -88,7 +91,13 @@ function kindredOf(type: EntityType): readonly EntityType[] {
 }
 
 export async function handleResolve(task: Task): Promise<void> {
-  const { type } = JSON.parse(task.payload_json) as { type: EntityType };
+  // A pass queued by an ingest names the source, and then only entities that
+  // source touched are compared — against everything of the type, but not
+  // each other's strangers. A pass with no source (Enhance, a manual re-run)
+  // compares all against all as before. Comparing every entity of a type
+  // against every other on every ingest is quadratic; at two thousand
+  // entities it was fine and at a news feed's fifty thousand it is not.
+  const { type, sourceId } = JSON.parse(task.payload_json) as { type: EntityType; sourceId?: number };
 
   // The pass is still owned by one type — it is enqueued per type, and running
   // the same comparison from all three would trigger it three times. So the
@@ -124,9 +133,13 @@ export async function handleResolve(task: Task): Promise<void> {
   }
 
   // --- candidate pairs, cheapest signals first -----------------------------
+  const touched = sourceId ? touchedBy(sourceId, rows) : null;
+  const inScope = (a: Row, b: Row) => !touched || touched.has(a.id) || touched.has(b.id);
+
   const pairs: { a: Row; b: Row; trigram: number }[] = [];
   for (let i = 0; i < rows.length; i++) {
     for (let j = i + 1; j < rows.length; j++) {
+      if (!inScope(rows[i], rows[j])) continue;
       const t = trigramSimilarity(rows[i].normalized, rows[j].normalized);
       if (t >= CANDIDATE_TRIGRAM || isSubsetName(rows[i].normalized, rows[j].normalized)) {
         pairs.push({ a: rows[i], b: rows[j], trigram: t });
@@ -174,6 +187,7 @@ export async function handleResolve(task: Task): Promise<void> {
       const va = vecs.get(rows[i].id);
       if (!va) continue;
       for (let j = i + 1; j < rows.length; j++) {
+        if (!inScope(rows[i], rows[j])) continue;
         const vb = vecs.get(rows[j].id);
         if (!vb || seen.has(key(rows[i].id, rows[j].id))) continue;
         if (cosine(va, vb) >= CANDIDATE_COSINE) {
@@ -237,8 +251,10 @@ export async function handleResolve(task: Task): Promise<void> {
       .map((p, n) => {
         return `PAIR ${n + 1}
 A: "${p.a.canonical_name}"${p.a.disambiguator ? ` (${p.a.disambiguator})` : ""}
+   evidence dated: ${dateSpan(p.a.id)}
    evidence: ${evidence(p.a.id)}
 B: "${p.b.canonical_name}"${p.b.disambiguator ? ` (${p.b.disambiguator})` : ""}
+   evidence dated: ${dateSpan(p.b.id)}
    evidence: ${evidence(p.b.id)}`;
       })
       .join("\n\n");
@@ -422,12 +438,58 @@ function ordered(a: string, b: string): [string, string] {
   return a < b ? [a, b] : [b, a];
 }
 
-function evidence(entityId: number): string {
+/** The entities holding live evidence from one source, as a set of ids. */
+function touchedBy(sourceId: number, rows: Row[]): Set<number> {
+  const ids = new Set(
+    (
+      db()
+        .prepare("SELECT DISTINCT entity_id FROM live_mentions WHERE source_id=?")
+        .all(sourceId) as { entity_id: number }[]
+    ).map((r) => r.entity_id)
+  );
+  // Rows that no longer exist as live entities cannot anchor a pair.
+  const live = new Set(rows.map((r) => r.id));
+  for (const id of ids) if (!live.has(id)) ids.delete(id);
+  return ids;
+}
+
+/**
+ * The three richest live quotes: those carrying both a claim and a context
+ * first, then the longest. The adjudicator used to get the three oldest rows
+ * from the raw table, which are usually the thinnest — a name in passing —
+ * and could include passages you had already discarded.
+ */
+export function evidence(entityId: number): string {
   const rows = db()
-    .prepare("SELECT quote FROM mentions WHERE entity_id=? ORDER BY id LIMIT 3")
-    .all(entityId) as { quote: string }[];
+    .prepare(
+      `SELECT quote, context FROM live_mentions
+        WHERE entity_id=?
+        ORDER BY (claim IS NOT NULL) + (context IS NOT NULL) DESC, length(quote) DESC, id
+        LIMIT 3`
+    )
+    .all(entityId) as { quote: string; context: string | null }[];
   if (!rows.length) return "(none)";
-  return rows.map((r) => `"${r.quote.slice(0, 220)}"`).join(" / ");
+  return rows
+    .map((r) => `"${r.quote.slice(0, 220)}"${r.context ? ` [about: ${r.context.slice(0, 80)}]` : ""}`)
+    .join(" / ");
+}
+
+/**
+ * When an entity's evidence was published, earliest to latest. On a political
+ * beat this separates most namesakes for free: the evidence for two Trudeaus
+ * sits decades apart.
+ */
+export function dateSpan(entityId: number): string {
+  const row = db()
+    .prepare(
+      `SELECT MIN(substr(COALESCE(s.published_at, s.year), 1, 10)) AS lo,
+              MAX(substr(COALESCE(s.published_at, s.year), 1, 10)) AS hi
+         FROM live_mentions m JOIN sources s ON s.id = m.source_id
+        WHERE m.entity_id=? AND COALESCE(s.published_at, s.year) IS NOT NULL`
+    )
+    .get(entityId) as { lo: string | null; hi: string | null } | undefined;
+  if (!row?.lo) return "undated";
+  return row.lo === row.hi ? row.lo : `${row.lo} to ${row.hi}`;
 }
 
 /** Keeps whichever entity has more evidence behind it. */

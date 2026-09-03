@@ -12,8 +12,10 @@ import { Reader, type Mark, type Passage } from "./Reader";
 import { Player } from "./Player";
 import { videoId } from "@/lib/video";
 import { SourceCover } from "../../components/SourceCover";
+import { RunChip } from "../../components/RunChip";
 import { MatchCover } from "./MatchCover";
 import { guessShelf } from "@/lib/shelves";
+import { formatDate, formatDateTime, relativeDate } from "@/lib/dates";
 
 interface SourceMeta {
   id: number;
@@ -41,6 +43,7 @@ export function SourceView({
   unread,
   position,
   marks,
+  initialChunk = null,
 }: {
   source: SourceMeta;
   passages: Passage[];
@@ -49,11 +52,17 @@ export function SourceView({
   unread: number;
   position: { chunkId: number | null; offset: number; progress: number; read: number[] };
   marks: Mark[];
+  /** A passage the URL asked for: the reader opens straight away, at it. */
+  initialChunk?: number | null;
 }) {
   const router = useRouter();
-  const [reading, setReading] = useState(false);
+  const [reading, setReading] = useState(initialChunk !== null);
+  /** The passage to open the reader at; cleared once used. */
+  const [openAt, setOpenAt] = useState<number | null>(initialChunk);
   const [busy, setBusy] = useState(false);
   const [message, setMessage] = useState<string | null>(null);
+  /** The run the last button started, so the page can say what became of it. */
+  const [run, setRun] = useState<number | null>(null);
 
   /**
    * Quotes from this source that lean on something they do not name.
@@ -86,8 +95,10 @@ export function SourceView({
         position={position}
         marks={marks}
         readAlong={{ on: source.mode === "along", remaining: unread }}
+        initialChunk={openAt}
         onClose={() => {
           setReading(false);
+          setOpenAt(null);
           // The position and anything read-along queued while you were in there
           // are now stale on this page.
           router.refresh();
@@ -125,6 +136,7 @@ export function SourceView({
       const data = await res.json();
       if (!res.ok) throw new Error(data.error ?? "Could not queue it.");
       setMessage(data.note);
+      setRun(data.runId ?? data.run?.id ?? null);
       router.refresh();
     } catch (err) {
       setMessage((err as Error).message);
@@ -141,6 +153,7 @@ export function SourceView({
       const data = await res.json();
       if (!res.ok) throw new Error(data.error ?? "Could not queue it.");
       setMessage(data.note);
+      setRun(data.runId ?? data.run?.id ?? null);
       router.refresh();
     } catch (err) {
       setMessage((err as Error).message);
@@ -158,9 +171,10 @@ export function SourceView({
       if (!res.ok) throw new Error(data.error ?? "Could not queue it.");
       setMessage(
         data.passages === 0
-          ? "Every quote from this source already stands on its own."
-          : `Queued ${data.passages} passage(s) holding ${data.quotes} quote(s) that need their bearings.`
+          ? "Every passage from this source already stands on its own."
+          : `Queued ${data.passages} passage(s) that need their bearings.`
       );
+      setRun(data.runId ?? data.run?.id ?? null);
       setAdrift({ quotes: 0, passages: 0 });
       router.refresh();
     } catch (err) {
@@ -220,6 +234,9 @@ export function SourceView({
               <p className="mt-1 text-xs uppercase tracking-[0.1em] text-[var(--color-muted)]">
                 {[source.publisher, source.year, source.kind].filter(Boolean).join(" · ")}
               </p>
+              <p className="mt-1 text-xs text-[var(--color-muted)]" title={formatDateTime(source.added_at)}>
+                Added {relativeDate(source.added_at)}
+              </p>
             </div>
 
             <ReadingProgress
@@ -276,7 +293,7 @@ export function SourceView({
               <Button
                 onClick={restoreContext}
                 disabled={busy}
-                title="Some quotes refer to things named earlier in the book. This reads the surrounding text and records what each one points at."
+                title="Some passages refer to things named earlier in the book. This reads the surrounding text and records what each one points at."
               >
                 {busy ? "Queueing…" : `Restore context (${adrift.quotes})`}
               </Button>
@@ -294,7 +311,7 @@ export function SourceView({
               <>
                 {" "}
                 <span className="font-medium">Restore context</span> resolves what{" "}
-                {adrift.quotes} quote{adrift.quotes === 1 ? "" : "s"} refer back to, so they can be
+                {adrift.quotes} passage{adrift.quotes === 1 ? "" : "s"} refer back to, so they can be
                 read on their own.
               </>
             )}
@@ -305,6 +322,7 @@ export function SourceView({
               {message}
             </p>
           )}
+          {run && <RunChip runId={run} />}
           {source.note && source.status === "failed" && (
             <p className="text-sm text-red-700">{source.note}</p>
           )}
@@ -327,7 +345,7 @@ export function SourceView({
                 key={e.id}
                 href={`/pedia/${e.id}`}
                 className="rounded-full border border-[var(--color-rule)] px-3 py-1 text-sm transition hover:bg-[var(--color-accent-soft)]"
-                title={`${ENTITY_LABEL[e.type]} · ${e.mentions} quote(s)`}
+                title={`${ENTITY_LABEL[e.type]} · ${e.mentions} passage(s)`}
               >
                 {e.canonical_name}
                 <span className="ml-1.5 text-xs text-[var(--color-muted)]">{e.mentions}</span>
@@ -348,9 +366,20 @@ export function SourceView({
             citation, not for reading.
           </p>
           {passages.map((p) => (
-            <article key={p.id} className="rounded border border-[var(--color-rule)] p-3">
+            <article key={p.id} id={`c${p.id}`} className="rounded border border-[var(--color-rule)] p-3">
               <div className="mb-2 flex items-center gap-2 text-xs text-[var(--color-muted)]">
                 <span>{p.locator || "—"}</span>
+                <button
+                  type="button"
+                  onClick={() => {
+                    setOpenAt(p.id);
+                    setReading(true);
+                  }}
+                  className="hover:text-[var(--color-accent)] hover:underline"
+                  title="Open the reader at this passage"
+                >
+                  read here
+                </button>
                 {p.extracted ? <Badge tone="ok">read</Badge> : <Badge tone="quiet">not read</Badge>}
                 {p.mentions.length > 0 && <span>· {p.mentions.length} mentions</span>}
               </div>
@@ -396,8 +425,8 @@ function ReadingProgress({
           <span className="ms-1.5 text-sm font-normal text-[var(--color-muted)]">read</span>
         </span>
         {lastOpened && (
-          <span className="text-xs text-[var(--color-muted)]">
-            last opened {lastOpened.slice(0, 10)}
+          <span className="text-xs text-[var(--color-muted)]" title={formatDateTime(lastOpened)}>
+            last opened {formatDate(lastOpened)}
           </span>
         )}
       </div>

@@ -5,7 +5,8 @@ import { createPortal } from "react-dom";
 import Link from "next/link";
 import { EntryBody, type Citation } from "./EntryBody";
 import { dirOf } from "@/lib/dir";
-import { linkEntities, type LinkTarget } from "@/lib/entity-links";
+import type { LinkTarget } from "@/lib/entity-links";
+import { NameLinks } from "./NameLinks";
 
 /**
  * An entry, opened beside whatever you were doing.
@@ -190,7 +191,7 @@ export function EntityDrawer({
                       key={key}
                       text={text}
                       links={brief.links}
-                      onFollow={(id) => setStack((s) => [...s, id])}
+                      onOpen={(id) => setStack((s) => [...s, id])}
                     />
                   )}
                 />
@@ -225,33 +226,3 @@ export function EntityDrawer({
   );
 }
 
-function NameLinks({
-  text,
-  links,
-  onFollow,
-}: {
-  text: string;
-  links: LinkTarget[];
-  onFollow: (id: number) => void;
-}) {
-  const spans = linkEntities(text, links);
-  return (
-    <>
-      {spans.map((s, i) =>
-        s.entityId === undefined ? (
-          <span key={i}>{s.text}</span>
-        ) : (
-          <button
-            key={i}
-            type="button"
-            onClick={() => onFollow(s.entityId!)}
-            title={`Open ${s.entityName}`}
-            className="cursor-pointer border-b border-dotted border-[var(--color-accent)] text-inherit hover:bg-[var(--color-accent-soft)]"
-          >
-            {s.text}
-          </button>
-        )
-      )}
-    </>
-  );
-}

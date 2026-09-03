@@ -19,17 +19,51 @@ import { usePathname } from "next/navigation";
  */
 
 const NAV = [
+  // The brief is first because it is what a morning starts with; the library
+  // is where you go when you already know what you are looking for.
+  { href: "/brief", label: "Brief", icon: Sun },
   { href: "/", label: "Library", icon: Books, exact: true },
+  { href: "/stories", label: "Stories", icon: Thread },
   { href: "/write", label: "Write", icon: Pen },
   { href: "/pedia", label: "Pedia", icon: Cards },
   { href: "/network", label: "Network", icon: Graph },
   { href: "/ask", label: "Ask", icon: Question },
   { href: "/study", label: "Study", icon: Cap },
   { href: "/tags", label: "Topics", icon: Tag },
+  { href: "/feeds", label: "Feeds", icon: Rss },
   { href: "/search", label: "Search", icon: Glass },
   { href: "/quotes", label: "Quotes", icon: Quote },
   { href: "/settings", label: "Settings", icon: Gear },
 ];
+
+function Sun(props: React.SVGProps<SVGSVGElement>) {
+  return (
+    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={1.6} {...props}>
+      <circle cx="12" cy="12" r="4" />
+      <path d="M12 2v2M12 20v2M2 12h2M20 12h2M4.9 4.9l1.4 1.4M17.7 17.7l1.4 1.4M19.1 4.9l-1.4 1.4M6.3 17.7l-1.4 1.4" />
+    </svg>
+  );
+}
+
+function Thread(props: React.SVGProps<SVGSVGElement>) {
+  return (
+    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={1.6} {...props}>
+      <circle cx="6" cy="6" r="2" />
+      <circle cx="6" cy="18" r="2" />
+      <circle cx="18" cy="12" r="2" />
+      <path d="M8 6h4a4 4 0 0 1 4 4v0M8 18h4a4 4 0 0 0 4-4v0" />
+    </svg>
+  );
+}
+
+function Rss(props: React.SVGProps<SVGSVGElement>) {
+  return (
+    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={1.6} {...props}>
+      <path d="M5 19a1 1 0 1 0 0-2 1 1 0 0 0 0 2z" fill="currentColor" />
+      <path d="M5 11a8 8 0 0 1 8 8M5 5a14 14 0 0 1 14 14" />
+    </svg>
+  );
+}
 
 export function Nav() {
   const path = usePathname();

@@ -1,4 +1,5 @@
 import { NextResponse } from "next/server";
+import { badRequest, notFound, queryId } from "@/lib/http";
 import { forgetDiscard, libraryCorrections } from "@/lib/audit";
 
 export const dynamic = "force-dynamic";
@@ -17,8 +18,8 @@ export async function GET() {
  * library holding a rule nothing records.
  */
 export async function DELETE(req: Request) {
-  const id = Number(new URL(req.url).searchParams.get("id"));
-  if (!id) return NextResponse.json({ error: "id required" }, { status: 400 });
-  if (!forgetDiscard(id)) return NextResponse.json({ error: "Not found" }, { status: 404 });
+  const id = queryId(req, "id");
+  if (id === null) return badRequest("id must be a correction id.");
+  if (!forgetDiscard(id)) return notFound("No such correction.");
   return NextResponse.json({ ok: true, corrections: libraryCorrections() });
 }

@@ -1,6 +1,7 @@
 "use client";
 
 import { Fragment, type ReactNode } from "react";
+import { normaliseMarkers } from "@/lib/markers";
 
 export interface Citation {
   id: number;
@@ -88,7 +89,7 @@ export function citationOrder(
   citations: Map<number, Citation>
 ): Map<number, number> {
   const order = new Map<number, number>();
-  for (const m of body.matchAll(/\[\[m:(\d+)\]\]/g)) {
+  for (const m of normaliseMarkers(body).matchAll(/\[\[m:(\d+)\]\]/g)) {
     const id = Number(m[1]);
     if (citations.has(id) && !order.has(id)) order.set(id, order.size + 1);
   }
@@ -117,7 +118,7 @@ export type BlockNode =
  */
 export function normalise(md: string): string {
   return (
-    md
+    normaliseMarkers(md)
       .replace(/\r\n/g, "\n")
       // A heading following a single newline gets the blank line it needed.
       .replace(/([^\n])\n(#{1,6}[ \t])/g, "$1\n\n$2")

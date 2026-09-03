@@ -51,6 +51,71 @@ function isShouted(name: string): boolean {
   return letters === letters.toUpperCase() && /\p{Ll}/u.test(letters.toLowerCase());
 }
 
+/** Name particles that stay lower-case inside a name: "Abdullah al-Saud", "Ludwig van Beethoven". */
+const PARTICLES = new Set([
+  "al", "el", "bin", "ibn", "bint", "abu", "de", "del", "della", "di", "da", "do",
+  "dos", "das", "du", "la", "le", "les", "von", "van", "der", "den", "ter", "of",
+  "the", "and", "y", "e", "zu", "af", "av",
+]);
+
+/**
+ * Short words that are names of things rather than words, and must not be
+ * folded to "Un" or "Us" when they sit inside a shouted name.
+ */
+const ACRONYMS = new Set([
+  "us", "usa", "uk", "un", "eu", "uae", "ksa", "plo", "pa", "idf", "cia", "fbi",
+  "nsa", "gcc", "imf", "who", "ilo", "bbc", "cnn", "nyt", "ai", "nato", "opec",
+  "isis", "isil", "irgc", "pkk", "sdf", "ypg", "fsa", "pyd", "kdp", "puk", "mbs",
+  "mbz", "rcmp", "csis", "ndp", "gop", "dnc", "rnc", "usmca", "nafta", "wto",
+  "wef", "oecd", "iaea", "unrwa", "unhcr", "unsc", "unga", "icj", "icc", "ii", "iii", "iv",
+]);
+
+/**
+ * Folds a name written entirely in capitals to title case.
+ *
+ * Twenty-one headings in the library were shouted — "WILLIAM SCHABAS" — because
+ * the scorer only penalised the form, and when every form a source uses is
+ * capitals the penalty chooses nothing. Folding happens before scoring, so the
+ * shouted form is never a candidate at all.
+ *
+ * A single all-caps word that is not a person is left alone: "UNESCO" and
+ * "UNRWA" are five letters and not shouting. Inside a longer name, words on the
+ * acronym list keep their capitals and particles go lower-case, so
+ * "ABDULLAH AL-SAUD" becomes "Abdullah al-Saud" and "UN SECURITY COUNCIL"
+ * becomes "UN Security Council".
+ */
+export function foldShouting(name: string, type: string): string {
+  const trimmed = name.trim();
+  const letters = trimmed.replace(/[^\p{L}]/gu, "");
+  if (letters.length <= 4 || !isShouted(trimmed)) return trimmed;
+
+  const words = trimmed.split(/\s+/);
+  if (words.length === 1 && type !== "person") return trimmed;
+
+  return words
+    .map((word, i) =>
+      word
+        .split(/([-'’])/)
+        .map((piece, j, all) => {
+          if (!/\p{L}/u.test(piece)) return piece;
+          const lower = piece.toLowerCase();
+          if (ACRONYMS.has(lower)) return piece.toUpperCase();
+          // A particle is lower-cased except at the very start of the name.
+          // Only the first piece of a hyphenated word counts: the "al" of
+          // "al-Saud" is a particle, the "Saud" is not.
+          const first = i === 0 && j === 0;
+          if (!first && j === 0 && PARTICLES.has(lower)) return lower;
+          // After an apostrophe the capital returns only for the Irish and
+          // French pattern of a single letter before it: "O'BRIEN" → "O'Brien",
+          // "D'SOUZA" → "D'Souza", but "SA'AD" → "Sa'ad".
+          if (j >= 2 && all[j - 1] !== "-" && all[j - 2].length > 1) return lower;
+          return lower.charAt(0).toUpperCase() + lower.slice(1);
+        })
+        .join("")
+    )
+    .join(" ");
+}
+
 /**
  * Scores a candidate name. Higher is a better heading.
  *
@@ -117,13 +182,17 @@ export function stripDateSuffix(name: string): string {
  * a pointless write.
  */
 export function bestName(current: string, aliases: string[], type: string): string | null {
-  const candidates = [...new Set([current, ...aliases])].filter((a) => a.trim());
+  // Shouted forms are folded before they compete, so a name only ever seen in
+  // capitals still ends up with a readable heading.
+  const candidates = [...new Set([current, ...aliases].map((a) => foldShouting(a, type)))].filter(
+    (a) => a.trim()
+  );
   // Even a single known form can be improved: a source that only ever says
   // "Dr. Caryl Haskins" should still give an entry headed by the name.
   if (candidates.length === 0) return null;
 
-  let best = current;
-  let bestScore = score(current, type);
+  let best = foldShouting(current, type);
+  let bestScore = score(best, type);
 
   for (const c of candidates) {
     const s = score(c, type);

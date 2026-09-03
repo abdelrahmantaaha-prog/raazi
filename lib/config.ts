@@ -38,6 +38,19 @@ export interface Config {
   lastChores: string;
   /** Default token cap per run. 0 = uncapped. */
   defaultBudget: number;
+  /**
+   * The language entries and briefs are written in, as a BCP-47 primary tag.
+   * Quotes stay verbatim in their own language whatever this says. Entries
+   * used to follow the language of their evidence, which in a bilingual
+   * library produced entries that switched language between paragraphs.
+   */
+  entryLanguage: string;
+  /** Poll the feeds you follow while the app is running. */
+  feedPolling: boolean;
+  /** Write a brief each day, once the morning's feeds are in. */
+  dailyBrief: boolean;
+  /** How many hours back a brief looks. A day, unless you read less often. */
+  briefHours: number;
 }
 
 const DEFAULTS: Config = {
@@ -54,6 +67,10 @@ const DEFAULTS: Config = {
   morningHour: 7,
   lastChores: "",
   defaultBudget: 0,
+  entryLanguage: "en",
+  feedPolling: true,
+  dailyBrief: true,
+  briefHours: 24,
 };
 
 export function getConfig(): Config {
@@ -86,5 +103,9 @@ export function publicConfig() {
     defaultBudget: c.defaultBudget,
     morningChores: c.morningChores,
     morningHour: c.morningHour,
+    entryLanguage: c.entryLanguage,
+    feedPolling: c.feedPolling,
+    dailyBrief: c.dailyBrief,
+    briefHours: c.briefHours,
   };
 }

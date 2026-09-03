@@ -3,7 +3,17 @@
 import { useEffect, useState } from "react";
 import { Button, Card, Field, inputClass } from "../components/ui";
 import { PROVIDERS, PROVIDER_IDS, STAGES, STAGE_LABEL, STAGE_NOTE, type ProviderId, type Stage } from "@/lib/providers";
+import { formatDateTime, relativeDate } from "@/lib/dates";
 import { CorrectionsCard } from "./Corrections";
+
+/** The languages entries can be written in. Quotes stay in their own. */
+const ENTRY_LANGUAGES: [string, string][] = [
+  ["en", "English"],
+  ["ar", "Arabic"],
+  ["fr", "French"],
+  ["es", "Spanish"],
+  ["de", "German"],
+];
 
 interface KeyRow {
   id: string;
@@ -33,6 +43,7 @@ interface Settings {
   defaultBudget: number;
   morningChores: boolean;
   morningHour: number;
+  entryLanguage?: string;
 }
 
 export default function SettingsPage() {
@@ -132,7 +143,7 @@ export default function SettingsPage() {
                   </div>
                   <p className="text-xs text-[var(--color-muted)]">
                     {k.status === "waiting" && k.availableAt
-                      ? `Out of quota — back at ${new Date(k.availableAt).toLocaleString()}`
+                      ? `Out of quota — back ${relativeDate(k.availableAt)} (${formatDateTime(k.availableAt)})`
                       : k.status === "rejected"
                         ? k.lastError ?? "Rejected"
                         : k.status === "off"
@@ -283,6 +294,17 @@ export default function SettingsPage() {
         </div>
       </Card>
 
+      {cfg.keys.some((k) => k.shared) && (
+        <p className="rounded border border-[var(--color-rule)] bg-[var(--color-accent-soft)] px-3 py-2 text-sm">
+          <span className="font-medium">Shared key pool is on.</span>{" "}
+          <span className="text-[var(--color-muted)]">
+            Every prompt — passages being read, entries being written, questions asked —
+            transits the pool before it reaches a provider. Your own keys below are the fallback
+            when the pool has nothing to offer.
+          </span>
+        </p>
+      )}
+
       <RoutingCard cfg={cfg} busy={busy} onSave={save} />
 
       <Card>
@@ -371,13 +393,32 @@ export default function SettingsPage() {
 
       <Card>
         <h2 className="font-serif text-lg font-semibold">Model</h2>
-        <Field label="Generation model" hint="An alias is safer than a pinned version — it survives retirements.">
-          <input
-            className={inputClass}
-            defaultValue={cfg.model}
-            onBlur={(e) => save({ model: e.target.value }, "Model updated.")}
-          />
-        </Field>
+        <div className="grid gap-3 sm:grid-cols-2">
+          <Field label="Generation model" hint="An alias is safer than a pinned version — it survives retirements.">
+            <input
+              className={inputClass}
+              defaultValue={cfg.model}
+              onBlur={(e) => save({ model: e.target.value }, "Model updated.")}
+            />
+          </Field>
+          <Field
+            label="Entry language"
+            hint="What entries and briefs are written in. Quotes stay verbatim in their own language whatever this says."
+          >
+            <select
+              className={inputClass}
+              value={cfg.entryLanguage ?? "en"}
+              disabled={busy}
+              onChange={(e) => save({ entryLanguage: e.target.value }, "Entry language updated.")}
+            >
+              {ENTRY_LANGUAGES.map(([code, label]) => (
+                <option key={code} value={code}>
+                  {label}
+                </option>
+              ))}
+            </select>
+          </Field>
+        </div>
       </Card>
 
       <Card>

@@ -1,5 +1,16 @@
 import { NextResponse } from "next/server";
-import { asId, badRequest, readBody } from "@/lib/http";
+import {
+  accepted,
+  asId,
+  badRequest,
+  conflict,
+  exists,
+  inFlight,
+  notFound,
+  optionalId,
+  optionalString,
+  readBody,
+} from "@/lib/http";
 import { db, tx } from "@/lib/db";
 import { createRun, enqueue } from "@/lib/queue";
 import { kickWorker } from "@/lib/worker";
@@ -14,7 +25,7 @@ export async function GET(_req: Request, ctx: { params: Promise<{ id: string }> 
   const id = asId((await ctx.params).id);
   if (id === null) return badRequest("Not a valid id.");
   const detail = entityDetail(id);
-  if (!detail) return NextResponse.json({ error: "Not found" }, { status: 404 });
+  if (!detail) return notFound("No such entity.");
   return NextResponse.json(detail);
 }
 
@@ -25,7 +36,7 @@ export async function POST(req: Request, ctx: { params: Promise<{ id: string }> 
     action: "generate" | "star" | "rename" | "merge" | "tag";
     starred?: boolean;
     name?: string;
-    disambiguator?: string;
+    disambiguator?: string | null;
     /** For merge: the entity being folded into this one. */
     otherId?: number;
     /** For tag: which tag, and whether it should apply here. */
@@ -34,17 +45,22 @@ export async function POST(req: Request, ctx: { params: Promise<{ id: string }> 
   }>(req);
   if (body === null) return badRequest("Malformed JSON body.");
 
+  const entity = db()
+    .prepare("SELECT id, canonical_name, merged_into FROM entities WHERE id=?")
+    .get(id) as { id: number; canonical_name: string; merged_into: number | null } | undefined;
+  // Never an empty 200: a missing entity used to fall through to
+  // `entityDetail(id)` returning undefined, which serialised to nothing and
+  // broke the client's JSON parse.
+  if (!entity) return notFound("No such entity.");
+
   switch (body.action) {
     case "generate": {
       // On-demand entry for an entity below the auto threshold, or a refresh
-      // of one that went stale.
-      const runId = createRun({
-        kind: "entry",
-        label:
-          (db().prepare("SELECT canonical_name FROM entities WHERE id=?").get(id) as {
-            canonical_name: string;
-          } | undefined)?.canonical_name ?? `Entity ${id}`,
-      });
+      // of one that went stale. One at a time per entity: a second click
+      // while the first is queued would write the entry twice.
+      const running = inFlight("entry", { entityId: id });
+      if (running) return accepted(running, "This entry is already being written.");
+      const runId = createRun({ kind: "entry", label: entity.canonical_name });
       // Asking for it by hand always rewrites, even if the evidence is unchanged.
       enqueue(runId, [{ kind: "entry", payload: { entityId: id, force: true } }]);
       kickWorker();
@@ -55,32 +71,62 @@ export async function POST(req: Request, ctx: { params: Promise<{ id: string }> 
       db().prepare("UPDATE entities SET starred=? WHERE id=?").run(body.starred ? 1 : 0, id);
       break;
 
-    case "tag":
-      if (!body.tagId) return NextResponse.json({ error: "tagId required" }, { status: 400 });
-      setEntityTag(id, body.tagId, body.on !== false);
+    case "tag": {
+      const tagId = optionalId(body.tagId);
+      if (!tagId) return badRequest("tagId required");
+      if (!exists("tags", tagId)) return notFound("No such tag.");
+      setEntityTag(id, tagId, body.on !== false);
       break;
+    }
 
-    case "rename":
-      db()
-        .prepare("UPDATE entities SET canonical_name=COALESCE(NULLIF(?,''), canonical_name), disambiguator=? WHERE id=?")
-        .run(body.name?.trim() ?? "", body.disambiguator?.trim() || null, id);
+    case "rename": {
+      // Only the fields that were sent. Renaming without resending the
+      // disambiguator used to delete it.
+      const name = optionalString(body.name);
+      const disambiguator = body.disambiguator === null ? null : optionalString(body.disambiguator);
+      if (name === null || (disambiguator === null && body.disambiguator !== null)) {
+        return badRequest("name and disambiguator must be strings.");
+      }
+      const sets: string[] = [];
+      const params: unknown[] = [];
+      if (name !== undefined && name.trim()) {
+        sets.push("canonical_name=?");
+        params.push(name.trim());
+      }
+      if (body.disambiguator !== undefined) {
+        sets.push("disambiguator=?");
+        params.push(disambiguator?.trim() || null);
+      }
+      if (sets.length) {
+        db().prepare(`UPDATE entities SET ${sets.join(", ")} WHERE id=?`).run(...params, id);
+      }
       break;
+    }
 
     case "merge": {
-      if (!body.otherId) {
-        return NextResponse.json({ error: "otherId required" }, { status: 400 });
+      const otherId = optionalId(body.otherId);
+      if (!otherId) return badRequest("otherId must be an entity id.");
+      // A self-merge wrote a self-verdict into the resolution cache and left
+      // the entity pointing at itself.
+      if (otherId === id) return badRequest("An entity cannot be merged into itself.");
+      const other = db()
+        .prepare("SELECT normalized, merged_into FROM entities WHERE id=?")
+        .get(otherId) as { normalized: string; merged_into: number | null } | undefined;
+      if (!other) return notFound("No such entity to merge.");
+      if (other.merged_into !== null || entity.merged_into !== null) {
+        return badRequest("One of these entities has already been merged.");
       }
       tx(() => {
-        mergeEntities(id, body.otherId!, "Merged by you.", "user");
+        mergeEntities(id, otherId, "Merged by you.", "user");
         // A user merge is a standing decision the resolver must not undo.
         const a = db().prepare("SELECT normalized, type FROM entities WHERE id=?").get(id) as
           | { normalized: string; type: string }
           | undefined;
-        const b = db()
-          .prepare("SELECT normalized FROM entities WHERE id=?")
-          .get(body.otherId!) as { normalized: string } | undefined;
-        if (a && b) {
-          const [x, y] = a.normalized < b.normalized ? [a.normalized, b.normalized] : [b.normalized, a.normalized];
+        if (a) {
+          const [x, y] =
+            a.normalized < other.normalized
+              ? [a.normalized, other.normalized]
+              : [other.normalized, a.normalized];
           db()
             .prepare("INSERT OR REPLACE INTO resolution_verdicts (type, a_norm, b_norm, same) VALUES (?,?,?,1)")
             .run(a.type, x, y);
@@ -89,14 +135,53 @@ export async function POST(req: Request, ctx: { params: Promise<{ id: string }> 
       });
       break;
     }
+
+    default:
+      return badRequest("Unknown action.");
   }
 
-  return NextResponse.json(entityDetail(id));
+  const detail = entityDetail(id);
+  if (!detail) return notFound("No such entity.");
+  return NextResponse.json(detail);
 }
 
-export async function DELETE(_req: Request, ctx: { params: Promise<{ id: string }> }) {
+/**
+ * Deletes an entity.
+ *
+ * `merged_into` is ON DELETE SET NULL, so deleting a survivor used to bring
+ * every entity folded into it back to life — as live, evidence-less entries.
+ * With others merged into it the answer is 409 and the list of what would
+ * come back; `?force=1` restores them deliberately, marked stale so the next
+ * refresh looks at them, and then deletes.
+ */
+export async function DELETE(req: Request, ctx: { params: Promise<{ id: string }> }) {
   const id = asId((await ctx.params).id);
   if (id === null) return badRequest("Not a valid id.");
-  db().prepare("DELETE FROM entities WHERE id=?").run(id);
-  return NextResponse.json({ ok: true });
+  if (!exists("entities", id)) return notFound("No such entity.");
+  const force = new URL(req.url).searchParams.get("force") === "1";
+
+  const absorbed = db()
+    .prepare("SELECT id, canonical_name FROM entities WHERE merged_into=?")
+    .all(id) as { id: number; canonical_name: string }[];
+
+  if (absorbed.length && !force) {
+    return conflict(
+      `${absorbed.length} entit${absorbed.length === 1 ? "y was" : "ies were"} merged into this one; deleting it would bring them back. Send ?force=1 to restore them and delete.`,
+      { absorbed }
+    );
+  }
+
+  tx(() => {
+    if (absorbed.length) {
+      db()
+        .prepare("UPDATE entities SET merged_into=NULL, entry_state='stale' WHERE merged_into=?")
+        .run(id);
+      db()
+        .prepare("UPDATE merge_log SET undone=1 WHERE kept_entity=? AND undone=0")
+        .run(id);
+    }
+    db().prepare("DELETE FROM entities WHERE id=?").run(id);
+  });
+
+  return NextResponse.json({ ok: true, restored: absorbed.map((a) => a.id) });
 }

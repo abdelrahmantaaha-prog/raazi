@@ -79,6 +79,11 @@ export function recordPosition(sourceId: number, pos: Position): void {
   // stored at all any more, because it was never a measure of reading.
   if (pos.read?.length) markRead(sourceId, pos.read, "read");
 
+  // A position in some other book is not a position in this one. Looked up
+  // first so a foreign id neither becomes the bookmark nor moves the mark.
+  const seq = pos.chunkId === null ? null : seqOf(sourceId, pos.chunkId);
+  const chunkId = seq === null ? null : pos.chunkId;
+
   db()
     .prepare(
       `UPDATE sources
@@ -87,12 +92,11 @@ export function recordPosition(sourceId: number, pos: Position): void {
               read_at         = datetime('now')
         WHERE id = ?`
     )
-    .run(pos.chunkId, clamp(pos.offset), sourceId);
+    .run(chunkId, clamp(pos.offset), sourceId);
 
   recomputeProgress(sourceId);
 
-  const seq = pos.chunkId === null ? null : seqOf(pos.chunkId);
-  if (seq !== null) advanceFurthest(sourceId, pos.chunkId!, seq);
+  if (seq !== null && chunkId !== null) advanceFurthest(sourceId, chunkId, seq);
 }
 
 /**
@@ -104,13 +108,21 @@ export function recordPosition(sourceId: number, pos: Position): void {
  */
 export function markRead(sourceId: number, chunkIds: number[], how: "read" | "marked"): number {
   if (!chunkIds.length) return 0;
+  // Only passages of *this* source. The ids arrive from the browser, and a
+  // chunk id from another book satisfies the foreign key just as well — it
+  // would count as read here, and read-along would then hand that other book
+  // to the model. The ownership check is in the statement, not around it.
   const stmt = db().prepare(
-    `INSERT INTO read_passages (source_id, chunk_id, how) VALUES (?, ?, ?)
+    `INSERT INTO read_passages (source_id, chunk_id, how)
+     SELECT ?, id, ? FROM chunks WHERE id = ? AND source_id = ?
        ON CONFLICT(source_id, chunk_id) DO NOTHING`
   );
   return tx(() => {
     let n = 0;
-    for (const id of chunkIds) n += stmt.run(sourceId, id, how).changes;
+    for (const id of chunkIds) {
+      if (!Number.isInteger(id) || id <= 0) continue;
+      n += stmt.run(sourceId, how, id, sourceId).changes;
+    }
     return n;
   });
 }
@@ -121,9 +133,10 @@ export function markReadThrough(sourceId: number, chunkId: number): number {
     db()
       .prepare(
         `SELECT id FROM chunks
-          WHERE source_id = ? AND seq <= (SELECT seq FROM chunks WHERE id = ?)`
+          WHERE source_id = ?
+            AND seq <= (SELECT seq FROM chunks WHERE id = ? AND source_id = ?)`
       )
-      .all(sourceId, chunkId) as { id: number }[]
+      .all(sourceId, chunkId, sourceId) as { id: number }[]
   ).map((c) => c.id);
   const n = markRead(sourceId, ids, "marked");
   recomputeProgress(sourceId);
@@ -194,10 +207,11 @@ function advanceFurthest(sourceId: number, chunkId: number, seq: number): void {
   db().prepare("UPDATE sources SET furthest_chunk=? WHERE id=?").run(chunkId, sourceId);
 }
 
-function seqOf(chunkId: number): number | null {
-  const row = db().prepare("SELECT seq FROM chunks WHERE id=?").get(chunkId) as
-    | { seq: number }
-    | undefined;
+/** The passage's place in this source, or null if it is not in this source. */
+function seqOf(sourceId: number, chunkId: number): number | null {
+  const row = db()
+    .prepare("SELECT seq FROM chunks WHERE id=? AND source_id=?")
+    .get(chunkId, sourceId) as { seq: number } | undefined;
   return row?.seq ?? null;
 }
 

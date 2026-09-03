@@ -1,6 +1,14 @@
 import { NextResponse } from "next/server";
-import { asId, badRequest, readBody } from "@/lib/http";
-import { addNote, removeNote, reorderNotes } from "@/lib/drafts";
+import {
+  asId,
+  badRequest,
+  notFound,
+  optionalId,
+  optionalString,
+  queryId,
+  readBody,
+} from "@/lib/http";
+import { addNote, getDraft, removeNote, reorderNotes } from "@/lib/drafts";
 
 export const dynamic = "force-dynamic";
 
@@ -22,21 +30,44 @@ export async function POST(req: Request, ctx: { params: Promise<{ id: string }> 
   }>(req);
   if (body === null) return badRequest("Malformed JSON body.");
 
-  if (!body.text?.trim()) {
+  const text = optionalString(body.text);
+  const citation = optionalString(body.citation);
+  if (text === null || citation === null) return badRequest("text and citation must be strings.");
+  if (!text?.trim()) {
     return NextResponse.json({ error: "Nothing to keep." }, { status: 400 });
   }
+  const kind = body.kind ?? "quote";
+  if (!["quote", "passage", "entry"].includes(kind)) return badRequest("Unknown note kind.");
 
-  const notes = addNote(id, {
-    text: body.text.trim(),
-    kind: body.kind ?? "quote",
-    citation: body.citation ?? null,
-    entity_id: body.entityId ?? null,
-    mention_id: body.mentionId ?? null,
-    chunk_id: body.chunkId ?? null,
-    source_id: body.sourceId ?? null,
-  });
+  // The links are optional and SET NULL on delete, but an id that was never a
+  // row is a constraint error, which used to answer as a 500.
+  const refs = {
+    entityId: optionalId(body.entityId),
+    mentionId: optionalId(body.mentionId),
+    chunkId: optionalId(body.chunkId),
+    sourceId: optionalId(body.sourceId),
+  };
+  for (const [k, v] of Object.entries(refs)) if (v === null) return badRequest(`${k} is not an id.`);
 
-  return NextResponse.json({ notes });
+  if (!getDraft(id)) return notFound("No such draft.");
+
+  try {
+    const notes = addNote(id, {
+      text: text.trim(),
+      kind,
+      citation: citation ?? null,
+      entity_id: refs.entityId ?? null,
+      mention_id: refs.mentionId ?? null,
+      chunk_id: refs.chunkId ?? null,
+      source_id: refs.sourceId ?? null,
+    });
+    return NextResponse.json({ notes });
+  } catch (err) {
+    if (/FOREIGN KEY/i.test((err as Error).message)) {
+      return notFound("One of the things this note points at no longer exists.");
+    }
+    throw err;
+  }
 }
 
 export async function PUT(req: Request, ctx: { params: Promise<{ id: string }> }) {
@@ -44,13 +75,17 @@ export async function PUT(req: Request, ctx: { params: Promise<{ id: string }> }
   if (id === null) return badRequest("Not a valid id.");
   const parsed = await readBody<{ order: number[] }>(req);
   if (parsed === null) return badRequest("Malformed JSON body.");
-  const { order } = parsed;
-  return NextResponse.json({ notes: reorderNotes(id, order ?? []) });
+  const order = Array.isArray(parsed.order) ? parsed.order.map((n) => asId(n)) : [];
+  if (order.some((n) => n === null)) return badRequest("order must be a list of note ids.");
+  if (!getDraft(id)) return notFound("No such draft.");
+  return NextResponse.json({ notes: reorderNotes(id, order as number[]) });
 }
 
 export async function DELETE(req: Request, ctx: { params: Promise<{ id: string }> }) {
   const id = asId((await ctx.params).id);
   if (id === null) return badRequest("Not a valid id.");
-  const noteId = Number(new URL(req.url).searchParams.get("note"));
+  const noteId = queryId(req, "note");
+  if (noteId === null) return badRequest("note must be a note id.");
+  if (!getDraft(id)) return notFound("No such draft.");
   return NextResponse.json({ notes: removeNote(id, noteId) });
 }

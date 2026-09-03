@@ -3,6 +3,7 @@ import { citationOf, entityDetail, listEntities, type EvidenceRow } from "@/lib/
 import { db } from "@/lib/db";
 import { listTags } from "@/lib/tags";
 import { cachedPortrait, havePortraits, portraitState } from "@/lib/portraits";
+import { isWatched } from "@/lib/watchlist";
 import { EntityView } from "./EntityView";
 
 export const dynamic = "force-dynamic";
@@ -62,6 +63,7 @@ function toCitation(e: EvidenceRow) {
     sourceId: e.source_id,
     sourceTitle: e.source_title,
     locator: e.locator,
+    chunkId: e.chunk_id,
   };
 }
 
@@ -105,6 +107,7 @@ export default async function EntityPage({ params }: { params: Promise<{ id: str
       portrait={portrait}
       where={where}
       pictured={[...havePortraits()]}
+      watching={isWatched(id)}
     />
   );
 }

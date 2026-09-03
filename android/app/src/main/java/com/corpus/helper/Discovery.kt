@@ -25,6 +25,12 @@ data class Server(
     val sources: Int,
     val entities: Int,
     val entries: Int,
+    /**
+     * Whether this Corpus is in LAN mode, and so wants its token on every
+     * request but this one. /api/hello answers before any token is offered —
+     * it has to, or a phone could never find the machine to sign in to it.
+     */
+    val needsToken: Boolean = false,
 ) {
     val url: String get() = "http://$host:$port"
     val key: String get() = "$host:$port"
@@ -61,6 +67,37 @@ object Discovery {
     /** Enough sockets to sweep a /24 quickly without exhausting the file table. */
     private const val PARALLEL = 48
 
+    /** The header a Corpus in LAN mode checks on every request. */
+    const val TOKEN_HEADER = "x-corpus-token"
+
+    /**
+     * Whether a token opens this Corpus.
+     *
+     * Asked against a route that is behind the check — /api/settings, which is
+     * cheap and answers JSON — because /api/hello is deliberately open and
+     * would say yes to anything.
+     */
+    suspend fun tokenWorks(host: String, port: Int, token: String): Boolean =
+        withContext(Dispatchers.IO) {
+            var conn: HttpURLConnection? = null
+            try {
+                conn = (URL("http://$host:$port/api/settings").openConnection() as HttpURLConnection).apply {
+                    connectTimeout = CONNECT_MS
+                    readTimeout = READ_MS
+                    requestMethod = "GET"
+                    instanceFollowRedirects = false
+                    setRequestProperty(TOKEN_HEADER, token)
+                }
+                conn.responseCode == 200
+            } catch (e: CancellationException) {
+                throw e
+            } catch (_: Exception) {
+                false
+            } finally {
+                conn?.disconnect()
+            }
+        }
+
     /**
      * Asks one address whether it is a Corpus.
      *
@@ -95,6 +132,7 @@ object Discovery {
                 sources = library?.optInt("sources") ?: 0,
                 entities = library?.optInt("entities") ?: 0,
                 entries = library?.optInt("entries") ?: 0,
+                needsToken = json.optBoolean("lan", false),
             )
         } catch (e: CancellationException) {
             throw e

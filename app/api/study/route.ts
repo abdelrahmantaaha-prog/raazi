@@ -1,5 +1,14 @@
 import { NextResponse } from "next/server";
-import { badRequest, readBody } from "@/lib/http";
+import {
+  accepted,
+  badRequest,
+  exists,
+  inFlight,
+  notFound,
+  optionalId,
+  queryId,
+  readBody,
+} from "@/lib/http";
 import { db } from "@/lib/db";
 import { createRun, enqueue } from "@/lib/queue";
 import { kickWorker } from "@/lib/worker";
@@ -10,9 +19,18 @@ export const dynamic = "force-dynamic";
  *  the bottom on a wrong one, which is the whole of the scheduling. */
 const INTERVALS = [0, 1, 3, 7, 16, 35, 90];
 
+/**
+ * The most cards one request may ask for.
+ *
+ * Each is a model call against a passage, so an unbounded limit is an
+ * unbounded bill: `{"limit": 100000}` was a valid request. Two hundred is more
+ * than a sitting's worth and still a bounded amount of work.
+ */
+const MAX_GENERATE = 200;
+
 export async function GET(req: Request) {
   const url = new URL(req.url);
-  const tagId = Number(url.searchParams.get("tag") ?? 0) || undefined;
+  const tagId = queryId(req, "tag") ?? undefined;
   const mode = url.searchParams.get("mode") === "quiz" ? "quiz" : "card";
 
   const due = db()
@@ -64,22 +82,37 @@ export async function POST(req: Request) {
   if (body === null) return badRequest("Malformed JSON body.");
 
   if (body.action === "generate") {
+    const tagId = optionalId(body.tagId);
+    const entityId = optionalId(body.entityId);
+    if (tagId === null || entityId === null) return badRequest("tagId and entityId must be ids.");
+    if (tagId !== undefined && !exists("tags", tagId)) return notFound("No such tag.");
+    if (entityId !== undefined && !exists("entities", entityId)) return notFound("No such entity.");
+
+    const limit = body.limit === undefined ? 24 : body.limit;
+    if (typeof limit !== "number" || !Number.isInteger(limit) || limit < 1 || limit > MAX_GENERATE) {
+      return badRequest(`limit must be a whole number between 1 and ${MAX_GENERATE}.`);
+    }
+
+    // One card-making run at a time: they are model calls, and a double click
+    // used to pay for the same deck twice.
+    const running = inFlight("cards");
+    if (running) return accepted(running, "Cards are already being made.");
+
     const runId = createRun({ kind: "cards", label: "Making study cards" });
-    enqueue(runId, [
-      {
-        kind: "cards",
-        payload: { tagId: body.tagId, entityId: body.entityId, limit: body.limit ?? 24 },
-      },
-    ]);
+    enqueue(runId, [{ kind: "cards", payload: { tagId, entityId, limit } }]);
     kickWorker();
     return NextResponse.json({ runId, note: "Building cards from your sources — this takes a moment." });
   }
 
-  if (body.action === "review" && body.cardId) {
-    const card = db().prepare("SELECT box, reviews, lapses FROM cards WHERE id=?").get(body.cardId) as
+  if (body.action === "review") {
+    const cardId = optionalId(body.cardId);
+    if (!cardId) return badRequest("cardId must be a card id.");
+    if (typeof body.correct !== "boolean") return badRequest("correct must be true or false.");
+
+    const card = db().prepare("SELECT box, reviews, lapses FROM cards WHERE id=?").get(cardId) as
       | { box: number; reviews: number; lapses: number }
       | undefined;
-    if (!card) return NextResponse.json({ error: "No such card." }, { status: 404 });
+    if (!card) return notFound("No such card.");
 
     const box = body.correct ? Math.min(card.box + 1, INTERVALS.length - 1) : 0;
     const days = INTERVALS[box];
@@ -96,16 +129,18 @@ export async function POST(req: Request) {
                 last_result=?, due_at=datetime('now', ?)
           WHERE id=?`
       )
-      .run(box, body.correct ? 0 : 1, body.correct ? "right" : "wrong", when, body.cardId);
+      .run(box, body.correct ? 0 : 1, body.correct ? "right" : "wrong", when, cardId);
 
     return NextResponse.json({ ok: true, box, nextDue: days });
   }
 
-  return NextResponse.json({ error: "Unknown action." }, { status: 400 });
+  return badRequest("Unknown action.");
 }
 
 export async function DELETE(req: Request) {
-  const id = Number(new URL(req.url).searchParams.get("id") ?? 0);
-  if (id) db().prepare("DELETE FROM cards WHERE id=?").run(id);
+  const id = queryId(req, "id");
+  if (id === null) return badRequest("id must be a card id.");
+  const gone = db().prepare("DELETE FROM cards WHERE id=?").run(id);
+  if (gone.changes === 0) return notFound("No such card.");
   return NextResponse.json({ ok: true });
 }

@@ -1,4 +1,6 @@
 import type Database from "better-sqlite3";
+import { migrateQueue } from "./migrate-queue";
+import { migrateFeeds } from "./migrate-feeds";
 
 /**
  * `schema.sql` is all CREATE IF NOT EXISTS, which means it can add tables to an
@@ -397,6 +399,76 @@ export function migrate(db: Database.Database) {
       .run();
     if (r.changes > 0) console.log(`[corpus] backdated ${r.changes} passage(s) as already queued`);
   });
+
+  // --- 2026-09-03 newsroom audit --------------------------------------------
+
+  // When a source was published, as an ISO datetime, and where. Books have a
+  // year; news has a timestamp, and everything that makes news usable — "what
+  // changed since yesterday", a chronology, resolving "on Tuesday" — is a query
+  // over that timestamp. `year` stays for citations and older rows.
+  addColumn(db, "sources", "published_at", "TEXT");
+  addColumn(db, "sources", "outlet", "TEXT");
+  addColumn(db, "sources", "section", "TEXT");
+  addColumn(db, "sources", "dateline", "TEXT");
+  // The URL with tracking stripped and the host lower-cased: what two feeds
+  // carrying the same story are matched on.
+  addColumn(db, "sources", "canonical_url", "TEXT");
+  // A note in your words about how far to trust this outlet or document.
+  addColumn(db, "sources", "reliability", "TEXT");
+  db.exec("CREATE INDEX IF NOT EXISTS idx_sources_published ON sources(published_at)");
+  db.exec("CREATE INDEX IF NOT EXISTS idx_sources_canonical ON sources(canonical_url)");
+
+  // Who is asserting a claim, and what kind of claim it is. "The tariff will
+  // take effect Monday" reported as officials' words is a different record
+  // from the same sentence stated by the source itself, and journalism turns
+  // on the difference. Filled by extraction; null on older rows.
+  addColumn(db, "mentions", "attribution", "TEXT");
+  addColumn(db, "mentions", "claim_kind", "TEXT");
+
+  // How many times the writer has been run against the current evidence set,
+  // and how many of those were forced by verification flags. Both reset when
+  // the evidence changes. This is the memory the rewrite loop lacked: without
+  // it, an entry the writer could not push past a coverage target was queued
+  // again on every idle sweep, for ever.
+  addColumn(db, "entries", "passes", "INTEGER NOT NULL DEFAULT 0");
+  addColumn(db, "entries", "flag_rewrites", "INTEGER NOT NULL DEFAULT 0");
+  // The language the body is written in, so a changed setting knows what to
+  // rewrite.
+  addColumn(db, "entries", "lang", "TEXT");
+
+  // The writer emitted `[[m:1], [m:2]]` for a while and nothing could read it:
+  // 106 entries had citations that did not render, did not count and were not
+  // verified. Rewritten in place into the one grammar. Pure string work.
+  once(db, "normalise-citation-markers", () => {
+    // eslint-disable-next-line @typescript-eslint/no-require-imports
+    const { normaliseMarkers } = require("../markers") as { normaliseMarkers: (s: string) => string };
+    let fixed = 0;
+    const rows = db.prepare("SELECT entity_id, body_md FROM entries").all() as {
+      entity_id: number;
+      body_md: string;
+    }[];
+    const update = db.prepare("UPDATE entries SET body_md=? WHERE entity_id=?");
+    for (const r of rows) {
+      const body = normaliseMarkers(r.body_md);
+      if (body !== r.body_md) {
+        update.run(body, r.entity_id);
+        fixed++;
+      }
+    }
+    const revs = db.prepare("SELECT id, body_md FROM entry_revisions").all() as {
+      id: number;
+      body_md: string;
+    }[];
+    const updateRev = db.prepare("UPDATE entry_revisions SET body_md=? WHERE id=?");
+    for (const r of revs) {
+      const body = normaliseMarkers(r.body_md);
+      if (body !== r.body_md) updateRev.run(body, r.id);
+    }
+    if (fixed > 0) console.log(`[corpus] repaired citation markers in ${fixed} entr${fixed === 1 ? "y" : "ies"}`);
+  });
+
+  migrateQueue(db);
+  migrateFeeds(db);
 }
 
 /**

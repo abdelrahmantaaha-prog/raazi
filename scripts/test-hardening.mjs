@@ -67,6 +67,24 @@ section("Config writes that cannot lose the keys");
 
   writeStore({ keys: [{ id: "b", key: "secret-2" }] });
   check("writing after a quarantine works normally", readStore().keys?.[0]?.key === "secret-2");
+
+  // The other half of the same disaster: the file exists but cannot be read
+  // right now — EBUSY under a rename, EPERM under a scanner. That used to be
+  // treated as first run, and the next write persisted an empty ring. A
+  // directory where the file should be is the portable way to get a read
+  // error that is not ENOENT.
+  fs.rmSync(CONFIG, { force: true });
+  fs.mkdirSync(CONFIG);
+  let threw = false;
+  try {
+    readStore();
+  } catch {
+    threw = true;
+  }
+  check("a read error that is not 'no such file' is thrown, not read as empty", threw);
+  fs.rmdirSync(CONFIG);
+  check("with the file genuinely absent, empty is the truth", readStore().keys === undefined);
+  writeStore({ keys: [{ id: "c", key: "secret-3" }] });
 }
 
 /* -------------------------------------------------------- request hygiene */
@@ -138,9 +156,182 @@ section("Splitting a chunk keeps the book in order");
   const t = db().prepare("SELECT state FROM tasks WHERE id=?").get(task.id);
   check("the split task is superseded in the same breath", t.state === "superseded");
   const halves = db()
-    .prepare("SELECT COUNT(*) AS n FROM tasks WHERE run_id=? AND state='pending'")
-    .get(runId);
-  check("both halves are queued", halves.n === 2);
+    .prepare("SELECT id, seq, order_hint, payload_json FROM tasks WHERE run_id=? AND state='pending' ORDER BY order_hint")
+    .all(runId);
+  check("both halves are queued", halves.length === 2);
+  check(
+    "the halves take distinct places in the queue, first before second",
+    halves.length === 2 && halves[0].order_hint < halves[1].order_hint && halves[0].order_hint > task.seq,
+    JSON.stringify(halves.map((h) => h.order_hint))
+  );
+  const firstHalfChunk = JSON.parse(halves[0]?.payload_json ?? "{}").chunkId;
+  check(
+    "and the first place holds the first half",
+    after.find((c) => c.id === firstHalfChunk)?.head.startsWith("First")
+  );
+  const halfIds = halves.map((h) => JSON.parse(h.payload_json).chunkId);
+  check(
+    "the new chunks are stamped queued, so read-along does not queue them again",
+    halfIds.length === 2 &&
+      halfIds.every((id) => db().prepare("SELECT queued_at FROM chunks WHERE id=?").get(id)?.queued_at)
+  );
+  const claimed = [];
+  const { claimNext } = await import("../lib/queue.ts");
+  for (let i = 0; i < 2; i++) claimed.push(JSON.parse(claimNext().payload_json).chunkId);
+  check("claimNext hands them out in that order", claimed[0] === firstHalfChunk, JSON.stringify(claimed));
+}
+
+section("Only a first reading can be split");
+{
+  const { failTask } = await import("../lib/queue.ts");
+  void failTask;
+  const src = Number(
+    db().prepare("INSERT INTO sources (title, kind, status) VALUES ('Book 2','text','ready')").run()
+      .lastInsertRowid
+  );
+  const text = `${"A sentence. ".repeat(120)}\n\n${"Another. ".repeat(120)}`;
+  const mkFat = () =>
+    Number(
+      db()
+        .prepare("INSERT INTO chunks (source_id, seq, text, token_est, locator_json) VALUES (?,0,?,10,'{}')")
+        .run(src, text).lastInsertRowid
+    );
+
+  // An Enhance task runs over a passage that already has quotes on it.
+  // Splitting that deleted the quotes, the read marks and the bookmarks with
+  // the chunk, and re-queued the halves over nothing.
+  const enhanced = mkFat();
+  const ent = Number(
+    db()
+      .prepare("INSERT INTO entities (type, canonical_name, normalized, entry_state) VALUES ('person','Z','z','fresh')")
+      .run().lastInsertRowid
+  );
+  const mentionId = Number(
+    db()
+      .prepare("INSERT INTO mentions (entity_id, chunk_id, source_id, surface, quote) VALUES (?,?,?,'Z','q')")
+      .run(ent, enhanced, src).lastInsertRowid
+  );
+  const runId = createRun({ kind: "enhance", label: "enhance split test" });
+  enqueue(runId, [{ kind: "enhance", payload: { chunkId: enhanced } }]);
+  const enhanceTask = db().prepare("SELECT * FROM tasks WHERE run_id=?").get(runId);
+  await splitTask(enhanceTask);
+  const afterEnhance = db().prepare("SELECT state, last_error FROM tasks WHERE id=?").get(enhanceTask.id);
+  check("an enhance task is failed, not split", afterEnhance.state === "failed", afterEnhance.state);
+  check("and says why", /first reading/i.test(afterEnhance.last_error ?? ""), afterEnhance.last_error);
+  check("the chunk survives", db().prepare("SELECT COUNT(*) n FROM chunks WHERE id=?").get(enhanced).n === 1);
+  check("and so does its evidence", db().prepare("SELECT COUNT(*) n FROM mentions WHERE id=?").get(mentionId).n === 1);
+
+  // Even an extract task must not discard a passage that has grown dependants.
+  const run2 = createRun({ kind: "ingest", label: "extract over evidence" });
+  enqueue(run2, [{ kind: "extract", payload: { chunkId: enhanced } }]);
+  const extractTask = db().prepare("SELECT * FROM tasks WHERE run_id=?").get(run2);
+  await splitTask(extractTask);
+  check(
+    "an extract task over a passage with quotes refuses too",
+    db().prepare("SELECT state FROM tasks WHERE id=?").get(extractTask.id).state === "failed"
+  );
+  check("the evidence is still there", db().prepare("SELECT COUNT(*) n FROM mentions WHERE id=?").get(mentionId).n === 1);
+
+  // A bookmark alone is enough.
+  const marked = mkFat();
+  db().prepare("INSERT INTO bookmarks (source_id, chunk_id) VALUES (?,?)").run(src, marked);
+  const run3 = createRun({ kind: "ingest", label: "extract over bookmark" });
+  enqueue(run3, [{ kind: "extract", payload: { chunkId: marked } }]);
+  await splitTask(db().prepare("SELECT * FROM tasks WHERE run_id=?").get(run3));
+  check("a bookmarked passage is never split", db().prepare("SELECT COUNT(*) n FROM chunks WHERE id=?").get(marked).n === 1);
+}
+
+section("A retry does not hold the queue");
+{
+  const q = await import("../lib/queue.ts");
+  const runId = q.createRun({ kind: "ingest", label: "defer test" });
+  q.enqueue(runId, [
+    { kind: "extract", payload: { n: 1 } },
+    { kind: "extract", payload: { n: 2 } },
+  ]);
+  const first = q.claimNext();
+  // Back in the queue, but not for a minute.
+  q.deferTask(first.id, new Date(Date.now() + 60_000), "Rate limited; waiting.");
+  const next = q.claimNext();
+  check("the deferred task is passed over", next && next.id !== first.id, String(next?.id));
+  check("in favour of the one behind it", JSON.parse(next.payload_json).n === 2);
+  check("nothing else is claimable while it waits", q.claimNext() === undefined);
+  check("the queue knows a task is waiting", q.hasDeferredTasks());
+  const due = q.nextDueAt();
+  check(
+    "and when it is due, so the wake timer can be set for it",
+    due && due.getTime() > Date.now() + 50_000 && due.getTime() <= Date.now() + 60_000,
+    due?.toISOString()
+  );
+  q.deferTask(first.id, new Date(Date.now() - 1000), "Rate limited; waiting.");
+  check("once its time has passed it is claimable again", q.claimNext()?.id === first.id);
+  db().prepare("UPDATE tasks SET state='done' WHERE run_id=?").run(runId);
+  check("and the queue no longer reports a wait", !q.hasDeferredTasks());
+}
+
+section("A failure while handling a failure does not kill the loop");
+{
+  const q = await import("../lib/queue.ts");
+  const { startWorker } = await import("../lib/worker.ts");
+  const { TruncatedOutputError } = await import("../lib/ai/errors.ts");
+  process.env.CORPUS_WORKER_IDLE_MS = "150";
+
+  const runId = q.createRun({ kind: "ingest", label: "disposition test" });
+  q.enqueue(runId, [
+    { kind: "extract", payload: { chunkId: 1 } },
+    { kind: "extract", payload: { after: true } },
+  ]);
+  // The first task's payload is made unreadable, so the split that a
+  // truncation asks for throws inside the catch block.
+  const [broken, after] = db()
+    .prepare("SELECT id, payload_json FROM tasks WHERE run_id=? ORDER BY seq")
+    .all(runId);
+  db().prepare("UPDATE tasks SET payload_json='{not json' WHERE id=?").run(broken.id);
+
+  let ranAfter = false;
+  await startWorker({
+    async extract(task) {
+      if (task.id === broken.id) throw new TruncatedOutputError();
+      ranAfter = true;
+      q.finishTask(task.id, task.run_id, { tokensIn: 1, tokensOut: 1 });
+    },
+  });
+
+  const b = db().prepare("SELECT state, last_error FROM tasks WHERE id=?").get(broken.id);
+  check("the task whose handling blew up is failed, not stranded", b.state === "failed", b.state);
+  check("with both errors on it", /handling that/.test(b.last_error ?? ""), b.last_error);
+  check("and the loop went on to the next task", ranAfter);
+  check("the run settled", q.getRun(runId).state === "failed", q.getRun(runId).state);
+  void after;
+}
+
+section("Runs you paused stay paused");
+{
+  const q = await import("../lib/queue.ts");
+  const runId = q.createRun({ kind: "ingest", label: "paused_user test" });
+  q.enqueue(runId, [{ kind: "extract", payload: { n: 1 } }]);
+  q.pauseRun(runId, "paused_user", "Paused by you.");
+
+  check("resume without force leaves it alone", q.resumeRun(runId) === false);
+  check("and the state is untouched", q.getRun(runId).state === "paused_user");
+
+  db().prepare("UPDATE tasks SET state='failed' WHERE run_id=?").run(runId);
+  check("retrying failed tasks re-queues them", q.retryFailedTasks(runId) === 1);
+  check("but does not un-pause the run", q.getRun(runId).state === "paused_user", q.getRun(runId).state);
+  check("the task is pending, ready for when you resume", q.getRun(runId).pending === 1);
+
+  db().prepare("UPDATE tasks SET state='done' WHERE run_id=?").run(runId);
+  q.settleRun(runId);
+  check("settling never overwrites your pause", q.getRun(runId).state === "paused_user", q.getRun(runId).state);
+
+  check("force is the Resume button", q.resumeRun(runId, { force: true }) === true);
+  check("and it works", q.getRun(runId).state === "queued");
+
+  q.pauseRun(runId, "paused_quota", "Out of quota.");
+  check("an app-imposed pause needs no force", q.resumeRun(runId) === true);
+
+  check("getRun by id finds a run beyond the first thousand-row window", q.getRun(runId)?.id === runId);
+  check("and nothing for a run that does not exist", q.getRun(999999) === undefined);
 }
 
 /* -------------------------------------------- recovery respects the living */

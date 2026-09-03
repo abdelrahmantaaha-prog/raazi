@@ -113,32 +113,39 @@ export function discardEvidence(args: {
     // ON CONFLICT rather than INSERT OR IGNORE: discarding the same quote again
     // with a better reason should replace the verdict, not silently keep the
     // first one.
-    discardId = Number(
+    const key = quoteKeyOf(row.quote);
+    db()
+      .prepare(
+        `INSERT INTO evidence_discards
+           (entity_id, entity_norm, entity_name, entity_type, quote, quote_key,
+            surface, source_id, chunk_id, reason, note, scope)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+         ON CONFLICT(entity_norm, quote_key) DO UPDATE SET
+           reason=excluded.reason, note=excluded.note, scope=excluded.scope,
+           entity_id=excluded.entity_id, created_at=datetime('now')`
+      )
+      .run(
+        row.entity_id,
+        row.entity_norm,
+        row.entity_name,
+        row.entity_type,
+        row.quote,
+        key,
+        row.surface,
+        row.source_id,
+        row.chunk_id,
+        args.reason,
+        note,
+        scope
+      );
+    // Looked up rather than taken from lastInsertRowid: when the upsert took
+    // the UPDATE branch nothing was inserted, and lastInsertRowid still holds
+    // whatever the connection inserted last — some unrelated row's id.
+    discardId = (
       db()
-        .prepare(
-          `INSERT INTO evidence_discards
-             (entity_id, entity_norm, entity_name, entity_type, quote, quote_key,
-              surface, source_id, chunk_id, reason, note, scope)
-           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-           ON CONFLICT(entity_norm, quote_key) DO UPDATE SET
-             reason=excluded.reason, note=excluded.note, scope=excluded.scope,
-             entity_id=excluded.entity_id, created_at=datetime('now')`
-        )
-        .run(
-          row.entity_id,
-          row.entity_norm,
-          row.entity_name,
-          row.entity_type,
-          row.quote,
-          quoteKeyOf(row.quote),
-          row.surface,
-          row.source_id,
-          row.chunk_id,
-          args.reason,
-          note,
-          scope
-        ).lastInsertRowid
-    );
+        .prepare("SELECT id FROM evidence_discards WHERE entity_norm=? AND quote_key=?")
+        .get(row.entity_norm, key) as { id: number }
+    ).id;
 
     // The entry still cites what you just rejected, so it no longer reflects
     // the record. Whether it is rewritten now is the caller's decision.

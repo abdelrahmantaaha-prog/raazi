@@ -300,7 +300,7 @@ function PointRow({
           }`}
         />
 
-        <div className="flex shrink-0 items-center gap-1 opacity-0 transition group-focus-within:opacity-100 group-hover:opacity-100">
+        <div className="reveal flex shrink-0 items-center gap-1">
           <button
             onClick={() => setShowQuote((v) => !v)}
             title="Keep a quote with this point"

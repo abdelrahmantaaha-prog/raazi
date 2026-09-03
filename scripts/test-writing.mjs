@@ -141,6 +141,118 @@ section("Gathered material is copied, not borrowed");
 }
 
 // ---------------------------------------------------------------------------
+section("A draft body cannot carry anything that runs");
+// ---------------------------------------------------------------------------
+{
+  const { sanitizeHtml } = await import("../lib/drafts.ts");
+
+  // The attack the audit found: a LAN client plants an onerror handler, and it
+  // fires the next time the writing desk renders the draft — as you, with the
+  // whole API in reach.
+  const planted = '<p>Ordinary text.</p><img src=x onerror="fetch(\'/api/export?format=json\')">';
+  const cleaned = sanitizeHtml(planted);
+  check("an img is dropped entirely", !/<img/i.test(cleaned), cleaned);
+  check("and so is its handler", !/onerror/i.test(cleaned), cleaned);
+  check("while the writing survives", cleaned.includes("Ordinary text."), cleaned);
+
+  check(
+    "a script's contents go with it",
+    sanitizeHtml("<p>Keep</p><script>alert(1)</script>") === "<p>Keep</p>",
+    sanitizeHtml("<p>Keep</p><script>alert(1)</script>")
+  );
+  check(
+    "so do an iframe's and a style's",
+    sanitizeHtml("<iframe src='http://x'>no</iframe><style>p{}</style><p>Yes</p>") === "<p>Yes</p>",
+    sanitizeHtml("<iframe src='http://x'>no</iframe><style>p{}</style><p>Yes</p>")
+  );
+
+  // Every attribute is rebuilt rather than filtered, so a handler cannot ride
+  // in on an allowed tag under a name nobody thought to block.
+  const attrs = sanitizeHtml('<p onclick="steal()" style="x" class="y" id="z">Text</p>');
+  check("attributes on allowed tags are rebuilt, not filtered", attrs === "<p>Text</p>", attrs);
+
+  check(
+    "a link keeps an http address",
+    sanitizeHtml('<a href="https://example.org/a">x</a>').includes('href="https://example.org/a"'),
+    sanitizeHtml('<a href="https://example.org/a">x</a>')
+  );
+  for (const bad of [
+    '<a href="javascript:alert(1)">x</a>',
+    '<a href="data:text/html,y">x</a>',
+    '<a href="vbscript:x">x</a>',
+    // Encoded, so a naive prefix test would let it through.
+    '<a href="java&#115;cript:alert(1)">x</a>',
+  ]) {
+    const out = sanitizeHtml(bad);
+    check(
+      `a link to ${bad.slice(9, 26)} keeps its text and loses the link`,
+      !/<a\b/i.test(out) && out.includes("x"),
+      out
+    );
+  }
+
+  // The citation marker is the one span the export understands.
+  check(
+    "a citation marker survives",
+    sanitizeHtml('<span data-note="3">[1]</span>') === '<span data-note="3">[1]</span>',
+    sanitizeHtml('<span data-note="3">[1]</span>')
+  );
+  check(
+    "a span with anything else is unwrapped",
+    sanitizeHtml('<span class="x">text</span>') === "text",
+    sanitizeHtml('<span class="x">text</span>')
+  );
+  check(
+    "a data-note that is not a number is not a marker",
+    !sanitizeHtml('<span data-note="x()">t</span>').includes("data-note")
+  );
+
+  const editorMarkup =
+    "<h2>Head</h2><ul><li><strong>a</strong> <em>b</em></li></ul><blockquote>q</blockquote><hr><pre><code>c</code></pre>";
+  check(
+    "the ordinary editor markup all passes",
+    sanitizeHtml(editorMarkup) === editorMarkup,
+    sanitizeHtml(editorMarkup)
+  );
+  check(
+    "b and i are folded to one spelling",
+    sanitizeHtml("<b>x</b><i>y</i>") === "<strong>x</strong><em>y</em>"
+  );
+  check(
+    "unbalanced markup is closed rather than left open",
+    sanitizeHtml("<p>one<p>two") === "<p>one</p><p>two</p>",
+    sanitizeHtml("<p>one<p>two")
+  );
+  check(
+    "a stray < is text, not a tag",
+    sanitizeHtml("<p>a < b</p>") === "<p>a &lt; b</p>",
+    sanitizeHtml("<p>a < b</p>")
+  );
+  check(
+    "a comment cannot swallow the document",
+    sanitizeHtml("<!-- <p>x</p> --><p>y</p>") === "<p>y</p>",
+    sanitizeHtml("<!-- <p>x</p> --><p>y</p>")
+  );
+
+  // It has to hold on the way in, whatever wrote the row.
+  const id = createDraft("Sanitised");
+  saveDraft(id, { body_html: '<p>Safe</p><img src=x onerror="alert(1)">' });
+  check("the stored body is clean", !/onerror|<img/i.test(getDraft(id).body_html), getDraft(id).body_html);
+  check("and the plain-text form still has the words", getDraft(id).body_md.includes("Safe"));
+
+  // And on the way out, for rows written before the sanitiser existed.
+  db()
+    .prepare("UPDATE drafts SET body_html=? WHERE id=?")
+    .run('<p>Old</p><img src=x onerror="alert(1)">', id);
+  check(
+    "a row written behind our back is cleaned on read",
+    !/onerror/i.test(getDraft(id).body_html),
+    getDraft(id).body_html
+  );
+  deleteDraft(id);
+}
+
+// ---------------------------------------------------------------------------
 section("The coherence pass cannot invent or lose citations");
 // ---------------------------------------------------------------------------
 {

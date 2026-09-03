@@ -1,46 +1,50 @@
 import { Readability } from "@mozilla/readability";
 import { JSDOM } from "jsdom";
 import type { Piece } from "../chunk";
+import { safeFetch } from "../net";
 import { parseText } from "./text";
+import { canonicalUrl, normaliseLang, outletFromUrl, toPublishedAt } from "./meta";
+
+export { canonicalUrl, normaliseLang, outletFromUrl, toPublishedAt } from "./meta";
+
+export interface WebMeta {
+  title?: string;
+  author?: string;
+  /** og:site_name, or the host. Kept alongside `outlet` for older callers. */
+  publisher?: string;
+  outlet?: string;
+  section?: string;
+  /** Full ISO datetime when the page declares one. */
+  publishedAt?: string;
+  year?: string;
+  lang?: string;
+  canonicalUrl?: string;
+}
 
 export interface WebParse {
   pieces: Piece[];
-  meta: { title?: string; author?: string; publisher?: string; year?: string; lang?: string };
+  meta: WebMeta;
 }
 
 /** Fetches an article and keeps the readable body, dropping nav and ads. */
 export async function parseUrl(url: string): Promise<WebParse> {
-  const res = await fetch(url, {
+  const res = await safeFetch(url, {
     headers: {
       // Some publishers serve a stub to unknown agents.
       "user-agent":
         "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0 Safari/537.36",
       accept: "text/html,application/xhtml+xml",
     },
-    redirect: "follow",
   });
   if (!res.ok) throw new Error(`Fetch failed: ${res.status} ${res.statusText}`);
 
   const html = await res.text();
-  const dom = new JSDOM(html, { url });
+  // Relative links and rel=canonical resolve against where the page actually
+  // came from, which after a redirect is not the address that was pasted.
+  const finalUrl = res.url || url;
+  const dom = new JSDOM(html, { url: finalUrl });
   const doc = dom.window.document;
-
-  const metaOf = (sel: string) =>
-    doc.querySelector(sel)?.getAttribute("content")?.trim() || undefined;
-
-  const published =
-    metaOf('meta[property="article:published_time"]') ??
-    metaOf('meta[name="date"]') ??
-    doc.querySelector("time[datetime]")?.getAttribute("datetime") ??
-    undefined;
-
-  const meta = {
-    title: metaOf('meta[property="og:title"]') ?? (doc.title?.trim() || undefined),
-    author: metaOf('meta[name="author"]') ?? metaOf('meta[property="article:author"]'),
-    publisher: metaOf('meta[property="og:site_name"]') ?? new URL(url).hostname,
-    year: published?.slice(0, 4),
-    lang: doc.documentElement.getAttribute("lang") ?? undefined,
-  };
+  const meta = readMeta(doc, finalUrl);
 
   const article = new Readability(doc).parse();
 
@@ -58,13 +62,63 @@ export async function parseUrl(url: string): Promise<WebParse> {
   if (article?.title && !meta.title) meta.title = article.title;
   if (article?.byline && !meta.author) meta.author = article.byline;
 
-  const label = meta.title ?? new URL(url).hostname;
+  const label = meta.title ?? new URL(finalUrl).hostname;
   const pieces = parseText(body).map((p) => ({
     ...p,
     label: p.label === "Text" ? label : p.label,
   }));
 
   return { pieces, meta };
+}
+
+/**
+ * What the page says about itself, from the tags publishers actually fill in.
+ * Exported so the feed poller can read the same fields from HTML it already
+ * holds.
+ */
+export function readMeta(doc: Document, url: string): WebMeta {
+  const metaOf = (sel: string) =>
+    doc.querySelector(sel)?.getAttribute("content")?.trim() || undefined;
+
+  const publishedRaw =
+    metaOf('meta[property="article:published_time"]') ??
+    metaOf('meta[name="article:published_time"]') ??
+    metaOf('meta[property="og:published_time"]') ??
+    metaOf('meta[name="pubdate"]') ??
+    metaOf('meta[name="publishdate"]') ??
+    metaOf('meta[name="date"]') ??
+    metaOf('meta[name="dc.date"]') ??
+    metaOf('meta[name="DC.date.issued"]') ??
+    metaOf('meta[itemprop="datePublished"]') ??
+    doc.querySelector("time[datetime]")?.getAttribute("datetime")?.trim() ??
+    undefined;
+  const publishedAt = toPublishedAt(publishedRaw) ?? undefined;
+
+  const declaredCanonical =
+    doc.querySelector('link[rel="canonical"]')?.getAttribute("href")?.trim() ||
+    metaOf('meta[property="og:url"]');
+
+  const siteName = metaOf('meta[property="og:site_name"]') ?? metaOf('meta[name="application-name"]');
+  const outlet = siteName ?? outletFromUrl(url) ?? undefined;
+
+  return {
+    title: metaOf('meta[property="og:title"]') ?? (doc.title?.trim() || undefined),
+    author:
+      metaOf('meta[name="author"]') ??
+      metaOf('meta[property="article:author"]') ??
+      metaOf('meta[name="dc.creator"]') ??
+      metaOf('meta[name="parsely-author"]'),
+    publisher: outlet,
+    outlet,
+    section: metaOf('meta[property="article:section"]') ?? metaOf('meta[name="section"]'),
+    publishedAt,
+    year: publishedAt?.slice(0, 4),
+    lang:
+      normaliseLang(doc.documentElement.getAttribute("lang")) ??
+      normaliseLang(metaOf('meta[property="og:locale"]')) ??
+      undefined,
+    canonicalUrl: canonicalUrl(url, declaredCanonical) ?? undefined,
+  };
 }
 
 /**

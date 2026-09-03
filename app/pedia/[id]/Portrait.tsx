@@ -3,6 +3,7 @@
 import { useState } from "react";
 import { useRouter } from "next/navigation";
 import { Button, inputClass } from "../../components/ui";
+import { Modal } from "../../components/Modal";
 
 interface Record {
   id: string;
@@ -42,6 +43,12 @@ export function Portrait({
   const [note, setNote] = useState<string | null>(null);
   // Bumped after a change so the browser fetches the new file, not the old one.
   const [version, setVersion] = useState(0);
+  /**
+   * Whether there is a picture to show. Starts from what the server knew and
+   * follows what you do here — removing one goes back to the initial rather
+   * than leaving an empty circle until the page reloads.
+   */
+  const [has, setHas] = useState(hasPortrait);
 
   const search = async () => {
     setBusy(true);
@@ -74,6 +81,7 @@ export function Portrait({
       if (!res.ok) throw new Error(data.error ?? "Could not use that picture.");
       setResults(null);
       setNote("Set.");
+      setHas(true);
       setVersion((v) => v + 1);
       router.refresh();
     } catch (err) {
@@ -85,14 +93,25 @@ export function Portrait({
 
   const clear = async () => {
     setBusy(true);
-    await fetch(`/api/entities/${entityId}/portrait`, { method: "DELETE" });
-    setVersion((v) => v + 1);
-    setNote("Removed.");
-    setBusy(false);
-    router.refresh();
+    setNote(null);
+    try {
+      const res = await fetch(`/api/entities/${entityId}/portrait`, { method: "DELETE" });
+      if (!res.ok && res.status !== 404) {
+        const data = await res.json().catch(() => ({}));
+        throw new Error(data.error ?? "Could not remove it.");
+      }
+      setHas(false);
+      setVersion((v) => v + 1);
+      setNote("Removed.");
+      router.refresh();
+    } catch (err) {
+      setNote((err as Error).message);
+    } finally {
+      setBusy(false);
+    }
   };
 
-  const showing = hasPortrait || version > 0;
+  const showing = has;
 
   return (
     <div>
@@ -117,8 +136,7 @@ export function Portrait({
       </button>
 
       {open && (
-        <div className="fixed inset-0 z-50 flex items-start justify-center overflow-y-auto bg-black/30 p-4 pt-16">
-          <div className="w-full max-w-3xl rounded-lg border border-[var(--color-rule)] bg-white p-5 shadow-xl">
+        <Modal label={`Picture for ${name}`} onClose={() => setOpen(false)} width="max-w-3xl" className="p-5">
             <div className="flex items-start justify-between gap-3">
               <div>
                 <h2 className="font-serif text-lg font-semibold">Picture for {name}</h2>
@@ -206,8 +224,7 @@ export function Portrait({
                 ))}
               </div>
             )}
-          </div>
-        </div>
+        </Modal>
       )}
     </div>
   );

@@ -14,6 +14,23 @@ import { parseUrl } from "./web";
 import { setSourceTags } from "../tags";
 import { guessReadMode, queueExtractions } from "../reading";
 import { clean, describeSaving } from "./clean";
+import { canonicalUrl, normaliseLang, toPublishedAt } from "./meta";
+
+/** Provenance a caller may know that the file itself does not carry. */
+interface Provenance {
+  /**
+   * Join an existing run instead of opening one.
+   *
+   * A poll that brings in fourteen articles is one piece of work, not
+   * fourteen: without this the Activity list becomes a wall of one-item runs
+   * and pausing "the morning's feeds" means pausing them one at a time.
+   */
+  runId?: number;
+  /** When it was published, ISO. A feed knows this; a pasted paragraph does not. */
+  publishedAt?: string;
+  /** The outlet or publisher, as you would cite it. */
+  outlet?: string;
+}
 
 /** Pages per OCR call. Small enough that a failure costs little, large enough
  *  that a 400-page scan isn't 400 requests. */
@@ -37,7 +54,7 @@ export interface AddResult {
   note: string;
 }
 
-export async function addFile(opts: {
+export async function addFile(opts: Provenance & {
   filename: string;
   bytes: Buffer;
   title?: string;
@@ -59,6 +76,9 @@ export async function addFile(opts: {
   const stored = path.join(SOURCES_DIR, `${sourceId}${ext}`);
   await fs.promises.writeFile(stored, opts.bytes);
   db().prepare("UPDATE sources SET path=? WHERE id=?").run(stored, sourceId);
+  // What the caller knows about provenance goes on first; the file's own
+  // metadata fills only what is still empty.
+  applyMeta(sourceId, { publishedAt: opts.publishedAt, outlet: opts.outlet });
 
   try {
     switch (kind) {
@@ -69,6 +89,7 @@ export async function addFile(opts: {
           author: opts.author?.trim() || parsed.meta.author,
         });
         return finish(sourceId, parsed.pieces, opts.budgetCap, opts.tags, {
+          runId: opts.runId,
           scannedPages: parsed.scannedPages,
           note:
             parsed.scannedPages.length > 0
@@ -83,9 +104,12 @@ export async function addFile(opts: {
           author: opts.author?.trim() || parsed.meta.author,
           lang: parsed.meta.lang,
           publisher: parsed.meta.publisher,
-          year: parsed.meta.year,
+          // A date you supplied outranks the manifest's, which is often the
+          // e-book's own release rather than the work's.
+          year: opts.publishedAt ? undefined : parsed.meta.year,
         });
         return finish(sourceId, parsed.pieces, opts.budgetCap, opts.tags, {
+          runId: opts.runId,
           note: `${parsed.pieces.length} chapter(s) parsed.`,
         });
       }
@@ -116,6 +140,7 @@ export async function addFile(opts: {
       default: {
         const pieces = parseText(opts.bytes.toString("utf8"));
         return finish(sourceId, pieces, opts.budgetCap, opts.tags, {
+          runId: opts.runId,
           note: `${pieces.length} section(s) parsed.`,
         });
       }
@@ -128,7 +153,7 @@ export async function addFile(opts: {
   }
 }
 
-export async function addUrl(opts: {
+export async function addUrl(opts: Provenance & {
   url: string;
   title?: string;
   budgetCap?: number | null;
@@ -138,15 +163,18 @@ export async function addUrl(opts: {
   const isYouTube = /youtu\.?be/.test(opts.url);
   const kind: SourceKind = isYouTube ? "media" : "url";
 
+  // The canonical address is written before the fetch, so even a source that
+  // fails to parse can be recognised if the same story is added again.
   const sourceId = Number(
     db()
-      .prepare("INSERT INTO sources (title, kind, url, status) VALUES (?, ?, ?, 'new')")
-      .run(opts.title?.trim() || opts.url, kind, opts.url).lastInsertRowid
+      .prepare("INSERT INTO sources (title, kind, url, canonical_url, status) VALUES (?, ?, ?, ?, 'new')")
+      .run(opts.title?.trim() || opts.url, kind, opts.url, canonicalUrl(opts.url)).lastInsertRowid
   );
+  applyMeta(sourceId, { publishedAt: opts.publishedAt, outlet: opts.outlet });
 
   try {
     if (isYouTube) {
-      const runId = createRun({
+      const runId = opts.runId ?? createRun({
         sourceId,
         kind: "ingest",
         label: opts.title?.trim() || opts.url,
@@ -171,14 +199,20 @@ export async function addUrl(opts: {
     }
 
     const parsed = await parseUrl(opts.url);
+    // What you supplied beats what the page declares.
     applyMeta(sourceId, {
       title: opts.title?.trim() || parsed.meta.title,
       author: parsed.meta.author,
       publisher: parsed.meta.publisher,
+      outlet: opts.outlet?.trim() || parsed.meta.outlet,
+      section: parsed.meta.section,
+      publishedAt: opts.publishedAt?.trim() || parsed.meta.publishedAt,
       year: parsed.meta.year,
       lang: parsed.meta.lang,
+      canonicalUrl: parsed.meta.canonicalUrl,
     });
     return finish(sourceId, parsed.pieces, opts.budgetCap, opts.tags, {
+      runId: opts.runId,
       note: "Article text extracted.",
     });
   } catch (err) {
@@ -189,7 +223,7 @@ export async function addUrl(opts: {
   }
 }
 
-export async function addPastedText(opts: {
+export async function addPastedText(opts: Provenance & {
   title: string;
   author?: string;
   text: string;
@@ -202,25 +236,71 @@ export async function addPastedText(opts: {
       .prepare("INSERT INTO sources (title, author, kind, status) VALUES (?, ?, 'text', 'new')")
       .run(opts.title.trim(), opts.author?.trim() || null).lastInsertRowid
   );
+  applyMeta(sourceId, { publishedAt: opts.publishedAt, outlet: opts.outlet });
   const pieces = parseText(opts.text);
-  return finish(sourceId, pieces, opts.budgetCap, opts.tags, { note: `${pieces.length} section(s) parsed.` });
+  return finish(sourceId, pieces, opts.budgetCap, opts.tags, {
+    runId: opts.runId,
+    note: `${pieces.length} section(s) parsed.`,
+  });
 }
 
-function applyMeta(
-  sourceId: number,
-  meta: { title?: string; author?: string; lang?: string; publisher?: string; year?: string }
-) {
+export interface SourceMeta {
+  title?: string;
+  author?: string;
+  lang?: string;
+  publisher?: string;
+  outlet?: string;
+  section?: string;
+  dateline?: string;
+  /** Any date string; stored as ISO, and `year` follows from it. */
+  publishedAt?: string;
+  year?: string;
+  canonicalUrl?: string;
+}
+
+/**
+ * Fills in what a source says about itself. A non-empty value replaces what
+ * is on record and an empty one leaves it alone — a URL source is created
+ * with its address as a placeholder title, and the page's title has to win.
+ * Callers therefore apply what you typed *after* what the file declares, or
+ * fold it in with precedence, as addUrl does.
+ *
+ * The language is normalised to a BCP-47 primary tag on the way in. The
+ * column had "en", "En", "eng", "en-US" and "ar-EG" side by side, and any
+ * grouping by language split on the spelling. The year follows from the
+ * publication timestamp when there is one.
+ */
+export function applyMeta(sourceId: number, meta: SourceMeta) {
+  const publishedAt = toPublishedAt(meta.publishedAt) ?? "";
+  const year = publishedAt.slice(0, 4) || meta.year?.trim() || "";
   db()
     .prepare(
       `UPDATE sources SET
-         title     = COALESCE(NULLIF(?, ''), title),
-         author    = COALESCE(NULLIF(?, ''), author),
-         lang      = COALESCE(NULLIF(?, ''), lang),
-         publisher = COALESCE(NULLIF(?, ''), publisher),
-         year      = COALESCE(NULLIF(?, ''), year)
+         title         = COALESCE(NULLIF(?, ''), title),
+         author        = COALESCE(NULLIF(?, ''), author),
+         lang          = COALESCE(NULLIF(?, ''), lang),
+         publisher     = COALESCE(NULLIF(?, ''), publisher),
+         outlet        = COALESCE(NULLIF(?, ''), outlet),
+         section       = COALESCE(NULLIF(?, ''), section),
+         dateline      = COALESCE(NULLIF(?, ''), dateline),
+         published_at  = COALESCE(NULLIF(?, ''), published_at),
+         year          = COALESCE(NULLIF(?, ''), year),
+         canonical_url = COALESCE(NULLIF(?, ''), canonical_url)
        WHERE id = ?`
     )
-    .run(meta.title ?? "", meta.author ?? "", meta.lang ?? "", meta.publisher ?? "", meta.year ?? "", sourceId);
+    .run(
+      meta.title ?? "",
+      meta.author ?? "",
+      normaliseLang(meta.lang) ?? "",
+      meta.publisher ?? "",
+      meta.outlet ?? "",
+      meta.section ?? "",
+      meta.dateline ?? "",
+      publishedAt,
+      year,
+      meta.canonicalUrl ?? "",
+      sourceId
+    );
 }
 
 /** Writes the chunks, builds the run, queues the work, starts the worker. */
@@ -229,7 +309,7 @@ function finish(
   rawPieces: Piece[],
   budgetCap: number | null | undefined,
   tags: number[] | undefined,
-  extra: { scannedPages?: number[]; note: string }
+  extra: { scannedPages?: number[]; note: string; runId?: number }
 ): AddResult {
   const scanned = extra.scannedPages ?? [];
 
@@ -248,12 +328,14 @@ function finish(
     db().prepare("SELECT title FROM sources WHERE id=?").get(sourceId) as { title: string }
   ).title;
 
-  const runId = createRun({
-    sourceId,
-    kind: "ingest",
-    label: title,
-    budgetCap: budgetCap ?? getConfig().defaultBudget,
-  });
+  const runId =
+    extra.runId ??
+    createRun({
+      sourceId,
+      kind: "ingest",
+      label: title,
+      budgetCap: budgetCap ?? getConfig().defaultBudget,
+    });
 
   const result = tx(() => {
     const chunkIds = pieces.length ? writeChunks(sourceId, pieces) : [];
@@ -317,9 +399,14 @@ function finish(
  * because both need the full mention set to be in place.
  */
 function appendTail(runId: number, sourceId?: number) {
+  // The source id lets the resolve pass compare only what this ingest touched
+  // rather than every entity of the type against every other.
   enqueue(
     runId,
-    ENTITY_TYPES.map((type) => ({ kind: "resolve" as const, payload: { type } }))
+    ENTITY_TYPES.map((type) => ({
+      kind: "resolve" as const,
+      payload: sourceId ? { type, sourceId } : { type },
+    }))
   );
   // The name sweep runs after resolution and before entries are written: it
   // needs the alias lists to have settled, and the entries need its findings.

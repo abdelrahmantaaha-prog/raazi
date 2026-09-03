@@ -1,6 +1,6 @@
 import fs from "node:fs";
 import { NextResponse } from "next/server";
-import { asId, badRequest, readBody } from "@/lib/http";
+import { asId, badRequest, notFound, optionalString, readBody } from "@/lib/http";
 import { db } from "@/lib/db";
 import { COVERS_DIR, coverPath } from "@/lib/covers";
 
@@ -32,7 +32,7 @@ export async function GET(req: Request, ctx: { params: Promise<{ id: string }> }
   const source = db().prepare("SELECT title, author FROM sources WHERE id=?").get(id) as
     | { title: string; author: string | null }
     | undefined;
-  if (!source) return NextResponse.json({ error: "No such source." }, { status: 404 });
+  if (!source) return notFound("No such source.");
 
   // Defaults to the source's own title, so the first search is usually right.
   const q = (url.searchParams.get("q") ?? source.title)
@@ -90,7 +90,25 @@ export async function POST(req: Request, ctx: { params: Promise<{ id: string }> 
   }>(req);
   if (body === null) return badRequest("Malformed JSON body.");
 
-  if (!body.coverId) return NextResponse.json({ error: "Pick an edition." }, { status: 400 });
+  // The cover id goes straight into an Open Library URL; it is theirs, and it
+  // is a number, so anything else is a wrong request rather than a lookup.
+  if (
+    typeof body.coverId !== "number" ||
+    !Number.isInteger(body.coverId) ||
+    body.coverId <= 0 ||
+    body.coverId > 1e12
+  ) {
+    return NextResponse.json({ error: "Pick an edition." }, { status: 400 });
+  }
+  for (const k of ["title", "author", "publisher"] as const) {
+    if (body[k] !== undefined && body[k] !== null && optionalString(body[k]) === null) {
+      return badRequest(`${k} must be a string.`);
+    }
+  }
+  if (body.year !== undefined && body.year !== null && typeof body.year !== "number") {
+    return badRequest("year must be a number.");
+  }
+  if (!db().prepare("SELECT 1 FROM sources WHERE id=?").get(id)) return notFound("No such source.");
 
   try {
     const res = await fetch(`https://covers.openlibrary.org/b/id/${body.coverId}-L.jpg`, {

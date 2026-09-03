@@ -265,5 +265,33 @@ section("A lone name may stand for a fuller one — but only as a family name");
   }
 }
 
+// ---------------------------------------------------------------------------
+section("A heading in capitals is folded, not merely penalised");
+// ---------------------------------------------------------------------------
+{
+  const { foldShouting } = await import("../lib/canonical.ts");
+  check('"WILLIAM SCHABAS" becomes "William Schabas"',
+    bestName("WILLIAM SCHABAS", [], "person") === "William Schabas",
+    String(bestName("WILLIAM SCHABAS", [], "person")));
+  check("particles stay lower-case", foldShouting("ABDULLAH AL-SAUD", "person") === "Abdullah al-Saud",
+    foldShouting("ABDULLAH AL-SAUD", "person"));
+  check("so do European ones", foldShouting("LUDWIG VAN BEETHOVEN", "person") === "Ludwig van Beethoven");
+  check("but a particle opening the name is capitalised", foldShouting("VAN MORRISON", "person") === "Van Morrison");
+  check("an Irish apostrophe keeps its capital", foldShouting("SEAN O'BRIEN", "person") === "Sean O'Brien",
+    foldShouting("SEAN O'BRIEN", "person"));
+  check("an Arabic hamza does not", foldShouting("SA'AD HARIRI", "person") === "Sa'ad Hariri",
+    foldShouting("SA'AD HARIRI", "person"));
+  check("acronyms inside a shouted name keep their capitals",
+    foldShouting("UN SECURITY COUNCIL", "institution") === "UN Security Council",
+    foldShouting("UN SECURITY COUNCIL", "institution"));
+  check("a lone acronym is not shouting", foldShouting("UNRWA", "org") === "UNRWA");
+  check("nor is a short one", foldShouting("NATO", "org") === "NATO");
+  check("a multi-word organisation is folded", foldShouting("ROYAL NAVY", "org") === "Royal Navy");
+  check("a mixed-case name is left alone", foldShouting("McDonald", "person") === "McDonald");
+  check("a folded form outranks the shouted alias",
+    bestName("WILLIAM SCHABAS", ["WILLIAM SCHABAS"], "person") === "William Schabas");
+  check("a name already right is not rewritten", bestName("William Schabas", ["WILLIAM SCHABAS"], "person") === null);
+}
+
 console.log(`\n${failed === 0 ? "All passed" : "FAILURES PRESENT"}: ${passed} passed, ${failed} failed\n`);
 process.exit(failed === 0 ? 0 : 1);
