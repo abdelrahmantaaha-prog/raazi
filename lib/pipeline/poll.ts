@@ -12,6 +12,7 @@ import {
   recordItems,
 } from "../feeds";
 import { fileSource } from "../stories";
+import { unwrapRedirect } from "../ingest/meta";
 import type { Task } from "../types";
 
 /**
@@ -147,6 +148,7 @@ export async function handleFetchItem(task: Task): Promise<void> {
         url: string | null;
         canonical_url: string | null;
         title: string;
+        summary: string | null;
         published_at: string | null;
         state: string;
         feed_outlet: string | null;
@@ -169,8 +171,13 @@ export async function handleFetchItem(task: Task): Promise<void> {
   }
 
   try {
+    // A search feed links to itself and carries the destination in a query
+    // parameter; the canonical address everything is deduplicated on has to be
+    // the article's, not the redirector's.
+    const target = unwrapRedirect(item.url);
+
     const added = await addUrl({
-      url: item.url,
+      url: target,
       title: item.title,
       publishedAt: item.published_at ?? undefined,
       outlet: item.feed_outlet ?? undefined,
@@ -178,6 +185,11 @@ export async function handleFetchItem(task: Task): Promise<void> {
       // The whole poll shares one run, so pausing "this morning's feeds" is
       // one action and the Activity list stays readable.
       runId: task.run_id,
+      // What to keep if the page will not open. A search feed's items point at
+      // aggregators that render in the browser, and this is the difference
+      // between a phrase watch that reports something and one that reports
+      // only failures.
+      fallbackText: [item.title, item.summary].filter(Boolean).join("\n\n"),
     });
 
     // Which running story this account belongs to. Grouping needs the source

@@ -110,3 +110,44 @@ export function outletFromUrl(url: string): string | null {
   if (!u) return null;
   return u.hostname.toLowerCase().replace(/^www\./, "") || null;
 }
+
+/**
+ * The real address behind a search engine's redirect link.
+ *
+ * A news search feed does not link to the article; it links to itself, and
+ * carries the destination in a query parameter. Bing's `apiclick.aspx?…&url=`
+ * and Google's `/url?q=` both do this, and following the redirect blindly
+ * costs a round trip and loses the outlet — the canonical address of a story
+ * is what the whole deduplicator is keyed on, so it is worth recovering
+ * before anything is stored.
+ *
+ * Google News's own `/rss/articles/CBMi…` links are the exception: the
+ * destination is inside an encoded blob rather than a parameter, and there is
+ * no honest way to read it from here. Those come back unchanged, and the
+ * caller deals with an item it cannot fetch.
+ */
+export function unwrapRedirect(url: string): string {
+  const u = parse(url);
+  if (!u) return url;
+  const host = u.hostname.toLowerCase().replace(/^www\./, "");
+
+  const carriers: Record<string, string[]> = {
+    "bing.com": ["url", "u"],
+    "google.com": ["q", "url"],
+    "news.google.com": ["url"],
+    "duckduckgo.com": ["uddg"],
+    "news.search.yahoo.com": ["RU"],
+    "l.facebook.com": ["u"],
+    "t.co": [],
+  };
+
+  const params = carriers[host];
+  if (!params) return url;
+  for (const name of params) {
+    const raw = u.searchParams.get(name);
+    if (!raw) continue;
+    const target = parse(raw);
+    if (target && /^https?:$/.test(target.protocol)) return target.toString();
+  }
+  return url;
+}

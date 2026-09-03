@@ -111,6 +111,36 @@ section("Reading what a feed actually sends");
   );
 }
 
+/* --------------------------------------------------- redirect unwrapping */
+
+section("A search feed links to itself; the article is in the query string");
+{
+  const { unwrapRedirect } = await import("../lib/ingest/meta.ts");
+  check(
+    "Bing's click wrapper gives up the real address",
+    unwrapRedirect("http://www.bing.com/news/apiclick.aspx?ref=FexRss&aid=&url=https%3a%2f%2fwww.reuters.com%2fworld%2fx") ===
+      "https://www.reuters.com/world/x"
+  );
+  check(
+    "so does a Google redirect",
+    unwrapRedirect("https://www.google.com/url?q=https://apnews.com/article/y&sa=t") === "https://apnews.com/article/y"
+  );
+  check(
+    "an ordinary article link is left exactly as it is",
+    unwrapRedirect("https://www.npr.org/2026/09/03/x") === "https://www.npr.org/2026/09/03/x"
+  );
+  check(
+    "a Google News blob has no address to give, and is not mangled",
+    unwrapRedirect("https://news.google.com/rss/articles/CBMimgFBVV95cUx?oc=5") ===
+      "https://news.google.com/rss/articles/CBMimgFBVV95cUx?oc=5"
+  );
+  check(
+    "a wrapper carrying something that is not a URL is left alone",
+    unwrapRedirect("http://www.bing.com/news/apiclick.aspx?url=javascript:alert(1)").startsWith("http://www.bing.com")
+  );
+  check("junk in, junk out, no throw", unwrapRedirect("not a url") === "not a url");
+}
+
 /* ------------------------------------------------------- item recording */
 
 section("What arrives twice is recorded once");

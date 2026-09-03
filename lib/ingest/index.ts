@@ -159,6 +159,17 @@ export async function addUrl(opts: Provenance & {
   budgetCap?: number | null;
   /** Chosen by you at add time. Left empty, the AI files it instead. */
   tags?: number[];
+  /**
+   * What to record when the page itself cannot be read.
+   *
+   * A search feed links to a redirect or to an aggregator that renders in the
+   * browser, and no amount of parsing recovers an article from either. The
+   * feed still told us the headline, the outlet, the time and a summary, and
+   * that is a real record — dated, attributed, searchable, and honest about
+   * being a summary rather than the piece. Failing instead would leave a watch
+   * on a phrase reporting nothing but errors.
+   */
+  fallbackText?: string;
 }): Promise<AddResult> {
   const isYouTube = /youtu\.?be/.test(opts.url);
   const kind: SourceKind = isYouTube ? "media" : "url";
@@ -198,7 +209,26 @@ export async function addUrl(opts: Provenance & {
       };
     }
 
-    const parsed = await parseUrl(opts.url);
+    let parsed: Awaited<ReturnType<typeof parseUrl>>;
+    try {
+      parsed = await parseUrl(opts.url);
+    } catch (err) {
+      // Nothing readable at the other end. Keep what the feed told us rather
+      // than throwing the item away — but say plainly that this is the
+      // summary, so nothing downstream mistakes it for the article.
+      if (!opts.fallbackText?.trim()) throw err;
+      const pieces = parseText(opts.fallbackText.trim());
+      db()
+        .prepare("UPDATE sources SET note=? WHERE id=?")
+        .run(
+          `The page could not be read (${(err as Error).message.slice(0, 120)}); this is the summary the feed carried.`,
+          sourceId
+        );
+      return finish(sourceId, pieces, opts.budgetCap, opts.tags, {
+        runId: opts.runId,
+        note: "Only the feed's own summary could be read; the page itself did not yield an article.",
+      });
+    }
     // What you supplied beats what the page declares.
     applyMeta(sourceId, {
       title: opts.title?.trim() || parsed.meta.title,
