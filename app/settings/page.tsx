@@ -305,6 +305,18 @@ export default function SettingsPage() {
         </p>
       )}
 
+      {cfg.keys.some((k) => k.provider === "anthropic") && (
+        <p className="rounded border border-[var(--color-rule)] bg-[var(--color-accent-soft)] px-3 py-2 text-sm">
+          <span className="font-medium">Claude is metered, not free.</span>{" "}
+          <span className="text-[var(--color-muted)]">
+            Every other service here refuses you when its allowance runs out; this one bills you
+            instead. So the routing below is a spending decision — reading a book is millions of
+            tokens, writing its entries is thousands. The per-model rates are on the key form
+            above.
+          </span>
+        </p>
+      )}
+
       <RoutingCard cfg={cfg} busy={busy} onSave={save} />
 
       <Card>
@@ -494,6 +506,20 @@ function RoutingCard({
       {configured.length < 2 && (
         <p className="mt-2 rounded bg-[var(--color-accent-soft)] px-3 py-2 text-sm">
           Add a key for a second service above and it will appear as an option here.
+        </p>
+      )}
+
+      {/* Only once there is a Claude key to route to, and only ever a
+          suggestion: the stored routing is the reader's, and changing it from
+          under them would be a surprise the next run pays for. */}
+      {choices.includes("anthropic") && (
+        <p className="mt-2 rounded bg-[var(--color-accent-soft)] px-3 py-2 text-sm">
+          <span className="font-medium">Suggested split.</span>{" "}
+          <span className="text-[var(--color-muted)]">
+            Reading passages, filing sources and gathering context on Gemini — they are mechanical
+            and there are thousands of them. Writing entries and answering questions on Claude,
+            where the judgement is worth the bill. Nothing changes until you set it below.
+          </span>
         </p>
       )}
 

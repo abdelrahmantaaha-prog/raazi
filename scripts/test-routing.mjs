@@ -39,6 +39,8 @@ const { providersFor, isNonLatin } = await import("../lib/ai/client.ts");
 const { toJsonSchema, dropNulls } = await import("../lib/ai/schema.ts");
 const { keyFailure } = await import("../lib/ai/errors.ts");
 const { HttpError } = await import("../lib/ai/openai.ts");
+const { PROVIDERS, PROVIDER_IDS, STAGES, spec } = await import("../lib/providers.ts");
+const { EFFORT } = await import("../lib/ai/anthropic.ts");
 
 // ---------------------------------------------------------------------------
 section("Translating a schema for providers that speak JSON Schema");
@@ -187,6 +189,84 @@ check("but Gemini is unaffected", keys.usableKeys("gemini").length === 1);
 
 const legacy = keys.listKeys().find((k) => k.key === "gem-key-0001");
 check("a key with no provider recorded is treated as Gemini", legacy.provider === "gemini");
+
+// ---------------------------------------------------------------------------
+section("Claude is on the ring");
+// ---------------------------------------------------------------------------
+check("anthropic is a provider the app knows", PROVIDER_IDS.includes("anthropic"));
+// spec() falls back to Gemini for anything it does not recognise, so asking
+// for the id back is what proves the table really has the row.
+check("and spec() resolves it rather than falling back", spec("anthropic").id === "anthropic");
+check(
+  "it is neither of the two shapes already handled",
+  spec("anthropic").kind === "anthropic",
+  spec("anthropic").kind
+);
+check("it is honest about being paid", /paid only/i.test(PROVIDERS.anthropic.freeTier));
+
+keys.addKey("sk-ant-key-0003", "Claude", { provider: "anthropic" });
+check(
+  "an Anthropic key is configured like any other",
+  keys.configuredProviders().includes("anthropic")
+);
+check("and gets Sonnet by default", keys.modelFor(keys.nextKey("anthropic")) === "claude-sonnet-5");
+check(
+  "with no date suffix — those are 404s on this API",
+  !/\d{8}$/.test(PROVIDERS.anthropic.defaultModel),
+  PROVIDERS.anthropic.defaultModel
+);
+
+saveConfig({ routing: { extract: "gemini", tag: "gemini", entry: "anthropic", ask: "anthropic" } });
+
+check("writing goes to Claude when you send it there", providersFor("entry")[0] === "anthropic");
+check("and so does answering", providersFor("ask")[0] === "anthropic");
+check("while the bulk reading stays on Gemini", providersFor("extract")[0] === "gemini");
+
+// ---------------------------------------------------------------------------
+section("Claude's capabilities are not negotiable either");
+// ---------------------------------------------------------------------------
+check(
+  "transcription never goes to Claude, however ask is routed",
+  !providersFor("ask", { need: "audio" }).includes("anthropic"),
+  JSON.stringify(providersFor("ask", { need: "audio" }))
+);
+check(
+  "and neither do embeddings",
+  !providersFor("entry", { need: "embed" }).includes("anthropic"),
+  JSON.stringify(providersFor("entry", { need: "embed" }))
+);
+// The other alternatives cannot see at all; Claude can, so it is allowed to be
+// offered here. The client still hands an image call back to the router,
+// because this adapter sends text only.
+check(
+  "but OCR may be offered to it, because Claude does read images",
+  providersFor("ask", { need: "vision" }).includes("anthropic"),
+  JSON.stringify(providersFor("ask", { need: "vision" }))
+);
+
+check(
+  "Gemini is still the last resort behind Claude",
+  providersFor("entry").at(-1) === "gemini",
+  JSON.stringify(providersFor("entry"))
+);
+for (const need of ["vision", "audio", "embed"]) {
+  check(
+    `and still the last resort for ${need}`,
+    providersFor("entry", { need }).at(-1) === "gemini",
+    JSON.stringify(providersFor("entry", { need }))
+  );
+}
+check(
+  "an Arabic source still overrides a Claude routing",
+  providersFor("entry", { lang: "ar" })[0] === "gemini",
+  providersFor("entry", { lang: "ar" })[0]
+);
+
+// Effort replaced temperature on this API, so a stage with no entry would
+// silently get the SDK default rather than the cost dial this app chose.
+for (const stage of STAGES) {
+  check(`effort is set for ${stage}`, Boolean(EFFORT[stage]), String(EFFORT[stage]));
+}
 
 fs.rmSync(SANDBOX, { recursive: true, force: true });
 console.log(`\n${failed === 0 ? "All passed" : "FAILURES PRESENT"}: ${passed} passed, ${failed} failed\n`);

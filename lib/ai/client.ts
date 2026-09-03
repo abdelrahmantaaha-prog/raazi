@@ -17,6 +17,7 @@ import { localKeys } from "../keys";
 import { brokerIsDown, brokerRetryAt, isBrokerKey } from "../broker";
 import { spec, type ProviderId, type Stage } from "../providers";
 import { chatJson, chatText, validateOpenAiKey } from "./openai";
+import { anthropicJson, anthropicText, validateAnthropicKey, EFFORT } from "./anthropic";
 import {
   AllKeysExhaustedError,
   SchemaUnsupportedError,
@@ -575,6 +576,22 @@ export async function generateJson<T>(opts: {
       });
     }
 
+    if (spec(provider).kind === "anthropic") {
+      // No `temperature`: Claude rejects every sampling parameter outright, and
+      // the callers all pass one. Effort is what replaced it, and it is chosen
+      // per stage rather than per call — see EFFORT.
+      return anthropicJson<T>({
+        apiKey: k.key,
+        model: opts.model ?? modelFor(k),
+        baseUrl: k.baseUrl,
+        system: opts.system,
+        prompt: partsToPrompt(opts.parts),
+        schema: opts.schema,
+        effort: EFFORT[opts.stage ?? ""],
+        timeoutMs,
+      });
+    }
+
     const ai = gemini(k, timeoutMs);
     const res = await ai.models.generateContent({
       model: opts.model ?? modelFor(k),
@@ -639,6 +656,27 @@ export async function generateText(opts: {
         system: opts.system,
         prompt: partsToPrompt(opts.parts),
         temperature: opts.temperature,
+        timeoutMs,
+      });
+    }
+
+    if (spec(provider).kind === "anthropic") {
+      // Claude can read images, so the router will offer it for OCR — but this
+      // adapter sends one text prompt, and partsToPrompt would drop the page
+      // silently rather than loudly. Hand the call back to the router, which
+      // moves it to the next provider (Gemini) instead of retrying every key
+      // here for an answer none of them can give.
+      if (opts.parts.some((p) => typeof p !== "string" && !("text" in p))) {
+        throw new SchemaUnsupportedError("Claude keys here take text only; images stay on Gemini.");
+      }
+      // Again no `temperature` — see generateJson.
+      return anthropicText({
+        apiKey: k.key,
+        model: opts.model ?? modelFor(k),
+        baseUrl: k.baseUrl,
+        system: opts.system,
+        prompt: partsToPrompt(opts.parts),
+        effort: EFFORT[opts.stage ?? ""],
         timeoutMs,
       });
     }
@@ -736,6 +774,9 @@ export async function validateKey(
 ): Promise<{ ok: boolean; error?: string }> {
   if (spec(provider).kind === "openai") {
     return validateOpenAiKey(provider, apiKey, model, baseUrl);
+  }
+  if (spec(provider).kind === "anthropic") {
+    return validateAnthropicKey(apiKey, model, baseUrl);
   }
   try {
     const ai = new GoogleGenAI({ apiKey, httpOptions: { timeout: 30_000 } });
