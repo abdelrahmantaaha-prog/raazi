@@ -35,7 +35,7 @@ const section = (t) => console.log(`\n${t}`);
 
 const keys = await import("../lib/keys.ts");
 const { saveConfig } = await import("../lib/config.ts");
-const { providersFor, isNonLatin } = await import("../lib/ai/client.ts");
+const { providersFor } = await import("../lib/ai/client.ts");
 const { toJsonSchema, dropNulls } = await import("../lib/ai/schema.ts");
 const { keyFailure } = await import("../lib/ai/errors.ts");
 const { HttpError } = await import("../lib/ai/openai.ts");
@@ -110,14 +110,14 @@ check("and says why, so it is fixable", /billing/i.test(keyFailure(unpaid).reaso
 section("Choosing who answers");
 // ---------------------------------------------------------------------------
 keys.addKey("gem-key-0001", "Gemini", { provider: "gemini" });
-keys.addKey("groq-key-0002", "Groq", { provider: "groq" });
+keys.addKey("ollama", "This machine", { provider: "ollama" });
 
 check("with nothing configured, everything goes to Gemini",
   providersFor("extract")[0] === "gemini", providersFor("extract")[0]);
 
-saveConfig({ routing: { extract: "groq" }, nonLatinProvider: "gemini" });
+saveConfig({ routing: { extract: "ollama" } });
 
-check("the routed stage goes where you sent it", providersFor("extract")[0] === "groq", providersFor("extract")[0]);
+check("the routed stage goes where you sent it", providersFor("extract")[0] === "ollama", providersFor("extract")[0]);
 check("other stages are untouched", providersFor("entry")[0] === "gemini", providersFor("entry")[0]);
 check(
   "but Gemini stays on the list as a fallback",
@@ -128,7 +128,7 @@ check(
 // ---------------------------------------------------------------------------
 section("Capabilities are not negotiable");
 // ---------------------------------------------------------------------------
-saveConfig({ routing: { extract: "groq", entry: "groq", resolve: "groq", tag: "groq" } });
+saveConfig({ routing: { extract: "ollama", entry: "ollama", resolve: "ollama", tag: "ollama" } });
 
 check(
   "OCR never goes to a provider that cannot see",
@@ -136,8 +136,8 @@ check(
   JSON.stringify(providersFor("extract", { need: "vision" }))
 );
 check(
-  "and Groq is not even offered for it",
-  !providersFor("extract", { need: "vision" }).includes("groq")
+  "and the local model is not even offered for it",
+  !providersFor("extract", { need: "vision" }).includes("ollama")
 );
 check(
   "transcription likewise",
@@ -145,46 +145,36 @@ check(
 );
 check(
   "and embeddings likewise",
-  providersFor(undefined, { need: "embed" }).every((p) => p !== "groq")
+  providersFor(undefined, { need: "embed" }).every((p) => p !== "ollama")
 );
 
 // ---------------------------------------------------------------------------
-section("Arabic stays where it is understood");
+section("Language does not steer the routing");
 // ---------------------------------------------------------------------------
-check("a declared Arabic source is recognised", isNonLatin("ar"));
-check("a declared English one is not", !isNonLatin("en"));
+// A source's script used to override the stage choice and send it to Gemini.
+// That quietly contradicted the routing — an Arabic source could never reach
+// the model you had chosen to write about it — so the rule is gone and there
+// is no language input to providersFor at all.
 check(
-  "an undeclared Arabic passage is recognised from its text",
-  isNonLatin(undefined, "قرر جمال عبد الناصر تأميم قناة السويس في يوليو 1956")
+  "the routing decides for every source, whatever its script",
+  providersFor("extract")[0] === "ollama",
+  providersFor("extract")[0]
 );
 check(
-  "an English passage quoting one Arabic word is not",
-  !isNonLatin(undefined, "Nasser announced the nationalisation of the canal, calling it تأميم, in July 1956.")
-);
-
-check(
-  "so an Arabic source overrides the routing",
-  providersFor("extract", { lang: "ar" })[0] === "gemini",
-  providersFor("extract", { lang: "ar" })[0]
-);
-check(
-  "even when only the text gives it away",
-  providersFor("extract", { sample: "قرر جمال عبد الناصر تأميم قناة السويس" })[0] === "gemini"
-);
-check(
-  "while English still goes to the cheap provider",
-  providersFor("extract", { lang: "en" })[0] === "groq"
+  "and nothing sends it back to Gemini behind your back",
+  providersFor("entry")[0] === "ollama",
+  providersFor("entry")[0]
 );
 
 // ---------------------------------------------------------------------------
 section("Keys belong to their provider");
 // ---------------------------------------------------------------------------
-check("each provider sees only its own keys", keys.usableKeys("groq").length === 1);
-check("and rotation cannot stray across them", keys.nextKey("groq").provider === "groq");
-check("both are configured", keys.configuredProviders().sort().join() === "gemini,groq");
+check("each provider sees only its own keys", keys.usableKeys("ollama").length === 1);
+check("and rotation cannot stray across them", keys.nextKey("ollama").provider === "ollama");
+check("both are configured", keys.configuredProviders().sort().join() === "gemini,ollama");
 
-keys.markExhausted(keys.nextKey("groq").id, "spent", 60);
-check("a spent Groq key leaves Groq with nothing", keys.usableKeys("groq").length === 0);
+keys.markExhausted(keys.nextKey("ollama").id, "spent", 60);
+check("a key set aside leaves its provider with nothing", keys.usableKeys("ollama").length === 0);
 check("but Gemini is unaffected", keys.usableKeys("gemini").length === 1);
 
 const legacy = keys.listKeys().find((k) => k.key === "gem-key-0001");
@@ -257,9 +247,9 @@ for (const need of ["vision", "audio", "embed"]) {
   );
 }
 check(
-  "an Arabic source still overrides a Claude routing",
-  providersFor("entry", { lang: "ar" })[0] === "gemini",
-  providersFor("entry", { lang: "ar" })[0]
+  "and an Arabic source reaches Claude like any other",
+  providersFor("entry")[0] === "anthropic",
+  providersFor("entry")[0]
 );
 
 // Effort replaced temperature on this API, so a stage with no entry would

@@ -1,7 +1,6 @@
 import crypto from "node:crypto";
 import { readStore, writeStore } from "./config-file";
 import { spec, type ProviderId } from "./providers";
-import { brokerKeys, isBrokerKey, patchBrokerKey } from "./broker";
 
 /**
  * The key ring.
@@ -90,35 +89,16 @@ export function listKeys(): ApiKey[] {
   if (envKey && !keys.some((k) => k.key === envKey)) {
     keys.unshift({ id: "env", label: "From GEMINI_API_KEY", key: envKey, provider: "gemini" });
   }
-  // The shared pool goes in front of everything: it rotates thirty-seven keys
-  // and knows what the other apps have already spent. These keys are on this
-  // machine, and they are the fallback for when the broker cannot be reached.
-  return [...brokerKeys(), ...keys].map((k) => ({ ...k, provider: k.provider ?? "gemini" }));
-}
-
-/** Keys that are genuinely this machine's — the broker is not one of them, and
- *  neither surface can upload a file that the other can then read. */
-export function localKeys(provider?: ProviderId): ApiKey[] {
-  return usableKeys(provider).filter((k) => !isBrokerKey(k.id));
+  return keys.map((k) => ({ ...k, provider: k.provider ?? "gemini" }));
 }
 
 function persist(keys: ApiKey[]) {
   const stored = read();
-  // The environment key is not ours to save, and neither is the broker's.
-  write({
-    ...stored,
-    keys: keys.filter((k) => k.id !== "env" && !isBrokerKey(k.id)),
-    apiKey: undefined,
-  });
+  // The environment key is not ours to save.
+  write({ ...stored, keys: keys.filter((k) => k.id !== "env"), apiKey: undefined });
 }
 
 function update(id: string, patch: Partial<ApiKey>) {
-  // The broker's state is a fact about the network, not about a key you own;
-  // it is remembered for this process and forgotten on restart.
-  if (isBrokerKey(id)) {
-    patchBrokerKey(id, patch);
-    return;
-  }
   const keys = listKeys().map((k) => (k.id === id ? { ...k, ...patch } : k));
   persist(keys);
 }
@@ -166,25 +146,9 @@ export function hasUsableKey(provider?: ProviderId): boolean {
   return usableKeys(provider).length > 0;
 }
 
-/**
- * Which providers you have at least one working key for.
- *
- * The shared pool counts only for Gemini. It offers a Groq surface too, but
- * whether anything answers there depends on what the broker holds, and
- * Settings reporting "Groq configured" the moment the pool is switched on —
- * with no Groq key anywhere you can see — was misleading people into routing
- * stages to a provider they never set up.
- */
+/** Which providers you have at least one key for. */
 export function configuredProviders(): ProviderId[] {
-  const out = new Set<ProviderId>();
-  for (const k of listKeys()) {
-    if (isBrokerKey(k.id)) {
-      if (k.provider === "gemini") out.add("gemini");
-      continue;
-    }
-    out.add(k.provider ?? "gemini");
-  }
-  return [...out];
+  return [...new Set(listKeys().map((k) => k.provider ?? "gemini"))];
 }
 
 export function modelFor(key: ApiKey): string {
@@ -374,10 +338,7 @@ export function publicKeys() {
     label: k.label,
     provider: (k.provider ?? "gemini") as ProviderId,
     model: modelFor(k),
-    // The pool's "key" is this app's token for it, and showing its last four
-    // characters would read as a key fragment. It is not one, and there is
-    // nothing about it worth recognising at a glance.
-    hint: isBrokerKey(k.id) ? "" : `…${k.key.slice(-4)}`,
+    hint: `…${k.key.slice(-4)}`,
     status: statusOf(k),
     availableAt: past(k.exhaustedUntil)
       ? past(k.cooldownUntil)
@@ -388,8 +349,5 @@ export function publicKeys() {
     calls: k.calls ?? 0,
     tokens: (k.tokensIn ?? 0) + (k.tokensOut ?? 0),
     fromEnv: k.id === "env",
-    /** The shared pool rather than a key of yours: nothing here to remove, and
-     *  its state is a fact about the network that a restart re-learns. */
-    shared: isBrokerKey(k.id),
   }));
 }

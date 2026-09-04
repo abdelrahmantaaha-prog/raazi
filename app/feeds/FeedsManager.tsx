@@ -1,6 +1,6 @@
 "use client";
 
-import { useState } from "react";
+import { useMemo, useState } from "react";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { formatDateTime, relativeDate } from "@/lib/dates";
@@ -61,6 +61,17 @@ export function FeedsManager({
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [note, setNote] = useState<string | null>(null);
+  const [filter, setFilter] = useState("");
+
+  const shown = useMemo(() => {
+    const q = filter.trim().toLowerCase();
+    if (!q) return feeds;
+    return feeds.filter((f) =>
+      [f.title, f.outlet, f.url, f.reliability].some((v) => (v ?? "").toLowerCase().includes(q))
+    );
+  }, [feeds, filter]);
+  const paused = feeds.filter((f) => !f.enabled).length;
+  const ceiling = feeds.reduce((n, f) => n + (f.enabled ? f.dailyCap : 0), 0);
 
   async function post(url: string, body: unknown, method = "POST") {
     const res = await fetch(url, {
@@ -229,8 +240,25 @@ export function FeedsManager({
           you are chasing.
         </p>
       ) : (
-        <ul className="space-y-3">
-          {feeds.map((f) => (
+        <>
+          {/* Sixty feeds is a list you search rather than scroll. */}
+          <div className="flex flex-wrap items-center gap-3">
+            <input
+              value={filter}
+              onChange={(e) => setFilter(e.target.value)}
+              placeholder="Filter by name, outlet or address"
+              className="min-w-[14rem] flex-1 rounded border border-[var(--color-rule)] px-3 py-1.5 text-sm outline-none focus:border-[var(--color-accent)]"
+            />
+            <span className="text-sm text-[var(--color-muted)]">
+              {shown.length === feeds.length
+                ? `${feeds.length} feeds`
+                : `${shown.length} of ${feeds.length}`}
+              {paused > 0 ? ` · ${paused} paused` : ""} · ceiling {ceiling} items a day
+            </span>
+          </div>
+
+          <ul className="space-y-3">
+            {shown.map((f) => (
             <li key={f.id} className="rounded border border-[var(--color-rule)] p-3">
               <div className="flex flex-wrap items-start justify-between gap-3">
                 <div className="min-w-0">
@@ -308,7 +336,14 @@ export function FeedsManager({
                   </button>
                   <button
                     type="button"
-                    onClick={() => act(f.id, null, "DELETE")}
+                    onClick={() => {
+                      // Everything else on this row is reversible; this is not,
+                      // and a list of sixty is a list you misclick in.
+                      const sure = window.confirm(
+                        `Stop following "${f.title}"? What it has already brought in stays in the library.`
+                      );
+                      if (sure) act(f.id, null, "DELETE");
+                    }}
                     className="rounded border border-[var(--color-rule)] px-2 py-1 text-xs text-red-700 hover:border-red-400"
                   >
                     Remove
@@ -324,9 +359,10 @@ export function FeedsManager({
                 placeholder="How far to trust this outlet — shown beside every citation from it"
                 className="mt-2 w-full rounded border border-dashed border-[var(--color-rule)] px-2 py-1 text-xs outline-none focus:border-[var(--color-accent)]"
               />
-            </li>
-          ))}
-        </ul>
+              </li>
+            ))}
+          </ul>
+        </>
       )}
 
       {recent.length > 0 ? (

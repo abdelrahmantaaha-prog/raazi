@@ -48,7 +48,8 @@ export function kindFor(filename: string): SourceKind {
 
 export interface AddResult {
   sourceId: number;
-  runId: number;
+  /** Null for a source that was held rather than queued — nothing is running. */
+  runId: number | null;
   chunks: number;
   scannedPages: number;
   note: string;
@@ -170,6 +171,16 @@ export async function addUrl(opts: Provenance & {
    * on a phrase reporting nothing but errors.
    */
   fallbackText?: string;
+  /**
+   * Fetch and chunk it, then stop and wait to be asked.
+   *
+   * What a feed pulls in is not yet something you have chosen to read. Holding
+   * costs nothing — the fetch and the chunking are local — and it is the whole
+   * saving: extraction is the expensive stage, and an article you would have
+   * dismissed by its first paragraph never reaches it. lib/triage.ts is what
+   * releases one.
+   */
+  hold?: boolean;
 }): Promise<AddResult> {
   const isYouTube = /youtu\.?be/.test(opts.url);
   const kind: SourceKind = isYouTube ? "media" : "url";
@@ -226,6 +237,7 @@ export async function addUrl(opts: Provenance & {
         );
       return finish(sourceId, pieces, opts.budgetCap, opts.tags, {
         runId: opts.runId,
+        hold: opts.hold,
         note: "Only the feed's own summary could be read; the page itself did not yield an article.",
       });
     }
@@ -243,6 +255,7 @@ export async function addUrl(opts: Provenance & {
     });
     return finish(sourceId, parsed.pieces, opts.budgetCap, opts.tags, {
       runId: opts.runId,
+      hold: opts.hold,
       note: "Article text extracted.",
     });
   } catch (err) {
@@ -339,7 +352,7 @@ function finish(
   rawPieces: Piece[],
   budgetCap: number | null | undefined,
   tags: number[] | undefined,
-  extra: { scannedPages?: number[]; note: string; runId?: number }
+  extra: { scannedPages?: number[]; note: string; runId?: number; hold?: boolean }
 ): AddResult {
   const scanned = extra.scannedPages ?? [];
 
@@ -357,6 +370,26 @@ function finish(
   const title = (
     db().prepare("SELECT title FROM sources WHERE id=?").get(sourceId) as { title: string }
   ).title;
+
+  if (extra.hold) {
+    const held = tx(() => {
+      const chunkIds = pieces.length ? writeChunks(sourceId, pieces) : [];
+      db()
+        .prepare("UPDATE sources SET status='chunked', triage='held', read_mode='eager' WHERE id=?")
+        .run(sourceId);
+      if (tags?.length) setSourceTags(sourceId, tags, "user");
+      return chunkIds.length;
+    });
+    return {
+      sourceId,
+      runId: null,
+      chunks: held,
+      scannedPages: 0,
+      note: [extra.note, saving, "Waiting in the inbox for you to say whether it is worth reading."]
+        .filter(Boolean)
+        .join(" "),
+    };
+  }
 
   const runId =
     extra.runId ??

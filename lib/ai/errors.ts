@@ -57,11 +57,10 @@ export class TruncatedOutputError extends Error {
  *
  * Distinct from a bad request, and distinct from a key problem: the request is
  * well formed and the key is fine, but this particular model cannot hold the
- * shape. Groq's gpt-oss-120b answers a rich extraction schema with
- * "json_validate_failed" and an empty generation — it spends its output budget
- * reasoning and never closes the object. Rotating keys inside that provider is
- * pointless (every key reaches the same model); the answer is the next
- * provider, which is what the router does with this.
+ * shape. A local model asked for the rich extraction schema does this: it
+ * spends its output budget reasoning and never closes the object. Rotating
+ * keys inside that provider is pointless (every key reaches the same model);
+ * the answer is the next provider, which is what the router does with this.
  */
 export class SchemaUnsupportedError extends Error {
   constructor(readonly detail: string) {
@@ -145,7 +144,7 @@ function isFilePermissionError(status: number | undefined, raw: string): boolean
 /**
  * Whether the provider refused because its model could not produce the shape.
  *
- * Groq says so explicitly; a model that returns an empty completion for a
+ * Some endpoints say so explicitly; a model that returns an empty completion for a
  * structured call has done the same thing without saying it.
  */
 export function isSchemaFailure(status: number | undefined, raw: string): boolean {
@@ -174,7 +173,7 @@ export function keyFailure(err: unknown): KeyFailure {
   const details = detailsOf(err);
 
   // OpenAI-compatible providers say it in prose rather than in quota metadata.
-  // Groq, for instance: "Rate limit reached for model X in organization Y on
+  // An OpenAI-shaped endpoint, for instance: "Rate limit reached for model X on
   // requests per day (RPD)" — the distinction between that and TPM is the same
   // one that decides whether to wait a minute or set the key aside for a day.
   const httpDelay = (err as { retryAfterMs?: number })?.retryAfterMs;

@@ -24,7 +24,24 @@ import { ENTITY_TYPES } from "./types";
  * do, which is also the only speed at which you can check it.
  */
 
-export type ReadMode = "eager" | "along";
+/**
+ * What reading a source does to the pedia.
+ *
+ *   eager  the whole thing is handed to the model when it arrives. Right for
+ *          an article: it is one or two calls.
+ *   along  passages are read as you get to them, so a 600-page book costs at
+ *          the speed you read rather than all at once on the day you add it.
+ *   shelf  nothing is ever extracted from it. The text is chunked, readable,
+ *          searchable and quotable by hand — it simply never becomes evidence
+ *          and never feeds an entry.
+ *
+ * "shelf" exists because not everything you want to keep is research. A novel,
+ * an art book, a catalogue you are reading for pleasure: putting those through
+ * extraction gives you a pedia full of characters and painters standing beside
+ * the people you actually cover, and it costs the most expensive stage in the
+ * application to do it.
+ */
+export type ReadMode = "eager" | "along" | "shelf";
 
 /**
  * Above this many passages a source is treated as a book: worth reading along
@@ -48,7 +65,7 @@ export interface ReadModeInput {
 
 /** The stored choice if there is one, otherwise the guess. */
 export function readModeOf(s: ReadModeInput): ReadMode {
-  if (s.read_mode === "eager" || s.read_mode === "along") return s.read_mode;
+  if (s.read_mode === "eager" || s.read_mode === "along" || s.read_mode === "shelf") return s.read_mode;
   return guessReadMode(s);
 }
 
@@ -324,7 +341,9 @@ export function queueExtractions(runId: number, sourceId: number, chunkIds: numb
     )
     .get(sourceId) as { read_mode: string | null; chunks: number } | undefined;
 
-  if (!source || readModeOf(source) === "along") return 0;
+  // Only an eager source is read in bulk: "along" waits for you to get there,
+  // and "shelf" is never read at all.
+  if (!source || readModeOf(source) !== "eager") return 0;
 
   enqueue(
     runId,
@@ -333,6 +352,72 @@ export function queueExtractions(runId: number, sourceId: number, chunkIds: numb
   const stamp = db().prepare("UPDATE chunks SET queued_at=datetime('now') WHERE id=?");
   for (const id of chunkIds) stamp.run(id);
   return chunkIds.length;
+}
+
+/**
+ * Reads whatever of this source has never been read, now.
+ *
+ * The way back off the shelf, and the way a held article starts once you keep
+ * it. Nothing is re-read: a passage that already has evidence, or is already
+ * queued, or was skipped for a reason, is left exactly as it is.
+ */
+export function queueUnread(sourceId: number): { queued: number; runId: number | null } {
+  const runId = readingRun(sourceId);
+  const queued = tx(() => {
+    const n = queueUnreadInto(runId, sourceId);
+    if (n > 0) {
+      dropPendingTail(runId);
+      appendTail(runId, sourceId);
+    }
+    return n;
+  });
+  return queued > 0 ? { queued, runId } : { queued: 0, runId: null };
+}
+
+/**
+ * The same, into a run the caller owns and closes.
+ *
+ * Separate because keeping ten articles from the inbox is one run with ten
+ * sources in it, not ten runs — and one tail at the end of it rather than ten,
+ * since resolution compares everything against everything and running it per
+ * article would do the same work ten times. See lib/triage.ts.
+ */
+export function queueUnreadInto(runId: number, sourceId: number): number {
+  // "Shelf" means never, and it means it here too: this is the function every
+  // other way in eventually calls, so the guard belongs at the bottom rather
+  // than repeated at each caller.
+  const source = db()
+    .prepare(
+      `SELECT s.read_mode, (SELECT COUNT(*) FROM chunks c WHERE c.source_id = s.id) AS chunks
+         FROM sources s WHERE s.id = ?`
+    )
+    .get(sourceId) as { read_mode: string | null; chunks: number } | undefined;
+  if (!source || readModeOf(source) === "shelf") return 0;
+
+  const due = (
+    db()
+      .prepare(
+        `SELECT id FROM chunks
+          WHERE source_id = ? AND extracted_at IS NULL AND queued_at IS NULL AND skip_reason IS NULL
+          ORDER BY seq`
+      )
+      .all(sourceId) as { id: number }[]
+  ).map((c) => c.id);
+  if (!due.length) return 0;
+
+  enqueue(
+    runId,
+    due.map((chunkId) => ({ kind: "extract" as const, payload: { chunkId } }))
+  );
+  const stamp = db().prepare("UPDATE chunks SET queued_at=datetime('now') WHERE id=?");
+  for (const id of due) stamp.run(id);
+  db().prepare("UPDATE sources SET status='extracting' WHERE id=?").run(sourceId);
+  return due.length;
+}
+
+/** The reconciliation every reading ends with, for a caller that owns the run. */
+export function appendReadingTail(runId: number, sourceId: number): void {
+  appendTail(runId, sourceId);
 }
 
 /** Passages of this source the model has not read yet. */

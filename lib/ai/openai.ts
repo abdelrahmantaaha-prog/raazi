@@ -4,10 +4,10 @@ import { toJsonSchema, dropNulls } from "./schema";
 import { TruncatedOutputError, SchemaUnsupportedError, isSchemaFailure } from "./errors";
 
 /**
- * One adapter for every provider that is not Gemini. Groq, Cerebras,
- * OpenRouter, Mistral and anything local (Ollama, LM Studio, vLLM) all speak
- * the OpenAI Chat Completions API, so they differ only by base URL and model
- * name — both of which live in lib/providers.ts.
+ * The OpenAI Chat Completions adapter. One provider uses it now — Ollama on
+ * this machine — but anything local that speaks the same API (LM Studio,
+ * vLLM, another machine's GPU) differs only by base URL and model name, both
+ * of which live in lib/providers.ts.
  *
  * Deliberately written against `fetch` rather than the OpenAI SDK: the surface
  * used here is two endpoints, and a dependency that ships its own retry and
@@ -35,9 +35,7 @@ export class HttpError extends Error {
   constructor(
     public readonly status: number,
     body: string,
-    public readonly retryAfterMs?: number,
-    /** The shared pool's x-broker-retry-at, when it answered "all spent". */
-    public readonly retryAt?: string
+    public readonly retryAfterMs?: number
   ) {
     super(`${status} ${body.slice(0, 800)}`);
   }
@@ -48,11 +46,8 @@ export class HttpError extends Error {
  *  than any text call legitimately takes and shorter than anyone's patience. */
 export const DEFAULT_TIMEOUT_MS = 180_000;
 
-/** What a call comes back with, beyond the body: the model the pool reports
- *  having actually used, when it went through the pool. */
 interface Posted {
   body: unknown;
-  model?: string;
 }
 
 async function post(
@@ -71,10 +66,6 @@ async function post(
     headers: {
       "content-type": "application/json",
       authorization: `Bearer ${apiKey}`,
-      // OpenRouter asks callers to identify themselves; harmless elsewhere.
-      ...(provider === "openrouter"
-        ? { "HTTP-Referer": "https://localhost", "X-Title": "Corpus" }
-        : {}),
     },
     body: JSON.stringify(body),
     // The whole exchange, headers to last byte. A hung connection surfaces
@@ -86,18 +77,16 @@ async function post(
   if (!res.ok) {
     const text = await res.text().catch(() => "");
     const retryAfter = res.headers.get("retry-after");
-    // Groq reports the wait in a header rather than the body.
     const resetTokens = res.headers.get("x-ratelimit-reset-tokens");
     const resetRequests = res.headers.get("x-ratelimit-reset-requests");
     throw new HttpError(
       res.status,
       text,
-      parseDelay(retryAfter) ?? parseDelay(resetTokens) ?? parseDelay(resetRequests),
-      res.headers.get("x-broker-retry-at") ?? undefined
+      parseDelay(retryAfter) ?? parseDelay(resetTokens) ?? parseDelay(resetRequests)
     );
   }
 
-  return { body: await res.json(), model: res.headers.get("x-broker-model") ?? undefined };
+  return { body: await res.json() };
 }
 
 /** "20", "20s", "1m30s", "2.5s" -> milliseconds. */
@@ -199,7 +188,7 @@ export async function chatJson<T>(opts: {
   const content = choice?.message?.content;
   if (!content) throw new Error(`Empty response (finish_reason=${choice?.finish_reason ?? "none"}).`);
 
-  return { data: dropNulls(parseJson<T>(content)), usage: usageOf(res), model: posted.model ?? res.model };
+  return { data: dropNulls(parseJson<T>(content)), usage: usageOf(res), model: res.model };
 }
 
 export async function chatText(opts: {
@@ -233,7 +222,7 @@ export async function chatText(opts: {
   if (choice?.finish_reason === "length") throw new TruncatedOutputError();
   const content = choice?.message?.content;
   if (!content) throw new Error("Empty response.");
-  return { data: content, usage: usageOf(res), model: posted.model ?? res.model };
+  return { data: content, usage: usageOf(res), model: res.model };
 }
 
 /** Some models still wrap JSON in a code fence despite being asked not to. */

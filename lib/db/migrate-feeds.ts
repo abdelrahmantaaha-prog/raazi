@@ -1,5 +1,17 @@
 import type Database from "better-sqlite3";
 
+function hasColumn(db: Database.Database, table: string, column: string): boolean {
+  return (db.prepare(`PRAGMA table_info(${table})`).all() as { name: string }[]).some(
+    (c) => c.name === column
+  );
+}
+
+function addColumn(db: Database.Database, table: string, column: string, ddl: string) {
+  if (hasColumn(db, table, column)) return;
+  db.exec(`ALTER TABLE ${table} ADD COLUMN ${column} ${ddl}`);
+  console.log(`[corpus] migrated: ${table}.${column}`);
+}
+
 /**
  * The aggregator: feeds, the items they carry, the stories those items belong
  * to, what you are watching, and the daily brief.
@@ -130,4 +142,39 @@ export function migrateFeeds(db: Database.Database) {
       created_at  TEXT    NOT NULL DEFAULT (datetime('now'))
     );
   `);
+
+  // --- Review before reading (2026-09-05) ------------------------------------
+  //
+  // A feed used to pull an article and hand it straight to the extractor. That
+  // is the right shape for a library you chose book by book and the wrong one
+  // for a beat: most of what a wire feed carries is not your story, and paying
+  // to read it is paying to be told so. So an article now arrives, is fetched
+  // and chunked — both free — and then waits. Nothing costs a token until you
+  // say the piece is worth reading.
+
+  // When you decided about this item, so an inbox can show what is still open
+  // and a week can be built from what you actually kept.
+  addColumn(db, "feed_items", "decided_at", "TEXT");
+
+  // The decision, on the source rather than only on the feed item, because
+  // everything downstream — the library, the brief, the stories — reads
+  // sources. NULL means "not from a feed, or from before this existed", and
+  // those behave exactly as they always did.
+  //   held      fetched and chunked, waiting for you
+  //   kept      you said yes; the reading pipeline has it
+  //   discarded you said no; it stays only so the address is still recognised
+  addColumn(db, "sources", "triage", "TEXT");
+
+  // When you said yes. The weekly brief runs on this rather than on when the
+  // piece was published: an article from Sunday that you kept on Monday is
+  // Monday's work, which is how you will remember it and where you will look
+  // for it. NULL for everything that never went through an inbox.
+  addColumn(db, "sources", "kept_at", "TEXT");
+  db.exec(`CREATE INDEX IF NOT EXISTS idx_sources_triage ON sources(triage) WHERE triage IS NOT NULL;`);
+  db.exec(`CREATE INDEX IF NOT EXISTS idx_feed_items_state ON feed_items(state);`);
+
+  // A brief is now either a day's or a week's. The key stays in `day` — a
+  // week's is its Friday, prefixed — so the UNIQUE constraint still holds and
+  // no table has to be rebuilt.
+  addColumn(db, "briefs", "kind", "TEXT NOT NULL DEFAULT 'day'");
 }

@@ -31,8 +31,8 @@ export function migrateQueue(db: Database.Database) {
   // of two is the wrong trade. NULL means "just use seq".
   addColumn(db, "tasks", "order_hint", "REAL");
 
-  // Which model actually answered. The shared pool is allowed to drop to a
-  // smaller model when the one asked for is spent, and says so in a header;
-  // this is where that answer is kept so the UI can show it.
+  // Which model actually answered — a Gemini alias resolves to a version, and
+  // an entry you may cite should say which one wrote it. Kept here so the UI
+  // can show it.
   addColumn(db, "tasks", "model", "TEXT");
 }

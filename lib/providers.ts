@@ -1,26 +1,23 @@
 /**
  * Who can answer which kind of question.
  *
- * Roughly 88% of this app's token spend is the `extract` stage: plain text in,
- * structured JSON out, no images and no audio. That work can go to whichever
- * free tier is most generous. OCR, transcription and embeddings cannot — very
- * few free providers do them at all, which is why Gemini stays the backbone
- * rather than being replaced.
+ * Three, deliberately. The free-tier scramble — Groq, Cerebras, OpenRouter,
+ * Mistral and a shared key pool in front of them — is gone: it bought quota at
+ * the price of never knowing which model wrote an entry, and for research you
+ * intend to cite that is the wrong trade. What is left is Gemini for the
+ * reading, Claude for the writing, and this machine's own GPU for whatever you
+ * would rather never send anywhere.
  *
- * Everything except Gemini and Anthropic speaks the OpenAI Chat Completions
- * API, so one adapter covers all of those and adding another is a row in this
- * table. Anthropic is the exception that needed a third adapter: its request
- * shape is neither of the two, so no base URL can reach it through `custom`.
+ * OCR, transcription and embeddings stay on Gemini whatever the routing says:
+ * it is the only one of the three that does all of them.
+ *
+ * Gemini and Ollama each have an adapter; Ollama speaks the OpenAI Chat
+ * Completions API, so pointing that adapter at another local server is a base
+ * URL, not code. Anthropic needed a third adapter — its request shape is
+ * neither of the other two.
  */
 
-export type ProviderId =
-  | "gemini"
-  | "groq"
-  | "cerebras"
-  | "openrouter"
-  | "mistral"
-  | "anthropic"
-  | "custom";
+export type ProviderId = "gemini" | "anthropic" | "ollama";
 
 export interface Capabilities {
   /** Reliable structured output against a supplied JSON schema. */
@@ -49,8 +46,8 @@ export interface ProviderSpec {
    *  prints this verbatim, so a paid provider has to say so here or it reads
    *  as free. */
   freeTier: string;
-  /** True when extra keys genuinely multiply your quota. Groq counts usage per
-   *  organisation, so a second key there buys nothing. */
+  /** True when extra keys genuinely multiply your quota. Anthropic bills the
+   *  account, so a second key there is a second label on one bill. */
   keysMultiply: boolean;
 }
 
@@ -66,59 +63,6 @@ export const PROVIDERS: Record<ProviderId, ProviderSpec> = {
     note: "The only free tier that also does OCR, transcription and embeddings. Strong on Arabic.",
     freeTier: "~1,500 requests/day, 10/min",
     keysMultiply: true,
-  },
-  groq: {
-    id: "groq",
-    label: "Groq",
-    kind: "openai",
-    baseUrl: "https://api.groq.com/openai/v1",
-    // Groq retired the Llama 3.3 line this default used to name, and a model
-    // that no longer exists reads as a 404 rather than as a missing model —
-    // check /v1/models if this one goes the same way.
-    defaultModel: "openai/gpt-oss-120b",
-    keysUrl: "https://console.groq.com/keys",
-    capabilities: { json: true, vision: false, audio: false, embed: false },
-    note: "Very fast and a generous daily allowance, but a low tokens-per-minute ceiling.",
-    freeTier: "~14,400 requests/day, 30/min, 6k tokens/min",
-    keysMultiply: false,
-  },
-  cerebras: {
-    id: "cerebras",
-    label: "Cerebras",
-    kind: "openai",
-    baseUrl: "https://api.cerebras.ai/v1",
-    // Their catalogue turns over — the Llama models this once defaulted to are
-    // gone. Check /v1/models if a key reports the model was not found.
-    defaultModel: "gpt-oss-120b",
-    keysUrl: "https://cloud.cerebras.ai",
-    capabilities: { json: true, vision: false, audio: false, embed: false },
-    note: "Very high throughput, but inference now needs billing enabled on the account — a key alone may return 402.",
-    freeTier: "billing required on newer accounts",
-    keysMultiply: false,
-  },
-  openrouter: {
-    id: "openrouter",
-    label: "OpenRouter",
-    kind: "openai",
-    baseUrl: "https://openrouter.ai/api/v1",
-    defaultModel: "meta-llama/llama-3.3-70b-instruct:free",
-    keysUrl: "https://openrouter.ai/keys",
-    capabilities: { json: true, vision: false, audio: false, embed: false },
-    note: "Many models behind one key, but free models rotate out without notice — bad for repeatable research.",
-    freeTier: "50 requests/day free (1,000 after a one-off $10)",
-    keysMultiply: false,
-  },
-  mistral: {
-    id: "mistral",
-    label: "Mistral",
-    kind: "openai",
-    baseUrl: "https://api.mistral.ai/v1",
-    defaultModel: "mistral-small-latest",
-    keysUrl: "https://console.mistral.ai/api-keys",
-    capabilities: { json: true, vision: false, audio: false, embed: true },
-    note: "A huge monthly token allowance at only ~2 requests/minute — and the free tier requires opting into training on your data.",
-    freeTier: "~1B tokens/month, ~2 requests/min",
-    keysMultiply: false,
   },
   anthropic: {
     id: "anthropic",
@@ -142,16 +86,19 @@ export const PROVIDERS: Record<ProviderId, ProviderSpec> = {
     // label on the same bill.
     keysMultiply: false,
   },
-  custom: {
-    id: "custom",
-    label: "Custom (OpenAI-compatible)",
+  ollama: {
+    id: "ollama",
+    label: "Local (Ollama)",
     kind: "openai",
-    baseUrl: "http://localhost:11434/v1",
-    defaultModel: "llama3.1",
-    keysUrl: "",
+    // The environment wins so a run can point at another machine's GPU, or at
+    // LM Studio or vLLM — anything speaking the OpenAI API answers here.
+    baseUrl: process.env.OLLAMA_BASE_URL?.replace(/\/+$/, "") || "http://127.0.0.1:11434/v1",
+    // What is actually pulled on this machine (see Mutarjim's bench, Sep 2026).
+    defaultModel: "qwen3.5:9b",
+    keysUrl: "https://ollama.com/library/qwen3.5",
     capabilities: { json: true, vision: false, audio: false, embed: false },
-    note: "Anything speaking the OpenAI API — Ollama, LM Studio, vLLM. No quota at all, and nothing leaves the machine.",
-    freeTier: "whatever your hardware allows",
+    note: "Runs on this machine's GPU — free, offline, and nothing leaves the computer. Any text works as the key.",
+    freeTier: "unlimited; the model has to be pulled first (ollama pull qwen3.5:9b)",
     keysMultiply: false,
   },
 };

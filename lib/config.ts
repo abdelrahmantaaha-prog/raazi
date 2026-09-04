@@ -10,12 +10,6 @@ export interface Config {
    * moving it is what makes a free Gemini quota last.
    */
   routing: Partial<Record<Stage, ProviderId>>;
-  /**
-   * Where non-Latin sources go regardless of the routing above. The free
-   * alternatives are appreciably weaker on Arabic, and a missed name is a
-   * silent loss rather than a slow one.
-   */
-  nonLatinProvider: ProviderId;
   /** How long a key sits out after a quota refusal before it is tried again.
    *  Doubles on each consecutive refusal, so a genuinely spent day settles. */
   keyRetryMinutes: number;
@@ -47,7 +41,22 @@ export interface Config {
   entryLanguage: string;
   /** Poll the feeds you follow while the app is running. */
   feedPolling: boolean;
-  /** Write a brief each day, once the morning's feeds are in. */
+  /**
+   * Hold what the feeds pull in until you have looked at it.
+   *
+   * On, an article is fetched and chunked — both free — and then waits in the
+   * inbox; keeping it is what starts the reading. Off is the old behaviour,
+   * where every article a feed carried was read in full on arrival. For a beat
+   * that is most of a wire service's day, at the most expensive stage there is.
+   */
+  feedReview: boolean;
+  /**
+   * Write a brief each day, once the morning's feeds are in.
+   *
+   * With `feedReview` on this waits for an empty inbox: a brief written over
+   * articles you have not looked at yet is a brief about a fraction of the
+   * morning, and it would be the one you read.
+   */
   dailyBrief: boolean;
   /** How many hours back a brief looks. A day, unless you read less often. */
   briefHours: number;
@@ -55,7 +64,6 @@ export interface Config {
 
 const DEFAULTS: Config = {
   routing: {},
-  nonLatinProvider: "gemini",
   keyRetryMinutes: 60,
   model: "gemini-flash-latest",
   embedModel: "gemini-embedding-001",
@@ -69,6 +77,7 @@ const DEFAULTS: Config = {
   defaultBudget: 0,
   entryLanguage: "en",
   feedPolling: true,
+  feedReview: true,
   dailyBrief: true,
   briefHours: 24,
 };
@@ -92,7 +101,6 @@ export function publicConfig() {
   return {
     keys: publicKeys(),
     routing: c.routing,
-    nonLatinProvider: c.nonLatinProvider,
     keyRetryMinutes: c.keyRetryMinutes,
     model: c.model,
     embedModel: c.embedModel,
@@ -105,6 +113,7 @@ export function publicConfig() {
     morningHour: c.morningHour,
     entryLanguage: c.entryLanguage,
     feedPolling: c.feedPolling,
+    feedReview: c.feedReview,
     dailyBrief: c.dailyBrief,
     briefHours: c.briefHours,
   };

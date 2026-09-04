@@ -140,8 +140,6 @@ export async function handleContext(task: Task): Promise<void> {
     resolutions: { id: number; refersTo?: string }[];
   }>({
     stage: "extract",
-    lang: chunk.source_lang ?? undefined,
-    sample: chunk.text.slice(0, 600),
     system: SYSTEM,
     schema: SCHEMA,
     temperature: 0.1,

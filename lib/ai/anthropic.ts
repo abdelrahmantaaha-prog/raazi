@@ -8,8 +8,8 @@ import { TruncatedOutputError, SafetyBlockError } from "./errors";
  *
  * Claude speaks neither of the two shapes this app already knows. It is not
  * Gemini's `generateContent`, and it is not the OpenAI Chat Completions shape
- * that Groq, Mistral and Ollama share — so `custom` cannot reach it however
- * the base URL is set. Hence a third adapter rather than a row in the table.
+ * that Ollama speaks — so no base URL on that adapter can reach it. Hence a
+ * third adapter rather than a row in the table.
  *
  * Three differences from the other two are load-bearing:
  *
@@ -69,7 +69,7 @@ const MAX_TOKENS = 16_000;
 function client(opts: AnthropicCall): Anthropic {
   return new Anthropic({
     apiKey: opts.apiKey,
-    // The shared pool proxies Claude too, when it is pointed at one.
+    // A key may name a proxy that speaks Anthropic's API.
     ...(opts.baseUrl ? { baseURL: opts.baseUrl } : {}),
     timeout: opts.timeoutMs ?? 180_000,
     // Retries are the worker's job: it owns the backoff, the key rotation and

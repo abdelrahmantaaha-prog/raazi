@@ -409,8 +409,6 @@ export async function handleEntry(task: Task): Promise<void> {
     contradictions?: { claimA: string; claimB: string; mentionA?: number; mentionB?: number }[];
   }>({
     stage: "entry",
-    lang: language,
-    sample: evidence.map((m) => m.quote).join(" ").slice(0, 600),
     system,
     schema: SCHEMA,
     parts,

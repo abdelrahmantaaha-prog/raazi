@@ -358,10 +358,6 @@ export async function handleExtract(task: Task): Promise<void> {
 
   const { data, usage } = await generateJson<ChunkExtraction>({
     stage: "extract",
-    // Routing honours the source's language: the cheap providers are weaker on
-    // non-Latin scripts, and a name missed there is lost silently.
-    lang: chunk.source_lang ?? undefined,
-    sample: chunk.text.slice(0, 600),
     // What you have rejected from this source before, in your words. Appended
     // rather than woven in, so the standing rules stay one block and a
     // correction never quietly rewrites them.

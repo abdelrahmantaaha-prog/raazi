@@ -22,6 +22,10 @@ const NAV = [
   // The brief is first because it is what a morning starts with; the library
   // is where you go when you already know what you are looking for.
   { href: "/brief", label: "Brief", icon: Sun },
+  // Then the two halves of a working week: what the feeds pulled in and is
+  // waiting on you, and what you kept, which is what gets presented.
+  { href: "/inbox", label: "Inbox", icon: Tray },
+  { href: "/week", label: "This week", icon: Week },
   { href: "/", label: "Library", icon: Books, exact: true },
   { href: "/stories", label: "Stories", icon: Thread },
   { href: "/write", label: "Write", icon: Pen },
@@ -31,6 +35,7 @@ const NAV = [
   { href: "/study", label: "Study", icon: Cap },
   { href: "/tags", label: "Topics", icon: Tag },
   { href: "/feeds", label: "Feeds", icon: Rss },
+  { href: "/discover", label: "Search news", icon: Radar },
   { href: "/search", label: "Search", icon: Glass },
   { href: "/quotes", label: "Quotes", icon: Quote },
   { href: "/settings", label: "Settings", icon: Gear },
@@ -124,6 +129,35 @@ function Thread({ active }: IconProps) {
       <circle cx="6" cy="18" r="2" />
       <circle cx="18" cy="12" r="2" />
       <path d="M8 6h4a4 4 0 0 1 4 4M8 18h4a4 4 0 0 0 4-4" />
+    </svg>
+  );
+}
+
+function Radar({ active }: IconProps) {
+  return (
+    <svg {...box} strokeWidth={active ? 2 : 1.7}>
+      <circle cx="12" cy="12" r="9" />
+      <circle cx="12" cy="12" r="5" />
+      <path d="M12 12l6-4" />
+    </svg>
+  );
+}
+
+function Tray({ active }: IconProps) {
+  return (
+    <svg {...box} strokeWidth={active ? 2 : 1.7}>
+      <path d="M3 13h4l2 3h6l2-3h4" />
+      <path d="M5 5h14l2 8v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4z" />
+    </svg>
+  );
+}
+
+function Week({ active }: IconProps) {
+  return (
+    <svg {...box} strokeWidth={active ? 2 : 1.7}>
+      <rect x="3" y="5" width="18" height="16" rx="2" />
+      <path d="M3 10h18M8 3v4M16 3v4" />
+      <path d="M7 14h4" />
     </svg>
   );
 }

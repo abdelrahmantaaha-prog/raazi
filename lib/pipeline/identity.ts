@@ -146,7 +146,6 @@ export async function handleIdentity(task: Task): Promise<void> {
     other?: { name: string; disambiguator?: string; mentions: number[] };
   }>({
     stage: "resolve",
-    sample: rows.map((r) => r.quote).join(" ").slice(0, 600),
     system: SYSTEM,
     schema: SCHEMA,
     temperature: 0.1,

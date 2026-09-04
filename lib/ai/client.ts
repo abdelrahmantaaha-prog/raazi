@@ -11,10 +11,9 @@ import {
   markUsed,
   modelFor,
   nextKey,
+  usableKeys,
   type ApiKey,
 } from "../keys";
-import { localKeys } from "../keys";
-import { brokerIsDown, brokerRetryAt, isBrokerKey } from "../broker";
 import { spec, type ProviderId, type Stage } from "../providers";
 import { chatJson, chatText, validateOpenAiKey } from "./openai";
 import { anthropicJson, anthropicText, validateAnthropicKey, EFFORT } from "./anthropic";
@@ -57,17 +56,15 @@ type Need = "vision" | "audio" | "embed" | undefined;
  *  1. A call needing OCR, transcription or embeddings goes to a provider that
  *     can actually do it. Almost nothing free can, which is why Gemini stays
  *     the backbone rather than being replaced.
- *  2. Non-Latin text goes to the provider set for it. The alternatives are
- *     appreciably weaker on Arabic, and a missed name is a silent loss — worse
- *     than a slow one.
- *  3. Otherwise, whatever this stage is routed to.
+ *  2. Otherwise, whatever this stage is routed to — whatever language the
+ *     source is in.
  *
  * The result is a list, not one provider: if the first has no usable keys the
  * call falls through to the next rather than parking the run.
  */
 export function providersFor(
   stage: Stage | undefined,
-  opts: { need?: Need; lang?: string; sample?: string } = {}
+  opts: { need?: Need } = {}
 ): ProviderId[] {
   const cfg = getConfig();
   const fallback: ProviderId = "gemini";
@@ -81,33 +78,12 @@ export function providersFor(
       if (p && capable(p) && !candidates.includes(p)) candidates.push(p);
     }
   } else {
-    const preferred = isNonLatin(opts.lang, opts.sample)
-      ? cfg.nonLatinProvider ?? fallback
-      : (stage && cfg.routing?.[stage]) || fallback;
-    candidates.push(preferred);
+    candidates.push((stage && cfg.routing?.[stage]) || fallback);
   }
 
   // Gemini is the last resort for everything, because it can do everything.
   if (!candidates.includes(fallback) && capable(fallback)) candidates.push(fallback);
   return candidates.length ? candidates : [fallback];
-}
-
-const NON_LATIN_SCRIPT = /[؀-ۿ֐-׿Ѐ-ӿ一-鿿぀-ヿ가-힯ऀ-ॿͰ-Ͽ฀-๿]/g;
-
-/**
- * A source's declared language is only set for EPUB and web articles — a PDF
- * or a pasted passage has none. So when there is no declaration, read the text.
- * A fifth of the characters being non-Latin is well clear of the odd loanword
- * or quoted phrase in an otherwise English document.
- */
-export function isNonLatin(lang?: string, sample?: string): boolean {
-  if (lang && /^(ar|fa|ur|he|ru|zh|ja|ko|hi|el|th)\b/i.test(lang)) return true;
-  if (lang && /^(en|fr|de|es|it|pt|nl|sv|tr|id|pl)\b/i.test(lang)) return false;
-
-  const text = sample ?? lang;
-  if (!text) return false;
-  const hits = (text.match(NON_LATIN_SCRIPT) ?? []).length;
-  return hits > text.length * 0.2;
 }
 
 // ---------------------------------------------------------------------------
@@ -184,25 +160,6 @@ declare global {
   var __corpusLastCall: Map<string, number> | undefined;
 }
 
-/**
- * How many of a single key's lanes the shared pool is treated as being worth.
- *
- * The pool is one key id here and a ring of keys behind it, so pacing it like a
- * single key would throttle the whole ring to one key's rate — the exact thing
- * the pool exists to avoid. That was the argument for not pacing it at all, and
- * it was the wrong conclusion: unpaced, a queue that fans one entity out into
- * four tasks emptied itself at whatever rate the loop could manage, which was a
- * thousand calls in an hour. Nothing downstream was in a position to say no
- * politely — the broker rotates keys, it never sleeps — so the pool absorbed
- * the burst as refusals, and refusals cost writes.
- *
- * Six is deliberately not thirty-seven. This is a guard against a runaway loop,
- * not a throughput budget: at the default ten a minute it allows sixty calls a
- * minute, comfortably above anything the pipeline produces when it is behaving
- * and comfortably below the rate at which it stops behaving.
- */
-const BROKER_LANES = 6;
-
 const DEFAULT_RPM = 10;
 
 /**
@@ -224,7 +181,7 @@ async function pace(keyId: string) {
   if (rpm === 0) return;
   if (!globalThis.__corpusLastCall) globalThis.__corpusLastCall = new Map();
 
-  const minGap = 60_000 / (isBrokerKey(keyId) ? rpm * BROKER_LANES : rpm);
+  const minGap = 60_000 / rpm;
   const last = globalThis.__corpusLastCall.get(keyId) ?? 0;
   const wait = last + minGap - Date.now();
   if (wait > 0) await new Promise((r) => setTimeout(r, wait));
@@ -247,11 +204,6 @@ const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
  * permanently, and only a hand revival brings them back.
  */
 const MAX_INVALID_PER_CALL = 2;
-
-/** How long the pool is set aside when it cannot say when it will be back. */
-const BROKER_FLAT_WAIT_MS = 60_000;
-/** And the ceiling on what it may ask for — beyond this the local keys go. */
-const BROKER_MAX_WAIT_MS = 30 * 60_000;
 
 /**
  * Runs a call against the candidate providers, rotating keys within each.
@@ -304,46 +256,6 @@ async function withRotation<T>(
         }
 
         const failure = keyFailure(err);
-
-        if (isBrokerKey(key.id)) {
-          // The broker being unreachable is not a refusal — it is the pool
-          // being out of the picture for a while. Step past it and let this
-          // machine's own keys take the work, which is what they were kept for.
-          if (brokerIsDown(err)) {
-            markCooldown(key.id, 5 * 60_000, "The shared key pool is unreachable.");
-            console.warn("[corpus] the key pool is unreachable; falling back to local keys");
-            continue;
-          }
-
-          // The pool is a service, not a key with a daily allowance. When it
-          // refuses on quota it refuses for now: it rotates its own ring and
-          // drops to a smaller model when one is spent, so its answer changes
-          // minute to minute. It says when the first of its keys comes back
-          // (broker_exhausted carries retryAt), and that is honoured — capped,
-          // since the local keys are right there — over any flat guess.
-          if (failure.kind === "rate" || failure.kind === "daily") {
-            const retryAt = brokerRetryAt(err);
-            const wait = retryAt
-              ? Math.min(Math.max(retryAt.getTime() - Date.now(), 5_000), BROKER_MAX_WAIT_MS)
-              : failure.kind === "rate"
-                ? Math.min(failure.delayMs, BROKER_MAX_WAIT_MS)
-                : BROKER_FLAT_WAIT_MS;
-            markCooldown(key.id, wait, `The shared key pool: ${failure.reason}`);
-            continue;
-          }
-
-          // A rejection through the pool is about the pool's keys or this
-          // app's token, neither of which a local key shares. Set it aside
-          // for a minute — never "invalid", which would need a hand revival
-          // for what a restart of the broker fixes.
-          if (failure.kind === "invalid") {
-            markCooldown(key.id, BROKER_FLAT_WAIT_MS, `The shared key pool: ${failure.reason}`);
-            continue;
-          }
-
-          // Anything else is the request's own problem. See above.
-          throw err;
-        }
 
         if (failure.kind === "daily") {
           invalidInARow = 0;
@@ -488,10 +400,9 @@ function bill(keyId: string, usage: Usage) {
 /**
  * The Gemini SDK, pointed wherever this key says.
  *
- * A key on the ring is a key; a key on the broker is a key plus a base URL, and
- * the SDK will happily talk to a proxy that speaks Google's own API — which is
- * exactly what the broker's /gemini surface is. Nothing else about the call
- * changes, which is why OCR, audio and response schemas all still work.
+ * A key may carry a base URL, and the SDK will happily talk to any proxy that
+ * speaks Google's own API. Nothing else about the call changes, which is why
+ * OCR, audio and response schemas all still work through one.
  */
 function gemini(k: ApiKey, timeoutMs = CALL_TIMEOUT_MS): GoogleGenAI {
   return new GoogleGenAI({
@@ -524,14 +435,10 @@ function usageOfGemini(res: {
   };
 }
 
-/** The model that answered a Gemini call: the pool's header when it went
- *  through the pool, else the version Google resolved the alias to. */
-function modelOfGemini(res: {
-  sdkHttpResponse?: { headers?: Record<string, string> };
-  modelVersion?: string;
-}): string | undefined {
-  const h = res.sdkHttpResponse?.headers ?? {};
-  return h["x-broker-model"] ?? h["X-Broker-Model"] ?? res.modelVersion ?? undefined;
+/** The model that answered a Gemini call: the version Google resolved the
+ *  alias to, when it said. */
+function modelOfGemini(res: { modelVersion?: string }): string | undefined {
+  return res.modelVersion ?? undefined;
 }
 
 function checkGeminiFinish(finish: unknown, blockReason?: unknown) {
@@ -550,13 +457,10 @@ export async function generateJson<T>(opts: {
   temperature?: number;
   model?: string;
   stage?: Stage;
-  lang?: string;
-  /** Text to sniff the script from when the source declares no language. */
-  sample?: string;
   /** Ceiling on one attempt, in ms. Defaults to three minutes. */
   timeoutMs?: number;
 }): Promise<CallResult<T>> {
-  const candidates = providersFor(opts.stage, { lang: opts.lang, sample: opts.sample });
+  const candidates = providersFor(opts.stage);
   const timeoutMs = timeoutFor(undefined, opts.timeoutMs, opts.stage);
 
   const { value, key } = await withRotation(candidates, async (k): Promise<CallResult<T>> => {
@@ -628,8 +532,6 @@ export async function generateText(opts: {
   temperature?: number;
   model?: string;
   stage?: Stage;
-  lang?: string;
-  sample?: string;
   need?: Need;
   /** Read with this key and no other — see uploadClient(). */
   pin?: string;
@@ -637,11 +539,7 @@ export async function generateText(opts: {
    *  call that needs to read images or audio. */
   timeoutMs?: number;
 }): Promise<CallResult<string>> {
-  const candidates = providersFor(opts.stage, {
-    need: opts.need,
-    lang: opts.lang,
-    sample: opts.sample,
-  });
+  const candidates = providersFor(opts.stage, { need: opts.need });
   const timeoutMs = timeoutFor(opts.need, opts.timeoutMs, opts.stage);
 
   const call = async (k: ApiKey): Promise<CallResult<string>> => {
@@ -736,20 +634,18 @@ export async function embed(texts: string[]): Promise<{ vectors: Float32Array[];
 /**
  * The file-upload API the SDK owns, and the key it is speaking as.
  *
- * This one call cannot go through the pool. The Files API hands back a URI that
- * only the uploading key can read, and the broker picks a fresh key per
- * request — so an upload there and a read here would be two different keys and
- * the file would not exist. It stays on a key this machine owns, and the caller
- * is told which one so the call that reads the file can ask for it by name.
+ * The Files API hands back a URI that only the uploading key can read, so the
+ * caller is told which key did the upload and the call that reads the file
+ * asks for it by name.
  */
 export function uploadClient(): { ai: GoogleGenAI; keyId: string } {
-  const key = localKeys("gemini")[0];
+  const key = usableKeys("gemini")[0];
   if (!key) throw new MissingKeyError();
   return { ai: gemini(key, MEDIA_TIMEOUT_MS), keyId: key.id };
 }
 
 /** For calls that need a Gemini client but no particular key — counting tokens,
- *  say. The pool is fine for those, so it is tried first as usual. */
+ *  say. */
 export function client(): GoogleGenAI {
   const key = nextKey("gemini");
   if (!key) throw new MissingKeyError();

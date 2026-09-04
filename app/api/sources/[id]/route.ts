@@ -2,6 +2,8 @@ import fs from "node:fs";
 import { NextResponse } from "next/server";
 import { asId, badRequest, exists, notFound, readBody } from "@/lib/http";
 import { db, tx } from "@/lib/db";
+import { queueUnread } from "@/lib/reading";
+import { kickWorker } from "@/lib/worker";
 
 export const dynamic = "force-dynamic";
 
@@ -9,9 +11,30 @@ export const dynamic = "force-dynamic";
 export async function PATCH(req: Request, ctx: { params: Promise<{ id: string }> }) {
   const id = asId((await ctx.params).id);
   if (id === null) return badRequest("Not a valid id.");
-  const body = await readBody<{ shelf?: string | null; readingState?: string | null }>(req);
+  const body = await readBody<{
+    shelf?: string | null;
+    readingState?: string | null;
+    readMode?: string | null;
+  }>(req);
   if (body === null) return badRequest("Malformed JSON body.");
   if (!exists("sources", id)) return notFound("No such source.");
+
+  if ("readMode" in body) {
+    const allowed = ["eager", "along", "shelf"];
+    if (body.readMode !== null && !allowed.includes(String(body.readMode))) {
+      return badRequest("readMode is eager, along or shelf.");
+    }
+    // Shelving does not delete what the source already contributed: those
+    // quotes are cited by entries elsewhere, and silently pulling them would
+    // leave a page of references to nothing. It stops from here on; deleting
+    // the source is the operation that takes its evidence with it.
+    db().prepare("UPDATE sources SET read_mode=? WHERE id=?").run(body.readMode ?? null, id);
+
+    // Coming off the shelf, whatever has never been read is queued now. A
+    // source that has been sitting there for a month is exactly as unread as
+    // it was on the day you shelved it, so this is the only way back in.
+    if (body.readMode === "eager" && queueUnread(id).queued) kickWorker();
+  }
 
   if ("shelf" in body) {
     if (body.shelf !== null && typeof body.shelf !== "string") return badRequest("shelf must be a string.");

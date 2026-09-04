@@ -4,6 +4,7 @@ import { generateJson } from "../ai/client";
 import { getConfig } from "../config";
 import { createRun, enqueue, finishTask } from "../queue";
 import { gather, getBrief, hasMaterial, todayKey, type BriefMaterial, type BriefPassage } from "../brief";
+import { describeWeek, isWeekKey, weekKey, weekRange } from "../week";
 import { normaliseMarkers } from "../markers";
 import type { Task } from "../types";
 
@@ -88,6 +89,59 @@ with nothing in it rather than announcing that it is empty. Inside a section:
 
 Write in the language you are told to use. Quote in the source's own language
 where you quote at all, which should be rarely and only for words that matter.`;
+
+/**
+ * The weekly one, which is a different document written from the same rows.
+ *
+ * A daily brief answers "what came in overnight". A weekly one is delivered to
+ * colleagues who did not read the dailies, so it has to say what MOVED across
+ * the week — where a story on Friday is not where it was on Monday — and it
+ * has to be readable by someone who is meeting the subject for the first time.
+ * The citation rule does not soften: this is the version that gets quoted back
+ * at you in a meeting, so every line still has to open the passage it rests on.
+ */
+const WEEKLY_SYSTEM = `You write the weekly brief for a political journalist covering North
+America and foreign policy. They present from it at work, to people who have
+not read a word of the week's coverage, and they will click every citation
+before they say any of it out loud.
+
+ABSOLUTE RULES
+
+- Every factual sentence ends with at least one citation marker naming the
+  passage it rests on. A sentence you cannot cite is a sentence you must not
+  write. Markers are written [[m:12]], several in a row separated by spaces:
+  [[m:12]] [[m:15]]. Never [[m:12], [m:15]].
+- Use only the passages supplied. You know a great deal about these subjects
+  and about what happened before this week; none of it goes in. This is what
+  THESE sources said in THIS week.
+- Name the outlet in the prose whenever a claim is not settled. An "attributed
+  to" line tells you whose claim it is; a kind of "allegation", "opinion",
+  "forecast" or "denial" means it must never be written as a fact.
+- Say when only one outlet has something, and say when several agree and who.
+  Never merge two outlets' numbers into one figure.
+- Where the passages disagree, that IS the item. Lead with the disagreement,
+  give both sides with their citations, and do not adjudicate.
+
+SHAPE — this is a week, not a day
+
+- Open with "The week in one paragraph": four or five sentences a colleague
+  could read alone and be caught up. Cited like everything else.
+- Then "What moved", the two to five developments that actually changed
+  position over the week. For each, say where it stood at the start of the
+  week and where it stands now, in that order — the movement is the story, and
+  a list of what was said on which day is not. Several days' passages about one
+  development are ONE item carrying several markers.
+- Then "Still running", one line each for the threads that were live but did
+  not move. Say plainly that they did not move.
+- Then "New this week" for what appeared for the first time.
+- Then, if the passages support them, "Where the reporting disagrees" and
+  "Worth chasing next week". The second of these takes no citations: it is the
+  only place in the document where you may write a question rather than a fact.
+- Drop any section with nothing in it rather than announcing it is empty. A
+  quiet week is a short brief, and padding it is worse.
+
+Write in the language you are told to use. Quote in the source's own language
+where you quote at all, and rarely.`;
 
 /** Passages, as the writer sees them: dated, attributed, from a named outlet. */
 function renderPassages(rows: BriefPassage[]): string {
@@ -189,15 +243,21 @@ export async function handleBrief(task: Task): Promise<void> {
   const key = day ?? todayKey();
   const free = { tokensIn: 0, tokensOut: 0 };
 
-  const to = new Date();
-  const from = new Date(to.getTime() - (hours ?? 24) * 3600_000);
-  const m = gather(from, to);
+  // A week's key carries its own window; a day's is the last N hours, because
+  // "today" for someone who opens the app at nine means since yesterday.
+  const week = isWeekKey(key);
+  const range = week ? weekRange(key) : null;
+  const to = range ? new Date(Math.min(Date.now(), range.to.getTime())) : new Date();
+  const from = range ? range.from : new Date(to.getTime() - (hours ?? 24) * 3600_000);
+  const m = gather(from, to, week ? { perWatch: 30, maxOther: 150 } : {});
 
   const row = getBrief(key);
   if (!row) {
     db()
-      .prepare("INSERT INTO briefs (day, state, window_from, window_to) VALUES (?, 'pending', ?, ?)")
-      .run(key, m.from, m.to);
+      .prepare(
+        "INSERT INTO briefs (day, kind, state, window_from, window_to) VALUES (?, ?, 'pending', ?, ?)"
+      )
+      .run(key, week ? "week" : "day", m.from, m.to);
   }
 
   if (!hasMaterial(m)) {
@@ -223,7 +283,9 @@ export async function handleBrief(task: Task): Promise<void> {
 
   const language = getConfig().entryLanguage || "en";
   const parts = [
-    `WINDOW: ${m.from.slice(0, 16).replace("T", " ")} to ${m.to.slice(0, 16).replace("T", " ")}`,
+    week
+      ? `WINDOW: the week of ${describeWeek(key)}, ${m.from.slice(0, 10)} to ${m.to.slice(0, 10)}`
+      : `WINDOW: ${m.from.slice(0, 16).replace("T", " ")} to ${m.to.slice(0, 16).replace("T", " ")}`,
     `WHAT ARRIVED: ${m.counts.sources} source(s), ${m.counts.passages} passage(s), ${m.counts.entities} subject(s), ${m.counts.stories} new stor${m.counts.stories === 1 ? "y" : "ies"}.`,
     ...material(m),
   ];
@@ -234,8 +296,7 @@ export async function handleBrief(task: Task): Promise<void> {
     questions?: string[];
   }>({
     stage: "entry",
-    lang: language,
-    system: `${SYSTEM}\n\nLANGUAGE: write in ${LANGUAGE_NAMES[language.split("-")[0]] ?? language}.`,
+    system: `${week ? WEEKLY_SYSTEM : SYSTEM}\n\nLANGUAGE: write in ${LANGUAGE_NAMES[language.split("-")[0]] ?? language}.`,
     schema: SCHEMA,
     temperature: 0.2,
     parts,
@@ -273,7 +334,7 @@ export async function handleBrief(task: Task): Promise<void> {
       task.run_id,
       usage,
       "done",
-      `Brief for ${key}: ${m.counts.sources} source(s), ${m.watched.length} watched subject(s).`
+      `${week ? "Weekly brief" : "Brief"} for ${key}: ${m.counts.sources} source(s), ${m.watched.length} watched subject(s).`
     );
   });
 }
@@ -290,12 +351,17 @@ export function queueBrief(opts: { day?: string; hours?: number; force?: boolean
     }
     const runId = createRun({
       kind: "brief",
-      label: `Brief for ${key}`,
+      label: isWeekKey(key) ? `Weekly brief, ${describeWeek(key)}` : `Brief for ${key}`,
       budgetCap: getConfig().defaultBudget,
     });
     enqueue(runId, [{ kind: "brief" as const, payload: { day: key, hours: opts.hours ?? 24 } }]);
     return { runId };
   });
+}
+
+/** Queues this week's, or a named week's. The window comes from the key. */
+export function queueWeeklyBrief(opts: { week?: string; force?: boolean } = {}): { runId: number } | null {
+  return queueBrief({ day: opts.week ?? weekKey(), force: opts.force });
 }
 
 /** True when a brief is already queued or running. */

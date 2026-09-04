@@ -129,7 +129,6 @@ export async function handleCards(task: Task): Promise<void> {
     system: SYSTEM,
     schema: SCHEMA,
     temperature: 0.4,
-    sample: rows.slice(0, 6).map((r) => r.quote).join(" ").slice(0, 600),
     parts: [
       `Make up to ${Math.min(rows.length, 20)} cards from these passages. ` +
         `Roughly half plain flashcards and half multiple-choice.\n\nPASSAGES:\n${material}`,

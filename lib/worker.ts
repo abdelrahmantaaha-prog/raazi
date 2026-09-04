@@ -4,6 +4,7 @@ import { getConfig } from "./config";
 import { queueStaleEntries, refreshInFlight } from "./entries";
 import { pollInFlight, queuePolls } from "./pipeline/poll";
 import { briefInFlight, queueBrief } from "./pipeline/brief";
+import { heldCount } from "./triage";
 import { getBrief, todayKey } from "./brief";
 import { nextMorningAt, runMorningChores } from "./chores";
 import {
@@ -533,6 +534,10 @@ function sweepBrief(): boolean {
   if (process.env.CORPUS_DATA_DIR) return false;
   if (s.briefedAt && Date.now() - s.briefedAt < 60_000) return false;
   if (briefInFlight() || pollInFlight()) return false;
+  // Nothing is written over an inbox you have not been through. A brief built
+  // from the fraction of the morning that happened to be read already is worse
+  // than no brief, because it is the one you would read.
+  if (cfg.feedReview && heldCount() > 0) return false;
 
   const now = new Date();
   if (now.getHours() < cfg.morningHour) return false;

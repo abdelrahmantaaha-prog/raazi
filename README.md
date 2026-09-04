@@ -49,30 +49,26 @@ remove one.
 
 ## Using more than one service
 
-Keys can come from Groq, Cerebras, OpenRouter, Mistral, or anything speaking the
-OpenAI API (Ollama, LM Studio, vLLM) as well as Gemini. **Settings → Who does what**
-then decides which service handles which stage.
+There are three services, and each is here for a reason: **Gemini** reads, **Claude**
+writes, and **Ollama** on this machine answers anything you would rather not send
+anywhere. **Settings → Who does what** decides which handles which stage.
 
-The one worth moving is **Reading passages** — around 88% of all tokens, and it needs
-nothing but text in and JSON out. Sending it elsewhere is what makes a Gemini quota
-last; everything else is small enough to leave alone.
+The one worth thinking about is **Writing entries** — it is where prose judgement and
+citation discipline show, and where a stronger model is worth paying for. **Reading
+passages** is around 88% of all tokens and wants the cheap, reliable one.
 
-Three rules the router enforces whatever you configure:
+Two rules the router enforces whatever you configure:
 
 - **Capability wins.** Scanned-page OCR, transcription and entity embeddings only go
-  to a provider that can actually do them. On free tiers that means Gemini, which is
-  why it stays the backbone rather than being replaced.
-- **Non-Latin sources override the routing.** The cheaper providers are appreciably
-  weaker on Arabic, and a name they miss is lost silently rather than slowly. A
-  source's declared language decides this; where none is declared — PDFs, pasted
-  text — the router reads the passage itself.
+  to a provider that can actually do them — which means Gemini, and is why it stays
+  the backbone rather than being replaced.
 - **Nothing stops for one service being spent.** Keys rotate within a provider, then
-  providers rotate between themselves, and only when nothing can answer does the run
+  the call falls through to Gemini, and only when nothing can answer does the run
   park — until the first key *anywhere* returns.
 
-Bear in mind that on Groq, Cerebras and OpenRouter, usage is counted per account
-rather than per key, so extra keys there buy nothing. Only Gemini's limits are per
-project. Settings says so under each provider.
+Extra keys multiply your quota on Gemini, whose limits are per project. Anthropic
+bills the account, so a second key there is a second label on one bill, and Ollama
+has no quota at all — any text works as its key. Settings says so under each.
 
 The key is stored server-side in `data/config.json`, not in your browser. That is
 deliberate: ingesting a book takes hundreds of calls over a long stretch, and the
@@ -311,6 +307,6 @@ data/                your library, database and keys — gitignored
   occasionally is not.
 - The brief covers what your feeds brought in. It cannot tell you about something
   that no feed you follow reported.
-- With the shared key pool enabled, prompts pass through it rather than going to
-  the provider directly. Settings says so; turn it off to keep every call on your
-  own keys.
+- Claude is metered rather than rationed. Gemini refuses you when the day's
+  allowance is gone; Anthropic bills you instead, so the entry stage is the one
+  place in the app where a runaway loop costs money rather than time.

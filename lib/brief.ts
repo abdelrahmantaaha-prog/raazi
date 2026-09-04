@@ -1,5 +1,9 @@
 import { db } from "./db";
 import { listWatchlist } from "./watchlist";
+import { citationOf } from "./queries";
+import { formatLocator } from "./chunk";
+import { citedIds } from "./markers";
+import type { Locator } from "./types";
 
 /**
  * What the brief is made of.
@@ -78,8 +82,19 @@ const PASSAGE_JOINS = `
   LEFT JOIN story_sources st ON st.source_id = s.id
   LEFT JOIN stories story ON story.id = st.story_id`;
 
-/** Sources that arrived, or were published, inside the window. */
-const IN_WINDOW = `COALESCE(s.published_at, s.added_at) >= @from AND COALESCE(s.published_at, s.added_at) < @to`;
+/**
+ * Sources that arrived, or were published, inside the window.
+ *
+ * `kept_at` comes first because a decision is the event that matters once
+ * feeds are filtered by hand: an article published on Sunday and kept on
+ * Monday is Monday's, both to the week that collects it and to you when you go
+ * looking for it. Everything that never went through an inbox — a book, a
+ * pasted passage, anything from before the inbox existed — has no kept_at and
+ * falls through to the dates it always used.
+ */
+const IN_WINDOW = `COALESCE(s.kept_at, s.published_at, s.added_at) >= @from
+                   AND COALESCE(s.kept_at, s.published_at, s.added_at) < @to
+                   AND (s.triage IS NULL OR s.triage = 'kept')`;
 
 /**
  * The evidence a passage needs to be worth putting in front of you.
@@ -237,6 +252,7 @@ export function hasMaterial(m: BriefMaterial): boolean {
 export interface BriefRow {
   id: number;
   day: string;
+  kind: string;
   body_md: string;
   state: string;
   window_from: string | null;
@@ -251,11 +267,145 @@ export function getBrief(day: string): BriefRow | undefined {
 }
 
 export function latestBrief(): BriefRow | undefined {
-  return db().prepare("SELECT * FROM briefs ORDER BY day DESC LIMIT 1").get() as BriefRow | undefined;
+  return db().prepare("SELECT * FROM briefs WHERE kind='day' ORDER BY day DESC LIMIT 1").get() as
+    | BriefRow
+    | undefined;
 }
 
 export function listBriefs(limit = 30): BriefRow[] {
-  return db().prepare("SELECT * FROM briefs ORDER BY day DESC LIMIT ?").all(limit) as BriefRow[];
+  return db()
+    .prepare("SELECT * FROM briefs WHERE kind='day' ORDER BY day DESC LIMIT ?")
+    .all(limit) as BriefRow[];
+}
+
+/** The weekly ones, newest first. Their `day` is the week's Friday, prefixed. */
+export function listWeeklyBriefs(limit = 26): BriefRow[] {
+  return db()
+    .prepare("SELECT * FROM briefs WHERE kind='week' ORDER BY day DESC LIMIT ?")
+    .all(limit) as BriefRow[];
+}
+
+export interface RenderedCitation {
+  id: number;
+  quote: string;
+  citation: string;
+  sourceId: number;
+  sourceTitle: string;
+  locator: string;
+  chunkId: number;
+  entityId: number;
+  entityName: string;
+  outlet: string | null;
+  publishedAt: string | null;
+  url: string | null;
+}
+
+/**
+ * The passages a written brief cites, resolved for the popover.
+ *
+ * Both brief pages need exactly this and nothing else: a marker in the text is
+ * only worth having if clicking it opens the passage, and the passage is only
+ * worth showing with its outlet, its date and a way through to the entry.
+ */
+export function citationsFor(bodyMd: string): RenderedCitation[] {
+  const ids = [...citedIds(bodyMd ?? "")];
+  if (!ids.length) return [];
+
+  const rows = db()
+    .prepare(
+      `SELECT m.id, m.quote, m.chunk_id, m.source_id, m.entity_id,
+              e.canonical_name AS entity_name,
+              s.title AS source_title, s.author AS source_author, s.year AS source_year,
+              s.outlet, s.published_at, s.url,
+              c.locator_json, d.label AS doc_label
+         FROM mentions m
+         JOIN entities e ON e.id = m.entity_id
+         JOIN sources  s ON s.id = m.source_id
+         JOIN chunks   c ON c.id = m.chunk_id
+    LEFT JOIN documents d ON d.id = c.doc_id
+        WHERE m.id IN (${ids.map(() => "?").join(",")})`
+    )
+    .all(...ids) as {
+    id: number;
+    quote: string;
+    chunk_id: number;
+    source_id: number;
+    entity_id: number;
+    entity_name: string;
+    source_title: string;
+    source_author: string | null;
+    source_year: string | null;
+    outlet: string | null;
+    published_at: string | null;
+    url: string | null;
+    locator_json: string;
+    doc_label: string | null;
+  }[];
+
+  return rows.map((c) => {
+    const locator = formatLocator(JSON.parse(c.locator_json) as Locator, c.doc_label);
+    return {
+      id: c.id,
+      quote: c.quote,
+      citation: citationOf({
+        source_author: c.source_author,
+        source_title: c.source_title,
+        source_year: c.source_year,
+        locator,
+      }),
+      sourceId: c.source_id,
+      sourceTitle: c.source_title,
+      locator,
+      chunkId: c.chunk_id,
+      entityId: c.entity_id,
+      entityName: c.entity_name,
+      outlet: c.outlet,
+      publishedAt: c.published_at,
+      url: c.url,
+    };
+  });
+}
+
+export interface KeptArticle {
+  source_id: number;
+  title: string;
+  outlet: string | null;
+  author: string | null;
+  url: string | null;
+  published_at: string | null;
+  kept_at: string | null;
+  reliability: string | null;
+  passages: number;
+  story_id: number | null;
+  story_title: string | null;
+  feed_title: string | null;
+}
+
+/**
+ * What you kept in a window, whether or not it has been read yet.
+ *
+ * The week page shows this as it fills, so the brief is never the first time
+ * you see what the week contained — and so a Thursday afternoon can tell you
+ * what is still waiting to be read before you ask for the write-up.
+ */
+export function keptBetween(from: Date, to: Date, limit = 300): KeptArticle[] {
+  return db()
+    .prepare(
+      `SELECT s.id AS source_id, s.title, s.outlet, s.author, s.url, s.published_at,
+              s.kept_at, s.reliability,
+              (SELECT COUNT(*) FROM live_mentions m WHERE m.source_id = s.id) AS passages,
+              ss.story_id AS story_id, st.title AS story_title,
+              f.title AS feed_title
+         FROM sources s
+    LEFT JOIN story_sources ss ON ss.source_id = s.id
+    LEFT JOIN stories st ON st.id = ss.story_id
+    LEFT JOIN feed_items i ON i.source_id = s.id
+    LEFT JOIN feeds f ON f.id = i.feed_id
+        WHERE s.triage = 'kept' AND s.kept_at >= @from AND s.kept_at < @to
+        ORDER BY s.kept_at DESC
+        LIMIT @limit`
+    )
+    .all({ from: from.toISOString(), to: to.toISOString(), limit }) as KeptArticle[];
 }
 
 /** Today, in the local calendar, which is the one you live in. */

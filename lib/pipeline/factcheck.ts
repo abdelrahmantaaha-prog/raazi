@@ -165,7 +165,6 @@ export async function handleFactcheck(task: Task): Promise<void> {
     // reading stage because it is the same kind of work — text in, list out.
     const listed = await generateJson<{ claims: { claim: string; kind?: string }[] }>({
       stage: "extract",
-      sample: segment.slice(0, 600),
       system: CLAIMS_SYSTEM,
       schema: CLAIMS_SCHEMA,
       temperature: 0,
@@ -184,7 +183,6 @@ export async function handleFactcheck(task: Task): Promise<void> {
 
     const { data, usage } = await generateJson<{ claims: Verdict[] }>({
       stage: "entry",
-      sample: segment.slice(0, 600),
       system: SYSTEM,
       schema: SCHEMA,
       temperature: 0.1,

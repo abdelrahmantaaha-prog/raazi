@@ -130,6 +130,21 @@ export function newsQueryFeedUrl(query: string, lang = "en", country = "US"): st
 }
 
 /**
+ * The same search on Bing News.
+ *
+ * Worth having beside Google's because of what happens after the click. Google
+ * News hands back an opaque redirect only Google can resolve, so an article
+ * found there is a headline and nothing more; Bing wraps the link too, but
+ * carries the real address in a query parameter, which unwrapRedirect recovers.
+ * For watching a phrase Google's coverage is better and a headline is enough.
+ * For a search you intend to read, this is the one that yields articles.
+ */
+export function bingNewsQueryUrl(query: string, market = "en-US"): string {
+  const q = encodeURIComponent(query);
+  return `https://www.bing.com/news/search?q=${q}&format=RSS&setmkt=${market}`;
+}
+
+/**
  * Fetches a feed, honouring the caching headers it gave us last time.
  *
  * A 304 is the polite outcome and the common one: most polls of most feeds

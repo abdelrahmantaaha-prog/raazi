@@ -168,7 +168,6 @@ export async function handleCoherence(task: Task): Promise<void> {
     note?: string;
   }>({
     stage: "entry",
-    sample: row.body_md.slice(0, 600),
     system: SYSTEM,
     schema: SCHEMA,
     temperature: 0.15,

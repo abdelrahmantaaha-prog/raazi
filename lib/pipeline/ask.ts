@@ -328,11 +328,6 @@ export async function handleAsk(task: Task): Promise<void> {
     stage: "ask",
     system: SYSTEM,
     schema: SCHEMA,
-    sample: passages
-      .slice(0, 8)
-      .map((p) => p.quote)
-      .join(" ")
-      .slice(0, 600),
     temperature: 0.2,
     parts: [`QUESTION: ${row.question}\n\nPASSAGES FROM THE LIBRARY:\n${evidence}`],
   });

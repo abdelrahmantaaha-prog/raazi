@@ -33,6 +33,10 @@ const RULES: {
   autoRefreshEntries: (v) => (typeof v === "boolean" ? v : undefined),
   defaultBudget: (v) => integer(v, 0, 1_000_000_000),
   morningChores: (v) => (typeof v === "boolean" ? v : undefined),
+  feedPolling: (v) => (typeof v === "boolean" ? v : undefined),
+  feedReview: (v) => (typeof v === "boolean" ? v : undefined),
+  dailyBrief: (v) => (typeof v === "boolean" ? v : undefined),
+  briefHours: (v) => integer(v, 1, 24 * 14),
   morningHour: (v) => integer(v, 0, 23),
   // A BCP-47 primary language subtag: "en", "ar", "fr". Region and script
   // are not needed — the writer is told a language, not a locale.
@@ -61,7 +65,6 @@ export async function POST(req: Request) {
     keyAction?: "remove" | "revive" | "rename" | "disable" | "enable";
     /** Routing. */
     routing?: Partial<Record<Stage, ProviderId>>;
-    nonLatinProvider?: ProviderId;
     /** Everything else. */
     model?: string;
     tier?: "free" | "paid";
@@ -71,6 +74,10 @@ export async function POST(req: Request) {
     autoRefreshEntries?: boolean;
     defaultBudget?: number;
     morningChores?: boolean;
+    feedPolling?: boolean;
+    feedReview?: boolean;
+    dailyBrief?: boolean;
+    briefHours?: number;
     morningHour?: number;
     entryLanguage?: string;
     /** Reaching this machine from a phone. See lib/lan.ts. */
@@ -167,10 +174,6 @@ export async function POST(req: Request) {
     // Merge rather than replace, so setting one stage does not clear the rest.
     patch.routing = { ...getConfig().routing, ...body.routing };
     note = "Routing updated.";
-  }
-  if (body.nonLatinProvider !== undefined) {
-    if (!isProvider(body.nonLatinProvider)) return badRequest("Unknown provider.");
-    patch.nonLatinProvider = body.nonLatinProvider;
   }
   // The free tier's per-minute ceiling is low; keep the pacer honest about it.
   if (body.tier === "free" && body.requestsPerMinute === undefined) patch.requestsPerMinute = 10;

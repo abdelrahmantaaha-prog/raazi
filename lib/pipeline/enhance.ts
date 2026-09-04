@@ -140,8 +140,6 @@ export async function handleEnhance(task: Task): Promise<void> {
 
   const { data, usage } = await generateJson<ChunkExtraction>({
     stage: "extract",
-    lang: chunk.source_lang ?? undefined,
-    sample: chunk.text.slice(0, 600),
     system: `${systemFor(getConfig().entryLanguage)}\n\n${SECOND_PASS}`,
     schema: SCHEMA,
     parts: [

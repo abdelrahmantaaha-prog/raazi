@@ -27,14 +27,12 @@ interface KeyRow {
   calls: number;
   tokens: number;
   fromEnv: boolean;
-  shared: boolean;
 }
 
 interface Settings {
   keys: KeyRow[];
   keyRetryMinutes: number;
   routing: Partial<Record<Stage, ProviderId>>;
-  nonLatinProvider: ProviderId;
   model: string;
   tier: "free" | "paid";
   requestsPerMinute: number;
@@ -42,6 +40,10 @@ interface Settings {
   autoRefreshEntries: boolean;
   defaultBudget: number;
   morningChores: boolean;
+  feedPolling: boolean;
+  feedReview: boolean;
+  dailyBrief: boolean;
+  briefHours: number;
   morningHour: number;
   entryLanguage?: string;
 }
@@ -135,11 +137,6 @@ export default function SettingsPage() {
                     {k.fromEnv && (
                       <span className="text-xs text-[var(--color-muted)]">from your environment</span>
                     )}
-                    {k.shared && (
-                      <span className="text-xs text-[var(--color-muted)]">
-                        one door to every project&rsquo;s keys — the keys below are the fallback
-                      </span>
-                    )}
                   </div>
                   <p className="text-xs text-[var(--color-muted)]">
                     {k.status === "waiting" && k.availableAt
@@ -164,7 +161,7 @@ export default function SettingsPage() {
                       Retry
                     </Button>
                   )}
-                  {!k.fromEnv && !k.shared && (
+                  {!k.fromEnv && (
                     <>
                       <Button
                         variant="ghost"
@@ -236,10 +233,10 @@ export default function SettingsPage() {
               value={keyModel}
               onChange={(e) => setKeyModel(e.target.value)}
             />
-            {provider === "custom" && (
+            {provider === "ollama" && (
               <input
                 className={`${inputClass} min-w-[12rem] flex-1`}
-                placeholder={`Endpoint (default: ${PROVIDERS.custom.baseUrl})`}
+                placeholder={`Endpoint (default: ${PROVIDERS.ollama.baseUrl})`}
                 value={baseUrl}
                 onChange={(e) => setBaseUrl(e.target.value)}
               />
@@ -269,7 +266,7 @@ export default function SettingsPage() {
           <p className="mt-2 text-sm text-[var(--color-muted)]">
             {PROVIDERS[provider].note}{" "}
             <span className="whitespace-nowrap">Free tier: {PROVIDERS[provider].freeTier}.</span>
-            {!PROVIDERS[provider].keysMultiply && provider !== "custom" && (
+            {!PROVIDERS[provider].keysMultiply && provider !== "ollama" && (
               <>
                 {" "}
                 <strong>Extra keys here buy nothing</strong> — usage is counted per account, not per
@@ -293,17 +290,6 @@ export default function SettingsPage() {
           </p>
         </div>
       </Card>
-
-      {cfg.keys.some((k) => k.shared) && (
-        <p className="rounded border border-[var(--color-rule)] bg-[var(--color-accent-soft)] px-3 py-2 text-sm">
-          <span className="font-medium">Shared key pool is on.</span>{" "}
-          <span className="text-[var(--color-muted)]">
-            Every prompt — passages being read, entries being written, questions asked —
-            transits the pool before it reaches a provider. Your own keys below are the fallback
-            when the pool has nothing to offer.
-          </span>
-        </p>
-      )}
 
       {cfg.keys.some((k) => k.provider === "anthropic") && (
         <p className="rounded border border-[var(--color-rule)] bg-[var(--color-accent-soft)] px-3 py-2 text-sm">
@@ -434,6 +420,65 @@ export default function SettingsPage() {
       </Card>
 
       <Card>
+        <h2 className="font-serif text-lg font-semibold">Feeds and the inbox</h2>
+        <p className="mt-1 text-sm text-[var(--color-muted)]">
+          What a feed finds is fetched and chunked — both free — and then waits for you.
+          Keeping an article is what sends it to be read, which is the stage that costs.
+          Turning review off restores the old behaviour: everything a feed carries is read
+          in full on arrival, which on a wire feed is most of a working day&rsquo;s tokens
+          spent on other people&rsquo;s stories.
+        </p>
+        <div className="mt-3 grid gap-4 sm:grid-cols-2">
+          <Field label="Check the feeds" hint="While Corpus is open. Each feed keeps its own interval and daily cap.">
+            <select
+              className={inputClass}
+              value={cfg.feedPolling ? "on" : "off"}
+              onChange={(e) => save({ feedPolling: e.target.value === "on" }, "Updated.")}
+            >
+              <option value="on">Automatically</option>
+              <option value="off">Only when I ask</option>
+            </select>
+          </Field>
+          <Field label="New articles" hint="The inbox is where they wait.">
+            <select
+              className={inputClass}
+              value={cfg.feedReview ? "on" : "off"}
+              onChange={(e) => save({ feedReview: e.target.value === "on" }, "Updated.")}
+            >
+              <option value="on">Wait for me to look at them</option>
+              <option value="off">Read everything they bring in</option>
+            </select>
+          </Field>
+          <Field
+            label="Daily brief"
+            hint="The weekly one is always written by hand, from the week page. With review on, the daily one waits for an empty inbox."
+          >
+            <select
+              className={inputClass}
+              value={cfg.dailyBrief ? "on" : "off"}
+              onChange={(e) => save({ dailyBrief: e.target.value === "on" }, "Updated.")}
+            >
+              <option value="on">Write one each day</option>
+              <option value="off">Only when I ask</option>
+            </select>
+          </Field>
+          <Field label="A daily brief looks back" hint="Hours. Longer if you read every few days.">
+            <select
+              className={inputClass}
+              value={String(cfg.briefHours ?? 24)}
+              onChange={(e) => save({ briefHours: Number(e.target.value) }, "Updated.")}
+            >
+              {[12, 24, 36, 48, 72].map((h) => (
+                <option key={h} value={String(h)}>
+                  {h} hours
+                </option>
+              ))}
+            </select>
+          </Field>
+        </div>
+      </Card>
+
+      <Card>
         <h2 className="font-serif text-lg font-semibold">Morning routine</h2>
         <p className="mt-1 text-sm text-[var(--color-muted)]">
           Once a day, without being asked: entries carrying more than one verification
@@ -544,30 +589,6 @@ function RoutingCard({
             </select>
           </div>
         ))}
-      </div>
-
-      <div className="mt-4 border-t border-[var(--color-rule)] pt-3">
-        <div className="flex flex-wrap items-center gap-3">
-          <div className="min-w-[13rem] flex-1">
-            <div className="text-sm font-medium">Arabic and other non-Latin sources</div>
-            <div className="text-xs text-[var(--color-muted)]">
-              Overrides the choices above for those sources. The cheaper services are appreciably
-              weaker outside Latin script, and a name they miss is lost silently rather than slowly.
-            </div>
-          </div>
-          <select
-            className={`${inputClass} max-w-[13rem]`}
-            disabled={busy || choices.length < 2}
-            value={cfg.nonLatinProvider ?? "gemini"}
-            onChange={(e) => onSave({ nonLatinProvider: e.target.value as ProviderId })}
-          >
-            {choices.map((id) => (
-              <option key={id} value={id}>
-                {PROVIDERS[id].label}
-              </option>
-            ))}
-          </select>
-        </div>
       </div>
 
       <p className="mt-4 text-xs text-[var(--color-muted)]">

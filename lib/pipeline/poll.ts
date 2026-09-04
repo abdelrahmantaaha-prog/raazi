@@ -29,8 +29,13 @@ import type { Task } from "../types";
  *   plan_polls  — which feeds are due. Free, and the only thing the idle loop
  *                 has to remember to call.
  *   poll        — fetch one feed, record what it carries, queue what is new.
- *   fetch_item  — turn one item into a source, which starts the ordinary
- *                 ingest pipeline for it.
+ *   fetch_item  — turn one item into a source.
+ *
+ * What happens after fetch_item is what the `feedReview` setting decides. With
+ * it on, which is the default for a beat, the article is fetched and chunked
+ * and then waits in the inbox: nothing is filed, nothing is extracted, and no
+ * token is spent until you say it is worth reading. With it off, the source
+ * goes straight into the ordinary ingest pipeline as it always did.
  *
  * The daily cap is enforced at the moment of queueing rather than at ingest,
  * so a feed that republishes its archive costs one fetch and nothing else.
@@ -175,6 +180,7 @@ export async function handleFetchItem(task: Task): Promise<void> {
     // parameter; the canonical address everything is deduplicated on has to be
     // the article's, not the redirector's.
     const target = unwrapRedirect(item.url);
+    const review = getConfig().feedReview;
 
     const added = await addUrl({
       url: target,
@@ -190,23 +196,35 @@ export async function handleFetchItem(task: Task): Promise<void> {
       // between a phrase watch that reports something and one that reports
       // only failures.
       fallbackText: [item.title, item.summary].filter(Boolean).join("\n\n"),
+      // Fetched and chunked, then left alone until you decide. See lib/triage.ts.
+      hold: review,
     });
 
     // Which running story this account belongs to. Grouping needs the source
     // to exist and is cheap; entity overlap improves once it is extracted, so
-    // the ingest tail files it again when the passages are in.
+    // the ingest tail files it again when the passages are in. It happens
+    // before the decision deliberately: "the fourth account of a story you
+    // already have" is exactly what makes an item easy to judge in the inbox.
     const story = fileSource(added.sourceId);
+    const running = story?.created === false;
 
     db()
-      .prepare("UPDATE feed_items SET state='ready', source_id=?, note=? WHERE id=?")
-      .run(added.sourceId, story?.created ? "New story." : "Added to a running story.", itemId);
+      .prepare("UPDATE feed_items SET state=?, source_id=?, note=? WHERE id=?")
+      .run(
+        review ? "held" : "ready",
+        added.sourceId,
+        running ? "Another account of a story already running." : null,
+        itemId
+      );
 
     finishTask(
       task.id,
       task.run_id,
       free,
       "done",
-      `Read "${item.title}"${story?.created === false ? " (an account of a story already running)" : ""}.`
+      review
+        ? `Pulled "${item.title}" — waiting for you in the inbox${running ? " (a story already running)" : ""}.`
+        : `Read "${item.title}"${running ? " (an account of a story already running)" : ""}.`
     );
   } catch (err) {
     const message = (err as Error).message.slice(0, 300);

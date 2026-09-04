@@ -15,6 +15,7 @@ import { SourceCover } from "../../components/SourceCover";
 import { RunChip } from "../../components/RunChip";
 import { MatchCover } from "./MatchCover";
 import { guessShelf } from "@/lib/shelves";
+import type { ReadMode } from "@/lib/reading";
 import { formatDate, formatDateTime, relativeDate } from "@/lib/dates";
 
 interface SourceMeta {
@@ -32,7 +33,7 @@ interface SourceMeta {
   bookmark_chunk: number | null;
   read_at: string | null;
   shelf: string | null;
-  mode: "eager" | "along";
+  mode: ReadMode;
 }
 
 export function SourceView({
@@ -336,6 +337,8 @@ export function SourceView({
         guessed={guessShelf({ kind: source.kind, words: source.words })}
       />
 
+      <PediaSwitch sourceId={source.id} mode={source.mode} indexed={entities.length} />
+
       {entities.length > 0 && (
         <Card>
           <h2 className="font-serif text-lg font-semibold">What this source contributes</h2>
@@ -410,7 +413,7 @@ function ReadingProgress({
 }: {
   progress: number;
   indexed: number;
-  mode: "eager" | "along";
+  mode: ReadMode;
   lastOpened: string | null;
 }) {
   const you = Math.round(progress * 100);
@@ -447,13 +450,91 @@ function ReadingProgress({
       </div>
 
       <p className="mt-1.5 text-xs text-[var(--color-muted)]">
-        {corpus >= 99
+        {mode === "shelf"
+          ? "Kept on the shelf: readable and searchable, never read into the pedia."
+          : corpus >= 99
           ? "Corpus has read all of it."
           : mode === "along"
             ? `Corpus has indexed ${corpus}% — it reads each passage as you get to it.`
             : `Corpus has indexed ${corpus}%.`}
       </p>
     </div>
+  );
+}
+
+/**
+ * Whether this source feeds the pedia at all.
+ *
+ * Not everything worth keeping is research. A novel, an art book, a catalogue:
+ * you want to read it here, search it, quote from it by hand — and you do not
+ * want its characters and painters standing in the pedia beside the people you
+ * cover, nor to pay the extraction stage to put them there. Shelving a source
+ * stops that, and it is reversible: switching back reads it from the beginning.
+ */
+function PediaSwitch({
+  sourceId,
+  mode,
+  indexed,
+}: {
+  sourceId: number;
+  mode: ReadMode;
+  indexed: number;
+}) {
+  const router = useRouter();
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+
+  async function set(next: ReadMode) {
+    setBusy(true);
+    setError(null);
+    try {
+      const res = await fetch(`/api/sources/${sourceId}`, {
+        method: "PATCH",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ readMode: next }),
+      });
+      if (!res.ok) {
+        const data = (await res.json().catch(() => ({}))) as { error?: string };
+        throw new Error(data.error ?? "That did not work.");
+      }
+      router.refresh();
+    } catch (err) {
+      setError((err as Error).message);
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  return (
+    <Card>
+      <div className="flex flex-wrap items-start justify-between gap-3">
+        <div>
+          <h2 className="font-serif text-lg font-semibold">What this does to the pedia</h2>
+          <p className="mt-1 max-w-[60ch] text-sm text-[var(--color-muted)]">
+            {mode === "shelf"
+              ? "On the shelf. You can read it, search it and quote from it, and nothing in it becomes evidence or an entry."
+              : mode === "along"
+                ? "Read along: each passage is indexed as you get to it, and what it finds joins the pedia."
+                : "Indexed in full, and what it finds joins the pedia."}
+            {mode === "shelf" && indexed > 0
+              ? ` ${indexed} subject${indexed === 1 ? "" : "s"} it contributed before you shelved it are still there — delete the source to take those with it.`
+              : ""}
+          </p>
+        </div>
+        <select
+          className="rounded border border-[var(--color-rule)] bg-white px-2 py-1.5 text-sm"
+          value={mode}
+          disabled={busy}
+          onChange={(e) => void set(e.target.value as ReadMode)}
+          aria-label="What this source does to the pedia"
+        >
+          <option value="eager">Read it into the pedia</option>
+          <option value="along">Read it as I read it</option>
+          <option value="shelf">Reading only — keep it out</option>
+        </select>
+      </div>
+      {error ? <p className="mt-2 text-sm text-red-700">{error}</p> : null}
+    </Card>
   );
 }
 
