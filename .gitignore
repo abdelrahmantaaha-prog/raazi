@@ -16,3 +16,6 @@ data/
 
 .next-dev/
 *.log
+
+# Launcher build output.
+dist/
