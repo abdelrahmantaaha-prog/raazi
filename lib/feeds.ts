@@ -290,6 +290,29 @@ export function dueFeeds(now = new Date()): Feed[] {
     .all(now.toISOString().replace("T", " ").slice(0, 19)) as Feed[];
 }
 
+/**
+ * When the next feed falls due, so the worker can set an alarm for it.
+ *
+ * Without this "the feeds check themselves while Corpus is open" was only true
+ * for the thirty seconds after the queue emptied: the idle loop swept the
+ * feeds, stood down, and nothing brought it back until the morning timer or a
+ * page you happened to open. An hourly interval was a wish. A feed never
+ * polled is due now.
+ */
+export function nextFeedDueAt(): Date | undefined {
+  const row = db()
+    .prepare(
+      `SELECT MIN(CASE WHEN last_polled_at IS NULL THEN datetime('now')
+                       ELSE datetime(last_polled_at, '+' || interval_minutes || ' minutes') END) AS due
+         FROM feeds WHERE enabled = 1`
+    )
+    .get() as { due: string | null };
+  if (!row.due) return undefined;
+  // SQLite's datetime() is UTC without a zone marker.
+  const d = new Date(row.due.replace(" ", "T") + "Z");
+  return Number.isNaN(d.getTime()) ? undefined : d;
+}
+
 /** How many items this feed has turned into sources today. */
 export function ingestedToday(feedId: number): number {
   return (

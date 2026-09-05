@@ -180,6 +180,26 @@ section("The week is built from what you kept, when you kept it");
   check("a discarded one never appears", !after.some((k) => k.title === "Junk"));
 }
 
+/* ---------------------------------------------------------- the feed clock */
+
+section("The worker knows when the next feed is due");
+{
+  const feeds = await import("../lib/feeds.ts");
+  // The test feed above has never been polled, so it is due now.
+  const now = Date.now();
+  const due = feeds.nextFeedDueAt();
+  check("a feed never polled is due at once", due && Math.abs(due.getTime() - now) < 5_000, String(due));
+
+  db().prepare("UPDATE feeds SET last_polled_at=datetime('now'), interval_minutes=45 WHERE id=?").run(feedId);
+  const later = feeds.nextFeedDueAt();
+  const minutes = later ? (later.getTime() - now) / 60_000 : NaN;
+  check("a polled feed is due after its interval", minutes > 44 && minutes < 46, `${minutes} minutes`);
+
+  db().prepare("UPDATE feeds SET enabled=0 WHERE id=?").run(feedId);
+  check("a paused feed sets no alarm", feeds.nextFeedDueAt() === undefined);
+  db().prepare("UPDATE feeds SET enabled=1 WHERE id=?").run(feedId);
+}
+
 /* -------------------------------------------------------------- the shelf */
 
 section("A source on the shelf is never read");

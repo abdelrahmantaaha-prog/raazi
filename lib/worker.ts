@@ -3,6 +3,7 @@ import { takeModelsUsed } from "./ai/client";
 import { getConfig } from "./config";
 import { queueStaleEntries, refreshInFlight } from "./entries";
 import { pollInFlight, queuePolls } from "./pipeline/poll";
+import { nextFeedDueAt } from "./feeds";
 import { briefInFlight, queueBrief } from "./pipeline/brief";
 import { heldCount } from "./triage";
 import { getBrief, todayKey } from "./brief";
@@ -442,9 +443,19 @@ export function scheduleWake(): void {
   if (globalThis.__corpusWake) clearTimeout(globalThis.__corpusWake);
   globalThis.__corpusWake = undefined;
 
-  if (!hasParkedRuns() && !hasDeferredTasks()) return;
+  // Three clocks: a run parked on quota, a task deferred for a retry, and the
+  // next feed to fall due. The feeds used to have no clock at all — the idle
+  // loop swept them once and stood down, and an "hourly" feed was checked at
+  // the morning hour or whenever a page you opened happened to kick the
+  // worker. That was the morning with no scan.
+  const waiting = hasParkedRuns() || hasDeferredTasks();
+  const feedDue = getConfig().feedPolling ? nextFeedDueAt() : undefined;
+  if (!waiting && !feedDue) return;
 
-  const due = nextDueAt();
+  const queueDue = waiting ? nextDueAt() : undefined;
+  const due = [queueDue, feedDue]
+    .filter((d): d is Date => d instanceof Date)
+    .sort((a, b) => a.getTime() - b.getTime())[0];
   // A run parked with no timer at all still gets looked at periodically, in
   // case a key was revived elsewhere.
   const delay = due
