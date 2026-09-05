@@ -521,7 +521,12 @@ static class Corpus
         {
             Process.Start(new ProcessStartInfo
             {
-                FileName = "http://localhost:" + Port + "/",
+                // 127.0.0.1, not localhost. The server binds IPv4 only, and on
+                // Windows "localhost" resolves to ::1 first — so the browser's
+                // first connection is refused and you are relying on it to fall
+                // back. Most do, some sulk, and the failure looks exactly like
+                // a dead server while the tray insists it is running.
+                FileName = "http://127.0.0.1:" + Port + "/",
                 UseShellExecute = true,
             });
         }
