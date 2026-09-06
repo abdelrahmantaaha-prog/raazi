@@ -25,6 +25,8 @@ export interface WatchRow {
   kind: "entity" | "topic" | "phrase";
   /** How much has arrived about it since you last looked. */
   recent: number;
+  /** 'user' if you starred it, 'auto' if it earned its place. */
+  source: string;
 }
 
 export function listWatchlist(sinceHours = 24): WatchRow[] {
@@ -62,7 +64,13 @@ export function listWatchlist(sinceHours = 24): WatchRow[] {
     .all({ window: `-${Math.max(1, sinceHours)} hours` }) as WatchRow[];
 }
 
-export function watch(opts: { entityId?: number; tagId?: number; phrase?: string; note?: string }): number {
+export function watch(opts: {
+  entityId?: number;
+  tagId?: number;
+  phrase?: string;
+  note?: string;
+  source?: "user" | "auto";
+}): number {
   const { entityId, tagId, phrase } = opts;
   if (!entityId && !tagId && !phrase?.trim()) {
     throw new Error("Watch an entity, a topic, or a phrase.");
@@ -79,18 +87,165 @@ export function watch(opts: { entityId?: number; tagId?: number; phrase?: string
       | { id: number }
       | undefined;
     if (existing) return existing.id;
+    // Starring by hand overrides an earlier refusal of the same suggestion.
+    if (entityId) db().prepare("DELETE FROM watch_declined WHERE entity_id=?").run(entityId);
 
     return Number(
       db()
-        .prepare("INSERT INTO watchlist (entity_id, tag_id, phrase, note) VALUES (?, ?, ?, ?)")
-        .run(entityId ?? null, tagId ?? null, phrase?.trim() ?? null, opts.note?.trim() ?? null)
+        .prepare("INSERT INTO watchlist (entity_id, tag_id, phrase, note, source) VALUES (?, ?, ?, ?, ?)")
+        .run(
+          entityId ?? null,
+          tagId ?? null,
+          phrase?.trim() ?? null,
+          opts.note?.trim() ?? null,
+          opts.source ?? "user"
+        )
         .lastInsertRowid
     );
   });
 }
 
+/**
+ * Takes something off the list — and remembers, if the app put it there.
+ *
+ * Declining a suggestion has to stick. A subject that earned a suggestion is
+ * by definition one that keeps arriving, so without a record the promotion
+ * pass would offer it again tomorrow, and the day after, for exactly as long
+ * as it stayed in the news. Your own stars are not recorded: removing one is a
+ * change of mind about your own decision, not an answer to a question.
+ */
 export function unwatch(id: number): boolean {
-  return db().prepare("DELETE FROM watchlist WHERE id=?").run(id).changes > 0;
+  return tx(() => {
+    const row = db().prepare("SELECT entity_id, source FROM watchlist WHERE id=?").get(id) as
+      | { entity_id: number | null; source: string }
+      | undefined;
+    if (!row) return false;
+    if (row.source === "auto" && row.entity_id !== null) {
+      db()
+        .prepare("INSERT OR REPLACE INTO watch_declined (entity_id) VALUES (?)")
+        .run(row.entity_id);
+    }
+    return db().prepare("DELETE FROM watchlist WHERE id=?").run(id).changes > 0;
+  });
+}
+
+/** How many kept sources a subject has to appear in before it is suggested. */
+export const AUTO_WATCH_MIN_SOURCES = 4;
+
+/**
+ * And how many different outlets those sources must come from.
+ *
+ * This is what separates a subject from a masthead. A newspaper's own name is
+ * in every piece it publishes and almost nowhere else: on this library
+ * "National Public Radio" appeared in nine sources from exactly one outlet,
+ * while Iran appeared in eight from eight. Requiring two removes the outlets
+ * and the syndication boilerplate without a list of words to ignore — and it
+ * says something true besides, that a subject several newsrooms are covering
+ * is a subject worth following.
+ */
+export const AUTO_WATCH_MIN_OUTLETS = 2;
+
+/** How far back that is counted. Long enough to see a story, short enough to
+ *  forget last month's. */
+export const AUTO_WATCH_DAYS = 21;
+
+/** The most the app will ever have added. A shortlist that is not short is a
+ *  list, and the brief already has one of those. */
+export const AUTO_WATCH_CAP = 15;
+
+export interface Suggestion {
+  entity_id: number;
+  name: string;
+  type: string;
+  sources: number;
+  /** How many different outlets carried it. */
+  outlets: number;
+}
+
+/**
+ * What features heavily in the sources you decided to keep.
+ *
+ * Counted in distinct sources rather than mentions, so one long article that
+ * names a person twelve times counts once — the question is "how many separate
+ * pieces was this in", which is what "featuring heavily" actually means.
+ *
+ * Scoped to what you kept, not to the library: the inbox is where your
+ * judgement is recorded, and a subject that recurs across pieces you chose is
+ * a subject you are covering. Everything discarded is invisible here, which is
+ * the point.
+ *
+ * Costs nothing — it is one query, no model.
+ */
+export function suggestions(limit = AUTO_WATCH_CAP): Suggestion[] {
+  const kept = (
+    db()
+      .prepare(
+        `SELECT COUNT(*) AS n FROM sources s
+          WHERE (s.triage IS NULL OR s.triage = 'kept')
+            AND COALESCE(s.kept_at, s.published_at, s.added_at) >= datetime('now', @window)`
+      )
+      .get({ window: `-${AUTO_WATCH_DAYS} days` }) as { n: number }
+  ).n;
+  if (kept < AUTO_WATCH_MIN_SOURCES) return [];
+
+  return db()
+    .prepare(
+      `SELECT m.entity_id, e.canonical_name AS name, e.type,
+              COUNT(DISTINCT m.source_id) AS sources,
+              COUNT(DISTINCT s.outlet) AS outlets
+         FROM live_mentions m
+         JOIN sources s  ON s.id = m.source_id
+         JOIN entities e ON e.id = m.entity_id AND e.merged_into IS NULL
+        WHERE (s.triage IS NULL OR s.triage = 'kept')
+          AND COALESCE(s.kept_at, s.published_at, s.added_at) >= datetime('now', @window)
+          AND m.entity_id NOT IN (SELECT entity_id FROM watchlist WHERE entity_id IS NOT NULL)
+          AND m.entity_id NOT IN (SELECT entity_id FROM watch_declined)
+          -- Not a website or a document. FederalRegister.gov earns a mention in
+          -- everything the Federal Register feed brings in; it is the shelf the
+          -- source came from, not a thing that happens.
+          AND e.type <> 'work'
+        GROUP BY m.entity_id
+       HAVING sources >= @min AND outlets >= @outlets
+        ORDER BY sources DESC, e.canonical_name
+        LIMIT @limit`
+    )
+    .all({
+      window: `-${AUTO_WATCH_DAYS} days`,
+      min: AUTO_WATCH_MIN_SOURCES,
+      outlets: AUTO_WATCH_MIN_OUTLETS,
+      limit,
+    }) as Suggestion[];
+}
+
+/**
+ * Promotes what has earned it, up to the cap, and says what it added.
+ *
+ * Only ever adds. Nothing is removed for going quiet: a subject you watched
+ * through a story is one you will want again when it returns, and a list that
+ * empties itself is a list you cannot trust. Run from the morning routine.
+ */
+export function autoWatch(): Suggestion[] {
+  const already = (
+    db().prepare("SELECT COUNT(*) AS n FROM watchlist WHERE source='auto'").get() as { n: number }
+  ).n;
+  const room = AUTO_WATCH_CAP - already;
+  if (room <= 0) return [];
+
+  const picks = suggestions(room);
+  if (!picks.length) return [];
+
+  return tx(() => {
+    const insert = db().prepare(
+      "INSERT INTO watchlist (entity_id, source, note) VALUES (?, 'auto', ?)"
+    );
+    for (const p of picks) {
+      insert.run(
+        p.entity_id,
+        `In ${p.sources} of the sources you kept, from ${p.outlets} outlets.`
+      );
+    }
+    return picks;
+  });
 }
 
 /** Whether one entity is on the list, for a star button to render itself. */

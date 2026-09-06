@@ -1,6 +1,7 @@
 import type Database from "better-sqlite3";
 import { migrateQueue } from "./migrate-queue";
 import { migrateFeeds } from "./migrate-feeds";
+import { migrateWatch } from "./migrate-watch";
 
 /**
  * `schema.sql` is all CREATE IF NOT EXISTS, which means it can add tables to an
@@ -77,6 +78,13 @@ export function migrate(db: Database.Database) {
   // exclude it with one predicate instead of a join.
   addColumn(db, "mentions", "discarded_at", "TEXT");
   addColumn(db, "mentions", "discard_reason", "TEXT");
+
+  // Which model read the passage this mention came from. Stamped by the
+  // extractor from what the provider reported; NULL for a mention the sweep
+  // matched by name alone, or when the call never said. Added here rather
+  // than in migrate-queue.ts so the live_mentions view, rebuilt further down,
+  // carries the column from the first boot.
+  addColumn(db, "mentions", "model", "TEXT");
 
   // A heading you chose yourself, which automatic renaming must not overrule.
   //
@@ -469,6 +477,7 @@ export function migrate(db: Database.Database) {
 
   migrateQueue(db);
   migrateFeeds(db);
+  migrateWatch(db);
 }
 
 /**

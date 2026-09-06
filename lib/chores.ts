@@ -1,6 +1,7 @@
 import { db, tx } from "./db";
 import { createRun, enqueue } from "./queue";
 import { getConfig, saveConfig } from "./config";
+import { autoWatch } from "./watchlist";
 
 /**
  * The morning routine: maintenance that should happen daily without being asked.
@@ -109,8 +110,17 @@ export const FLAG_REWRITE_COOLDOWN_DAYS = 7;
  * Separate from the due-check on purpose: this is the testable half, and also
  * what a future "run the morning routine now" button would call.
  */
-export function queueMorningRun(): { runId: number; rewrites: number } {
+export function queueMorningRun(): { runId: number; rewrites: number; watched: number } {
   const flagged = flaggedForRewrite();
+
+  // Free — one query, no model — so it happens before anything is queued and
+  // the day's brief leads with whatever the week has actually been about.
+  const promoted = autoWatch();
+  if (promoted.length) {
+    console.log(
+      `[corpus] now watching ${promoted.map((p) => p.name).join(", ")} — each in several sources you kept`
+    );
+  }
 
   return tx(() => {
     const runId = createRun({
@@ -144,7 +154,7 @@ export function queueMorningRun(): { runId: number; rewrites: number } {
     // Free, and it finds photographs for whatever earned an entry yesterday.
     enqueue(runId, [{ kind: "plan_portraits" as const, payload: {} }]);
 
-    return { runId, rewrites: flagged.length };
+    return { runId, rewrites: flagged.length, watched: promoted.length };
   });
 }
 
