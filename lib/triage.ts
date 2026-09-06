@@ -42,6 +42,8 @@ export interface HeldItem {
   /** The opening of the article itself, which is what you actually judge by. */
   lede: string | null;
   chunks: number;
+  /** Characters of article behind it. Below ENOUGH_TO_READ it cannot be kept. */
+  chars: number;
   story_id: number | null;
   story_title: string | null;
   /** Other accounts of the same story already in the library. */
@@ -54,6 +56,7 @@ const HELD_COLUMNS = `
   f.title AS feed_title, f.outlet, f.reliability,
   (SELECT c.text FROM chunks c WHERE c.source_id = i.source_id ORDER BY c.seq LIMIT 1) AS lede,
   (SELECT COUNT(*) FROM chunks c WHERE c.source_id = i.source_id) AS chunks,
+  (SELECT COALESCE(SUM(LENGTH(c.text)), 0) FROM chunks c WHERE c.source_id = i.source_id) AS chars,
   ss.story_id AS story_id,
   st.title AS story_title,
   (SELECT COUNT(*) FROM story_sources s2 WHERE s2.story_id = ss.story_id) AS story_accounts`;
@@ -109,9 +112,44 @@ export function decidedBetween(from: Date, to: Date): { kept: number; discarded:
  * queued for every chunk the source has — a feed article is a handful, so
  * there is no read-along question to answer.
  */
-export function keep(itemIds: number[]): { kept: number; runId: number | null } {
-  const items = pick(itemIds, "held");
-  if (!items.length) return { kept: 0, runId: null };
+/**
+ * How much text an item must have before it can be kept.
+ *
+ * A paywalled article arrives as its headline and the feed's one-line summary
+ * — measured on this library, the New York Times stubs run to about 230
+ * characters and the Post's to 545, while the shortest real article is 1,300.
+ * A thousand is the gap between them.
+ *
+ * The rule exists because keeping a stub is worse than not keeping it. It
+ * makes a source with a citable title, a real outlet and a real date, whose
+ * text is a sentence of marketing — and then an entry cites it, and the
+ * citation opens on nothing. You have the subscriptions; paste the article in
+ * and the same source becomes true.
+ */
+export const ENOUGH_TO_READ = 1_000;
+
+/** How much text this item actually has behind it. */
+function textLength(sourceId: number | null): number {
+  if (sourceId === null) return 0;
+  return (
+    db()
+      .prepare("SELECT COALESCE(SUM(LENGTH(text)), 0) AS n FROM chunks WHERE source_id=?")
+      .get(sourceId) as { n: number }
+  ).n;
+}
+
+export function keep(itemIds: number[]): {
+  kept: number;
+  runId: number | null;
+  /** Refused for having nothing to read. Paste the article and keep it again. */
+  refused: { id: number; title: string }[];
+} {
+  const all = pick(itemIds, "held");
+  const refused = all
+    .filter((i) => textLength(i.source_id) < ENOUGH_TO_READ)
+    .map((i) => ({ id: i.id, title: i.title }));
+  const items = all.filter((i) => !refused.some((r) => r.id === i.id));
+  if (!items.length) return { kept: 0, runId: null, refused };
 
   return tx(() => {
     let read: number | null = null;
@@ -155,7 +193,7 @@ export function keep(itemIds: number[]): { kept: number; runId: number | null } 
     // over and produce ten chances to merge the same pair.
     if (read !== null) appendReadingTail(runId, read);
 
-    return { kept: items.length, runId };
+    return { kept: items.length, runId, refused };
   });
 }
 
@@ -184,7 +222,11 @@ export function pasteText(itemId: number, text: string): { chunks: number; words
   if (item.source_id === null) throw new Error("That item has nothing to paste into.");
 
   const body = text.trim();
-  if (body.length < 200) throw new Error("That looks too short to be the article.");
+  if (body.length < ENOUGH_TO_READ) {
+    throw new Error(
+      `That is ${body.length} characters; an article is at least ${ENOUGH_TO_READ}. Paste the whole piece.`
+    );
+  }
 
   const pieces = clean(parseText(body)).pieces;
   if (!pieces.length) throw new Error("Nothing readable in what was pasted.");

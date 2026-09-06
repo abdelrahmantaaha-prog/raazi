@@ -21,6 +21,7 @@ interface Item {
   note: string | null;
   lede: string | null;
   chunks: number;
+  chars: number;
   story_id: number | null;
   story_title: string | null;
   story_accounts: number;
@@ -41,6 +42,9 @@ interface Item {
  * an article by a machine summary of it is the failure this whole application
  * exists to avoid, and it would cost exactly what the inbox is here to save.
  */
+/** Matches ENOUGH_TO_READ in lib/triage.ts: below this there is no article. */
+const ENOUGH_TO_READ = 1_000;
+
 export default function Inbox({
   initial,
   held,
@@ -131,9 +135,11 @@ export default function Inbox({
         items?: Item[];
         held?: number;
         runId?: number | null;
+        note?: string;
         error?: string;
       };
       if (!res.ok) throw new Error(data.error ?? "That did not work.");
+      if (data.note) setError(data.note);
       if (data.items) setItems(data.items);
       if (typeof data.held === "number") setCount(data.held);
       if (data.runId) setRunId(data.runId);
@@ -384,7 +390,10 @@ export default function Inbox({
                   {group.items.map((item) => {
                     const isCursor = flat[cursor]?.id === item.id;
                     const chosen = selected.has(item.id);
-                    const thin = item.chunks <= 1 && !item.lede;
+                    // Not "did the fetch return something" but "is there an
+                    // article here": a paywalled piece arrives as its headline
+                    // and a sentence, which is a citation that opens on nothing.
+                    const thin = item.chars < ENOUGH_TO_READ;
                     return (
                       <li
                         key={item.id}
@@ -429,7 +438,7 @@ export default function Inbox({
                               </span>
                               {thin ? (
                                 <span className="rounded-full bg-amber-100 px-2 py-0.5 text-[11px] text-amber-800">
-                                  headline only
+                                  paste the article to keep it
                                 </span>
                               ) : null}
                               {item.note === "Full text pasted in." ? (
@@ -517,9 +526,14 @@ export default function Inbox({
                                 </button>
                                 <button
                                   type="button"
-                                  disabled={busy}
+                                  disabled={busy || thin}
+                                  title={
+                                    thin
+                                      ? "There is no article behind this yet — paste it in first"
+                                      : "Read it into the pedia"
+                                  }
                                   onClick={() => act("keep", [item.id])}
-                                  className="rounded-full bg-[var(--color-accent)] px-3 py-1 font-medium text-white transition"
+                                  className="rounded-full bg-[var(--color-accent)] px-3 py-1 font-medium text-white transition disabled:opacity-30"
                                 >
                                   Keep
                                 </button>

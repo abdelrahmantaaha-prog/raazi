@@ -83,8 +83,10 @@ with nothing in it rather than announcing that it is empty. Inside a section:
   date it.
 - Two or three sentences an item. This is a brief; the entry is where the
   detail lives.
-- Under "On your watchlist", group by the person or subject watched, using the
-  heading given for it.
+- Under "On your beat", the headings are topics rather than people. Write each
+  as what happened in that area of coverage, not as a profile of anyone. Every
+  passage has already been assigned to exactly one heading — never repeat an
+  item under a second topic because it also touches that one.
 - A one-line item is fine. Padding a thin day is worse than a thin brief.
 
 Write in the language you are told to use. Quote in the source's own language
@@ -170,7 +172,7 @@ function material(m: BriefMaterial): string[] {
 
   if (m.watched.length) {
     parts.push(
-      `SECTION "On your watchlist" — one sub-heading per subject below, in this order:\n\n` +
+      `SECTION "On your beat" — one sub-heading per topic below, in this order:\n\n` +
         m.watched
           .map(
             (w) =>
@@ -290,7 +292,7 @@ export async function handleBrief(task: Task): Promise<void> {
     ...material(m),
   ];
 
-  const { data, usage } = await generateJson<{
+  const { data, usage, model } = await generateJson<{
     headline: string;
     body: string;
     questions?: string[];
@@ -325,10 +327,19 @@ export async function handleBrief(task: Task): Promise<void> {
     db()
       .prepare(
         `UPDATE briefs SET body_md=?, state='done', window_from=?, window_to=?, stats_json=?,
-                tokens_in=tokens_in+?, tokens_out=tokens_out+?, error=NULL
+                tokens_in=tokens_in+?, tokens_out=tokens_out+?, model=?, error=NULL
           WHERE day=?`
       )
-      .run(full, m.from, m.to, JSON.stringify(m.counts), usage.tokensIn, usage.tokensOut, key);
+      .run(
+        full,
+        m.from,
+        m.to,
+        JSON.stringify(m.counts),
+        usage.tokensIn,
+        usage.tokensOut,
+        model ?? null,
+        key
+      );
     finishTask(
       task.id,
       task.run_id,

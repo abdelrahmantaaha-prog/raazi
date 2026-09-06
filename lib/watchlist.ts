@@ -87,8 +87,11 @@ export function watch(opts: {
       | { id: number }
       | undefined;
     if (existing) return existing.id;
-    // Starring by hand overrides an earlier refusal of the same suggestion.
-    if (entityId) db().prepare("DELETE FROM watch_declined WHERE entity_id=?").run(entityId);
+    // Choosing it by hand overrides an earlier refusal of the same suggestion.
+    if (entityId) {
+      db().prepare("DELETE FROM watch_dismissed WHERE kind='entity' AND ref_id=?").run(entityId);
+    }
+    if (tagId) db().prepare("DELETE FROM watch_dismissed WHERE kind='topic' AND ref_id=?").run(tagId);
 
     return Number(
       db()
@@ -116,14 +119,18 @@ export function watch(opts: {
  */
 export function unwatch(id: number): boolean {
   return tx(() => {
-    const row = db().prepare("SELECT entity_id, source FROM watchlist WHERE id=?").get(id) as
-      | { entity_id: number | null; source: string }
+    const row = db().prepare("SELECT entity_id, tag_id, source FROM watchlist WHERE id=?").get(id) as
+      | { entity_id: number | null; tag_id: number | null; source: string }
       | undefined;
     if (!row) return false;
-    if (row.source === "auto" && row.entity_id !== null) {
-      db()
-        .prepare("INSERT OR REPLACE INTO watch_declined (entity_id) VALUES (?)")
-        .run(row.entity_id);
+    if (row.source === "auto") {
+      const kind = row.tag_id !== null ? "topic" : "entity";
+      const ref = row.tag_id ?? row.entity_id;
+      if (ref !== null) {
+        db()
+          .prepare("INSERT OR REPLACE INTO watch_dismissed (kind, ref_id) VALUES (?, ?)")
+          .run(kind, ref);
+      }
     }
     return db().prepare("DELETE FROM watchlist WHERE id=?").run(id).changes > 0;
   });
@@ -154,59 +161,45 @@ export const AUTO_WATCH_DAYS = 21;
 export const AUTO_WATCH_CAP = 15;
 
 export interface Suggestion {
-  entity_id: number;
+  tag_id: number;
   name: string;
-  type: string;
   sources: number;
-  /** How many different outlets carried it. */
+  /** How many different outlets carried them. */
   outlets: number;
 }
 
 /**
- * What features heavily in the sources you decided to keep.
+ * What you have been reading about, as topics rather than as names.
  *
- * Counted in distinct sources rather than mentions, so one long article that
- * names a person twelve times counts once — the question is "how many separate
- * pieces was this in", which is what "featuring heavily" actually means.
+ * This was entities for a day and the day was enough. One article about the
+ * president produced four watched subjects — Donald Trump, the Trump
+ * administration, the White House, the United States — and the brief then
+ * printed the same passage under each of them, so a quiet morning read as four
+ * developments. Names are how a story is written; topics are what a beat is
+ * made of, and "US Politics" says once what those four said four times.
  *
- * Scoped to what you kept, not to the library: the inbox is where your
- * judgement is recorded, and a subject that recurs across pieces you chose is
- * a subject you are covering. Everything discarded is invisible here, which is
- * the point.
+ * Topics also come from somewhere honest: the filing pass already puts every
+ * source under the research topics it belongs to, so this counts a judgement
+ * the library has already made rather than inventing a second one.
  *
- * Costs nothing — it is one query, no model.
+ * Costs nothing — one query, no model.
  */
 export function suggestions(limit = AUTO_WATCH_CAP): Suggestion[] {
-  const kept = (
-    db()
-      .prepare(
-        `SELECT COUNT(*) AS n FROM sources s
-          WHERE (s.triage IS NULL OR s.triage = 'kept')
-            AND COALESCE(s.kept_at, s.published_at, s.added_at) >= datetime('now', @window)`
-      )
-      .get({ window: `-${AUTO_WATCH_DAYS} days` }) as { n: number }
-  ).n;
-  if (kept < AUTO_WATCH_MIN_SOURCES) return [];
-
   return db()
     .prepare(
-      `SELECT m.entity_id, e.canonical_name AS name, e.type,
-              COUNT(DISTINCT m.source_id) AS sources,
+      `SELECT t.id AS tag_id, t.name,
+              COUNT(DISTINCT s.id) AS sources,
               COUNT(DISTINCT s.outlet) AS outlets
-         FROM live_mentions m
-         JOIN sources s  ON s.id = m.source_id
-         JOIN entities e ON e.id = m.entity_id AND e.merged_into IS NULL
+         FROM tags t
+         JOIN source_tags st ON st.tag_id = t.id
+         JOIN sources s ON s.id = st.source_id
         WHERE (s.triage IS NULL OR s.triage = 'kept')
           AND COALESCE(s.kept_at, s.published_at, s.added_at) >= datetime('now', @window)
-          AND m.entity_id NOT IN (SELECT entity_id FROM watchlist WHERE entity_id IS NOT NULL)
-          AND m.entity_id NOT IN (SELECT entity_id FROM watch_declined)
-          -- Not a website or a document. FederalRegister.gov earns a mention in
-          -- everything the Federal Register feed brings in; it is the shelf the
-          -- source came from, not a thing that happens.
-          AND e.type <> 'work'
-        GROUP BY m.entity_id
+          AND t.id NOT IN (SELECT tag_id FROM watchlist WHERE tag_id IS NOT NULL)
+          AND t.id NOT IN (SELECT ref_id FROM watch_dismissed WHERE kind='topic')
+        GROUP BY t.id
        HAVING sources >= @min AND outlets >= @outlets
-        ORDER BY sources DESC, e.canonical_name
+        ORDER BY sources DESC, t.name
         LIMIT @limit`
     )
     .all({
@@ -220,7 +213,7 @@ export function suggestions(limit = AUTO_WATCH_CAP): Suggestion[] {
 /**
  * Promotes what has earned it, up to the cap, and says what it added.
  *
- * Only ever adds. Nothing is removed for going quiet: a subject you watched
+ * Only ever adds. Nothing is removed for going quiet: a topic you followed
  * through a story is one you will want again when it returns, and a list that
  * empties itself is a list you cannot trust. Run from the morning routine.
  */
@@ -236,13 +229,10 @@ export function autoWatch(): Suggestion[] {
 
   return tx(() => {
     const insert = db().prepare(
-      "INSERT INTO watchlist (entity_id, source, note) VALUES (?, 'auto', ?)"
+      "INSERT INTO watchlist (tag_id, source, note) VALUES (?, 'auto', ?)"
     );
     for (const p of picks) {
-      insert.run(
-        p.entity_id,
-        `In ${p.sources} of the sources you kept, from ${p.outlets} outlets.`
-      );
+      insert.run(p.tag_id, `On ${p.sources} of the sources you kept, from ${p.outlets} outlets.`);
     }
     return picks;
   });

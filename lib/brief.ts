@@ -112,18 +112,28 @@ export function gather(from: Date, to: Date, opts: { perWatch?: number; maxOther
   const watched: BriefMaterial["watched"] = [];
   const seen = new Set<number>();
 
+  /**
+   * The watched sections, and why they are topics.
+   *
+   * They used to be one section per watched thing, entities included, and that
+   * is what made a quiet morning read as four developments: an article about
+   * the president is evidence about Donald Trump, the Trump administration, the
+   * White House and the United States, so the same passage was printed four
+   * times under four headings. A topic covers all four in one, and says
+   * something a reader can act on — "Trade policy", not "Donald Trump".
+   *
+   * Entity watches still exist and still do their other work: they decide which
+   * entries are kept current first, and the star on an entry is how you say a
+   * subject matters. They no longer carve up the brief.
+   *
+   * A passage is used once. The first section to claim it keeps it, and the
+   * rest of the brief — including "everything else" — will not repeat it.
+   */
   for (const w of listWatchlist()) {
     let rows: BriefPassage[] = [];
 
-    if (w.kind === "entity" && w.entity_id) {
-      rows = db()
-        .prepare(
-          `SELECT ${PASSAGE_COLUMNS} ${PASSAGE_JOINS}
-            WHERE m.entity_id = @entityId AND ${IN_WINDOW} AND ${WORTH_READING}
-            ORDER BY COALESCE(s.published_at, s.added_at) DESC, m.id DESC
-            LIMIT @limit`
-        )
-        .all({ ...params, entityId: w.entity_id, limit: perWatch }) as BriefPassage[];
+    if (w.kind === "entity") {
+      continue;
     } else if (w.kind === "topic" && w.tag_id) {
       rows = db()
         .prepare(
@@ -150,9 +160,10 @@ export function gather(from: Date, to: Date, opts: { perWatch?: number; maxOther
       }
     }
 
-    if (rows.length) {
-      for (const r of rows) seen.add(r.mention_id);
-      watched.push({ label: w.label, kind: w.kind, entityId: w.entity_id, passages: rows });
+    const fresh = rows.filter((r) => !seen.has(r.mention_id));
+    if (fresh.length) {
+      for (const r of fresh) seen.add(r.mention_id);
+      watched.push({ label: w.label, kind: w.kind, entityId: w.entity_id, passages: fresh });
     }
   }
 
@@ -259,6 +270,9 @@ export interface BriefRow {
   window_to: string | null;
   stats_json: string;
   error: string | null;
+  /** Which model wrote it, as the provider reported; null for the
+   *  "nothing came in" notice or when the call never said. */
+  model: string | null;
   created_at: string;
 }
 

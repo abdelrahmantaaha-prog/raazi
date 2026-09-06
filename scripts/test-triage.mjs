@@ -51,7 +51,7 @@ function mkHeld({ title, feedId, publishedAt = null, storyId = null }) {
   );
   db()
     .prepare("INSERT INTO chunks (source_id, seq, text, locator_json) VALUES (?, 0, ?, '{}')")
-    .run(sourceId, `${title}. Officials described the meeting as short.`);
+    .run(sourceId, `${title}. ${"Officials described the meeting as short. ".repeat(30)}`);
   const itemId = Number(
     db()
       .prepare(
@@ -178,6 +178,33 @@ section("The week is built from what you kept, when you kept it");
   triage.discard([junk.itemId]);
   const after = brief.keptBetween(from, to);
   check("a discarded one never appears", !after.some((k) => k.title === "Junk"));
+}
+
+/* ------------------------------------------------ nothing kept without text */
+
+section("A headline is not an article");
+{
+  const stub = mkHeld({ title: "Paywalled piece", feedId });
+  db().prepare("DELETE FROM chunks WHERE source_id=?").run(stub.sourceId);
+  db()
+    .prepare("INSERT INTO chunks (source_id, seq, text, locator_json) VALUES (?, 0, ?, '{}')")
+    .run(stub.sourceId, "Democracy Dies in Darkness. Subscribe to continue reading.");
+
+  const result = triage.keep([stub.itemId]);
+  check("keeping it is refused", result.kept === 0 && result.refused.length === 1, JSON.stringify(result));
+  check("and it stays in the inbox", triage.heldCount() >= 1);
+  check(
+    "nothing was queued for it",
+    (db().prepare("SELECT COUNT(*) n FROM tasks WHERE kind='extract' AND run_id=(SELECT MAX(id) FROM runs)").get()).n >= 0
+  );
+
+  let threw = null;
+  try { triage.pasteText(stub.itemId, "Too short to be an article."); } catch (e) { threw = e.message; }
+  check("pasting a scrap is refused too", Boolean(threw), threw ?? "no error");
+
+  triage.pasteText(stub.itemId, "The minister said the talks would continue. ".repeat(40));
+  const after = triage.keep([stub.itemId]);
+  check("once the article is pasted it can be kept", after.kept === 1, JSON.stringify(after));
 }
 
 /* ---------------------------------------------------------- the feed clock */

@@ -51,7 +51,16 @@ export async function POST(req: Request) {
     // Keeping is the only thing here that starts spending, so it is the only
     // thing that wakes the worker.
     if (result.kept) kickWorker();
-    return NextResponse.json({ ...result, held: heldCount(), items: listHeld() });
+    return NextResponse.json({
+      ...result,
+      note: result.refused.length
+        ? `${result.refused.length} had nothing behind the headline and ${
+            result.refused.length === 1 ? "was" : "were"
+          } left where ${result.refused.length === 1 ? "it is" : "they are"} — paste the article, then keep it.`
+        : undefined,
+      held: heldCount(),
+      items: listHeld(),
+    });
   }
 
   return badRequest("An action of keep, discard or undo.");

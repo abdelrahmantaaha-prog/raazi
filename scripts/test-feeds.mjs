@@ -323,14 +323,31 @@ section("The brief is a query, not a summary");
   const inWindow = mkPassage(fresh, "Freeland said the talks would continue into April.", "Talks continue");
   mkPassage(stale, "Freeland described the round as difficult.", "Round was difficult");
 
+  // The brief is organised by topic. A watched entity still matters — it
+  // decides which entries are kept current — but it no longer carves out a
+  // section of its own, because four entities in one article used to print the
+  // same passage four times.
+  const tagId = Number(db().prepare("INSERT INTO tags (name) VALUES ('Canada trade')").run().lastInsertRowid);
+  db().prepare("INSERT INTO source_tags (source_id, tag_id) VALUES (?, ?)").run(fresh, tagId);
+  watchlist.watch({ tagId });
+
   const material = brief.gather(new Date(now.getTime() - 24 * 3600_000), new Date(now.getTime() + 60_000));
   check("the brief has material", brief.hasMaterial(material));
-  const watched = material.watched.find((w) => w.label === "Chrystia Freeland");
-  check("the watched subject has its passages", watched && watched.passages.length === 1, JSON.stringify(material.watched.map((w) => [w.label, w.passages.length])));
+  check(
+    "a watched entity gets no section of its own",
+    !material.watched.some((w) => w.label === "Chrystia Freeland"),
+    JSON.stringify(material.watched.map((w) => w.label))
+  );
+  const watched = material.watched.find((w) => w.label === "Canada trade");
+  check("the watched topic has its passages", watched && watched.passages.length === 1, JSON.stringify(material.watched.map((w) => [w.label, w.passages.length])));
   check("only the passage inside the window is included", watched.passages[0].mention_id === inWindow);
   check("the outlet travels with it", watched.passages[0].outlet === "Reuters");
   check("so does the attribution", watched.passages[0].attribution === "unnamed officials");
   check("and the kind of claim", watched.passages[0].claim_kind === "allegation");
+  check(
+    "and it is not repeated in everything else",
+    !material.other.some((p) => p.mention_id === inWindow)
+  );
   check("the counts describe the window", material.counts.sources >= 1 && material.counts.passages >= 1);
 
   const empty = brief.gather(new Date(now.getTime() - 400 * 24 * 3600_000), new Date(now.getTime() - 399 * 24 * 3600_000));
