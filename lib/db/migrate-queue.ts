@@ -35,4 +35,12 @@ export function migrateQueue(db: Database.Database) {
   // an entry you may cite should say which one wrote it. Kept here so the UI
   // can show it.
   addColumn(db, "tasks", "model", "TEXT");
+
+  // The same on what the model wrote. A revision outlives the task that made
+  // it and the run the task sat in, and "which version of which model wrote
+  // this draft" is a question that comes up long after either is listed.
+  // NULL when the call that wrote it never said. (entries.model has been in
+  // the schema since the start; mentions.model is added in migrate.ts, ahead
+  // of the live_mentions rebuild; briefs.model in migrate-feeds.ts.)
+  addColumn(db, "entry_revisions", "model", "TEXT");
 }

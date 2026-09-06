@@ -40,7 +40,13 @@ export default async function WeekPage({
       next={isCurrentWeek(key) ? null : nextWeekKey(key)}
       brief={
         brief
-          ? { body: brief.body_md, state: brief.state, error: brief.error, createdAt: brief.created_at }
+          ? {
+              body: brief.body_md,
+              state: brief.state,
+              error: brief.error,
+              createdAt: brief.created_at,
+              model: brief.model,
+            }
           : null
       }
       citations={brief ? citationsFor(brief.body_md) : []}

@@ -38,6 +38,7 @@ export default async function BriefPage({
               from: brief.window_from,
               to: brief.window_to,
               error: brief.error,
+              model: brief.model,
             }
           : null
       }

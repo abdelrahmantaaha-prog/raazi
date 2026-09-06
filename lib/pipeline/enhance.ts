@@ -138,7 +138,7 @@ export async function handleEnhance(task: Task): Promise<void> {
     where
   );
 
-  const { data, usage } = await generateJson<ChunkExtraction>({
+  const { data, usage, model } = await generateJson<ChunkExtraction>({
     stage: "extract",
     system: `${systemFor(getConfig().entryLanguage)}\n\n${SECOND_PASS}`,
     schema: SCHEMA,
@@ -159,7 +159,7 @@ export async function handleEnhance(task: Task): Promise<void> {
   const seen = new Set(existing.map((m) => quoteKey(m.surface, m.quote)));
 
   tx(() => {
-    const added = persist(chunk, data, seen);
+    const added = persist(chunk, data, seen, model);
     finishTask(
       task.id,
       task.run_id,

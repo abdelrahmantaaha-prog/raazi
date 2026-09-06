@@ -339,5 +339,88 @@ section("The server binds where it says it does");
   check("only together with the token", lanScript.includes("CORPUS_LAN"));
 }
 
+/* ---------------------------------------------------------------- models */
+
+section("Everything the model wrote says which model wrote it");
+{
+  const { listRuns, getRun, noteTaskModel } = await import("../lib/queue.ts");
+  const { persist } = await import("../lib/pipeline/extract.ts");
+
+  const cols = (table) => db().prepare(`PRAGMA table_info(${table})`).all().map((c) => c.name);
+  check("entries carry a model column", cols("entries").includes("model"));
+  check("the migration adds entry_revisions.model", cols("entry_revisions").includes("model"));
+  check("the migration adds briefs.model", cols("briefs").includes("model"));
+  check("the migration adds mentions.model", cols("mentions").includes("model"));
+  check("tasks.model is still there", cols("tasks").includes("model"));
+  // The view is rebuilt from `SELECT *` on every boot; a column added after
+  // that rebuild would be missing from it until the next one.
+  check(
+    "live_mentions exposes the new column from the first boot",
+    (() => {
+      try {
+        db().prepare("SELECT model FROM live_mentions LIMIT 1").all();
+        return true;
+      } catch {
+        return false;
+      }
+    })()
+  );
+
+  // A run's models come from its tasks, deduplicated across them — one task
+  // may have fallen through providers and recorded two.
+  const runId = createRun({ kind: "extract", label: "Models" });
+  enqueue(runId, [
+    { kind: "extract", payload: { chunkId: 1 } },
+    { kind: "extract", payload: { chunkId: 2 } },
+    { kind: "extract", payload: { chunkId: 3 } },
+  ]);
+  check("a run nothing has answered yet has no models", getRun(runId).models === null);
+  const ids = db().prepare("SELECT id FROM tasks WHERE run_id=? ORDER BY seq").all(runId).map((t) => t.id);
+  noteTaskModel(ids[0], "gemini-2.5-flash");
+  noteTaskModel(ids[1], "gemini-2.5-flash, qwen3.5:9b");
+  check(
+    "a run's models aggregate from its tasks, each named once",
+    getRun(runId).models === "gemini-2.5-flash, qwen3.5:9b",
+    getRun(runId).models
+  );
+  check(
+    "the listing carries the same",
+    listRuns().find((r) => r.id === runId)?.models === "gemini-2.5-flash, qwen3.5:9b"
+  );
+  const rows = db().prepare("SELECT model FROM tasks WHERE run_id=? ORDER BY seq").all(runId);
+  check("and the per-task record is untouched", rows[0].model === "gemini-2.5-flash" && rows[2].model === null);
+
+  // Every mention persisted from one extraction call gets that call's model;
+  // when the call did not say, null is stored rather than a guess.
+  const src = Number(
+    db().prepare("INSERT INTO sources (title, kind, status) VALUES ('M','text','ready')").run().lastInsertRowid
+  );
+  const text = "Nasser met Tito in Brioni. Tito welcomed him.";
+  const mk = (seq) =>
+    Number(
+      db()
+        .prepare("INSERT INTO chunks (source_id, seq, text, locator_json) VALUES (?, ?, ?, '{}')")
+        .run(src, seq, text).lastInsertRowid
+    );
+  const c1 = mk(0);
+  const extraction = {
+    entities: [
+      { surface: "Nasser", type: "person", quote: "Nasser met Tito in Brioni.", claim: "met Tito" },
+      { surface: "Tito", type: "person", quote: "Tito welcomed him.", claim: "welcomed Nasser" },
+    ],
+  };
+  persist({ id: c1, source_id: src, text }, extraction, undefined, "gemini-2.5-flash");
+  const stamped = db().prepare("SELECT model FROM mentions WHERE chunk_id=?").all(c1);
+  check("persist stamps every mention with the call's model", stamped.length > 0 && stamped.every((m) => m.model === "gemini-2.5-flash"), JSON.stringify(stamped));
+  const c2 = mk(1);
+  persist({ id: c2, source_id: src, text }, extraction);
+  const unstamped = db().prepare("SELECT model FROM mentions WHERE chunk_id=?").all(c2);
+  check("and stores null, not a guess, when the call did not say", unstamped.length > 0 && unstamped.every((m) => m.model === null));
+
+  // What the run page and the Library poll hand the UI.
+  const runRoute = fs.readFileSync(path.join(root, "app/api/runs/[id]/route.ts"), "utf8");
+  check("the run page's task list selects the model", /tokens_out, model, updated_at FROM tasks/.test(runRoute));
+}
+
 console.log(`\n${passed} passed, ${failed} failed`);
 process.exit(failed ? 1 : 0);

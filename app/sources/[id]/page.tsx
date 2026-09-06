@@ -62,7 +62,7 @@ export default async function SourcePage({
 
   const mentions = db()
     .prepare(
-      `SELECT m.chunk_id, m.surface, m.entity_id, e.canonical_name, e.type
+      `SELECT m.chunk_id, m.surface, m.entity_id, m.model, e.canonical_name, e.type
          FROM live_mentions m JOIN entities e ON e.id=m.entity_id
         WHERE m.source_id=? AND e.merged_into IS NULL`
     )
@@ -70,6 +70,7 @@ export default async function SourcePage({
     chunk_id: number;
     surface: string;
     entity_id: number;
+    model: string | null;
     canonical_name: string;
     type: EntityType;
   }[];
@@ -91,6 +92,7 @@ export default async function SourcePage({
       surface: m.surface,
       entityId: m.entity_id,
       name: m.canonical_name,
+      model: m.model,
     })),
   }));
 

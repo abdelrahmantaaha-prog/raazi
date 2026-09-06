@@ -357,6 +357,12 @@ export function EntityView({
                   Written from {evidence.length} passage{evidence.length === 1 ? "" : "s"} across{" "}
                   {evidenceBySource.length} source{evidenceBySource.length === 1 ? "" : "s"}. Last
                   updated <span title={formatDateTime(entry.updated_at)}>{relativeDate(entry.updated_at)}</span>.
+                  {entry.model && (
+                    <>
+                      {" "}
+                      Written by <Badge>{entry.model}</Badge>.
+                    </>
+                  )}{" "}
                   Click any numbered citation to see the exact quote it rests on.
                 </p>
               </Card>
@@ -604,6 +610,11 @@ export function EntityView({
                       <span className="ml-2 text-xs font-normal text-[var(--color-muted)]" title={formatDateTime(r.created_at)}>
                         {formatDateTime(r.created_at)}
                       </span>
+                      {r.model && (
+                        <span className="ml-2">
+                          <Badge>{r.model}</Badge>
+                        </span>
+                      )}
                     </p>
                     {r.changelog_md && (
                       <div className="mt-1 whitespace-pre-wrap text-sm text-[var(--color-muted)]">

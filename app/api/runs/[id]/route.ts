@@ -70,7 +70,7 @@ export async function GET(_req: Request, ctx: { params: Promise<{ id: string }> 
   if (!run) return notFound("No such run.");
   const tasks = db()
     .prepare(
-      "SELECT id, seq, kind, state, attempts, last_error, tokens_in, tokens_out, updated_at FROM tasks WHERE run_id=? ORDER BY seq, id"
+      "SELECT id, seq, kind, state, attempts, last_error, tokens_in, tokens_out, model, updated_at FROM tasks WHERE run_id=? ORDER BY seq, id"
     )
     .all(runId);
   return NextResponse.json({ run, tasks });

@@ -343,27 +343,46 @@ export interface RunProgress extends Run {
   failed: number;
   pending: number;
   source_title: string | null;
+  /** Every model that answered a task in this run, comma-separated and
+   *  deduplicated, in the order SQLite met them; null until one has. Derived
+   *  from tasks.model rather than stored, so it is right for old runs too. */
+  models: string | null;
 }
 
 const RUN_PROGRESS_SQL = `SELECT r.*, s.title AS source_title,
+              (SELECT group_concat(DISTINCT t.model) FROM tasks t WHERE t.run_id=r.id AND t.model IS NOT NULL) AS models,
               (SELECT COUNT(*) FROM tasks t WHERE t.run_id=r.id) AS total,
               (SELECT COUNT(*) FROM tasks t WHERE t.run_id=r.id AND t.state IN ('done','skipped','superseded')) AS done,
               (SELECT COUNT(*) FROM tasks t WHERE t.run_id=r.id AND t.state='failed') AS failed,
               (SELECT COUNT(*) FROM tasks t WHERE t.run_id=r.id AND t.state IN ('pending','running')) AS pending
          FROM runs r LEFT JOIN sources s ON s.id = r.source_id`;
 
+/**
+ * A task that fell through providers records "a, b" in one cell, so the
+ * DISTINCT above can still repeat a name across tasks; this folds the list
+ * back to one mention of each.
+ */
+function tidyModels(row: RunProgress): RunProgress {
+  const names = [...new Set((row.models ?? "").split(",").map((s) => s.trim()).filter(Boolean))];
+  row.models = names.length ? names.join(", ") : null;
+  return row;
+}
+
 export function listRuns(limit = 50): RunProgress[] {
-  return db()
-    .prepare(`${RUN_PROGRESS_SQL} ORDER BY r.id DESC LIMIT ?`)
-    .all(limit) as RunProgress[];
+  return (
+    db()
+      .prepare(`${RUN_PROGRESS_SQL} ORDER BY r.id DESC LIMIT ?`)
+      .all(limit) as RunProgress[]
+  ).map(tidyModels);
 }
 
 /** One run with its progress. Used to be the thousand-run listing filtered
  *  in memory — four subselects per run, on every poll of one run's page. */
 export function getRun(runId: number): RunProgress | undefined {
-  return db()
+  const row = db()
     .prepare(`${RUN_PROGRESS_SQL} WHERE r.id = ?`)
     .get(runId) as RunProgress | undefined;
+  return row ? tidyModels(row) : undefined;
 }
 
 /** True when the run has spent its allowance. */

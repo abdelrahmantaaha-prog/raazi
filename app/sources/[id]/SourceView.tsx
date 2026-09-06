@@ -384,6 +384,7 @@ export function SourceView({
                   read here
                 </button>
                 {p.extracted ? <Badge tone="ok">read</Badge> : <Badge tone="quiet">not read</Badge>}
+                {readBy(p) && <Badge>{readBy(p)}</Badge>}
                 {p.mentions.length > 0 && <span>· {p.mentions.length} mentions</span>}
               </div>
               <p className="whitespace-pre-wrap text-sm leading-relaxed">{p.text}</p>
@@ -393,6 +394,12 @@ export function SourceView({
       </details>
     </div>
   );
+}
+
+/** Which model(s) read a passage, from the mentions it left; null when none said. */
+function readBy(p: Passage): string | null {
+  const names = [...new Set(p.mentions.map((m) => m.model).filter((m): m is string => Boolean(m)))];
+  return names.length ? names.join(", ") : null;
 }
 
 /**

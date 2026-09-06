@@ -6,6 +6,7 @@ import { useRouter } from "next/navigation";
 import { EntryBody, type Citation } from "../components/EntryBody";
 import { CitationPopover } from "../components/CitationPopover";
 import { RunChip } from "../components/RunChip";
+import { Badge } from "../components/ui";
 import { formatDate, relativeDate } from "@/lib/dates";
 
 interface WeekCitation extends Citation {
@@ -59,7 +60,7 @@ export default function WeekView({
   to: string;
   previous: string;
   next: string | null;
-  brief: { body: string; state: string; error: string | null; createdAt: string } | null;
+  brief: { body: string; state: string; error: string | null; createdAt: string; model: string | null } | null;
   citations: WeekCitation[];
   kept: Kept[];
   discarded: number;
@@ -216,8 +217,9 @@ export default function WeekView({
 
       {brief && brief.state === "done" && brief.body ? (
         <section className="space-y-3 border-t border-[var(--color-rule)] pt-6">
-          <h2 className="text-sm font-medium text-[var(--color-muted)]">
-            The brief · written {formatDate(brief.createdAt, { time: true })}
+          <h2 className="flex flex-wrap items-center gap-2 text-sm font-medium text-[var(--color-muted)]">
+            <span>The brief · written {formatDate(brief.createdAt, { time: true })}</span>
+            {brief.model ? <Badge>{brief.model}</Badge> : null}
           </h2>
           <article className="max-w-[70ch]">
             <EntryBody

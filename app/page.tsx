@@ -23,6 +23,8 @@ interface Run {
   done: number;
   failed: number;
   pending: number;
+  /** Which model(s) answered, comma-separated; null until one has. */
+  models: string | null;
 }
 
 interface SourceRow {
@@ -809,6 +811,12 @@ function RunCard({
             {run.failed > 0 && ` · ${run.failed} failed`}
             {tokens > 0 && ` · ${tokens.toLocaleString()} tokens`}
             {run.budget_cap ? ` of ${run.budget_cap.toLocaleString()}` : ""}
+            {run.models && (
+              <>
+                {" · "}
+                <Badge>{run.models}</Badge>
+              </>
+            )}
           </p>
         </div>
         <div className="flex gap-2">

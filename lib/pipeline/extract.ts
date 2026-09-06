@@ -356,7 +356,7 @@ export async function handleExtract(task: Task): Promise<void> {
     where
   );
 
-  const { data, usage } = await generateJson<ChunkExtraction>({
+  const { data, usage, model } = await generateJson<ChunkExtraction>({
     stage: "extract",
     // What you have rejected from this source before, in your words. Appended
     // rather than woven in, so the standing rules stay one block and a
@@ -378,7 +378,7 @@ export async function handleExtract(task: Task): Promise<void> {
 
   // Everything below is pure DB work, so it commits or it doesn't.
   tx(() => {
-    persist(chunk, data);
+    persist(chunk, data, undefined, model);
     db().prepare("UPDATE chunks SET extracted_at=datetime('now') WHERE id=?").run(chunk.id);
     finishTask(task.id, task.run_id, usage);
   });
@@ -405,11 +405,16 @@ export interface PersistResult {
  * `skipQuotes` are quotes already on record for this chunk; anything matching
  * one is dropped. Enhance is meant to add what was missed, not to file a second
  * copy of what the first pass already found.
+ *
+ * `model` is which model produced `data`, when the provider said; every
+ * mention written here gets it, so the source view can show who read the
+ * passage. Absent or null is stored as null, never guessed.
  */
 export function persist(
   chunk: TargetChunk,
   data: ChunkExtraction,
-  skipQuotes?: Set<string>
+  skipQuotes?: Set<string>,
+  model?: string | null
 ): PersistResult {
   const result: PersistResult = { mentions: 0, relations: 0, events: 0 };
   {
@@ -452,8 +457,8 @@ export function persist(
 
       const mentionId = db()
         .prepare(
-          `INSERT INTO mentions (entity_id, chunk_id, source_id, surface, quote, claim, context, confidence, attribution, claim_kind)
-           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
+          `INSERT INTO mentions (entity_id, chunk_id, source_id, surface, quote, claim, context, confidence, attribution, claim_kind, model)
+           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
         )
         .run(
           entityId,
@@ -468,7 +473,8 @@ export function persist(
           // being either discarded or quietly treated as equal.
           e.fromContext ? 0.6 : 1.0,
           attribution,
-          claimKind
+          claimKind,
+          model ?? null
         )
         .lastInsertRowid;
 

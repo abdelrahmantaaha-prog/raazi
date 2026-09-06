@@ -13,6 +13,8 @@ interface RunState {
   done?: number;
   failed?: number;
   last_error?: string | null;
+  /** Which model(s) answered so far, comma-separated. */
+  models?: string | null;
 }
 
 const LABEL: Record<string, { text: string; tone: "running" | "warn" | "danger" | "ok" | "quiet" }> = {
@@ -128,6 +130,7 @@ export function RunChip({
           {(run.failed ?? 0) > 0 ? ` · ${run.failed} failed` : ""}
         </span>
       )}
+      {run?.models && <Badge>{run.models}</Badge>}
       {run?.last_error && SETTLED.has(run.state) && run.state !== "done" && (
         <span className="max-w-[24rem] truncate" title={run.last_error}>
           {run.last_error}

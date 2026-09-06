@@ -157,7 +157,7 @@ export function entityDetail(id: number) {
   if (!entity) return undefined;
 
   const entry = db().prepare("SELECT * FROM entries WHERE entity_id=?").get(id) as
-    | { summary: string; body_md: string; updated_at: string }
+    | { summary: string; body_md: string; updated_at: string; model: string | null }
     | undefined;
 
   const evidence = evidenceFor(id);
@@ -230,7 +230,7 @@ export function entityDetail(id: number) {
 
   const revisions = db()
     .prepare(
-      `SELECT rv.id, rv.changelog_md, rv.created_at, s.title AS trigger_title
+      `SELECT rv.id, rv.changelog_md, rv.created_at, rv.model, s.title AS trigger_title
          FROM entry_revisions rv
     LEFT JOIN sources s ON s.id = rv.trigger_source_id
         WHERE rv.entity_id=? ORDER BY rv.id DESC`
@@ -239,6 +239,7 @@ export function entityDetail(id: number) {
     id: number;
     changelog_md: string | null;
     created_at: string;
+    model: string | null;
     trigger_title: string | null;
   }[];
 

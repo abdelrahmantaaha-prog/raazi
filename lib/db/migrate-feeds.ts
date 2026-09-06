@@ -178,6 +178,10 @@ export function migrateFeeds(db: Database.Database) {
   // no table has to be rebuilt.
   addColumn(db, "briefs", "kind", "TEXT NOT NULL DEFAULT 'day'");
 
+  // Which model wrote the brief, as the provider reported it. NULL when the
+  // brief was the "nothing came in" notice, which no model writes.
+  addColumn(db, "briefs", "model", "TEXT");
+
   // When an entry was last rewritten to chase verification flags. See
   // flaggedForRewrite(): the rewrite counter beside it resets whenever the
   // evidence changes, so on a daily beat it never reached its cap.
