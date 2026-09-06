@@ -47,6 +47,22 @@ rate limited per key too, so the pacing is per key — three keys means roughly 
 times the throughput. Settings shows each key's state and lets you pause, retry or
 remove one.
 
+## Getting around
+
+Seven sections down the left, each holding its own pages as tabs. The rail used
+to list all fifteen pages at once, which is a table of contents rather than a
+navigation bar — nothing has moved or gone, it is just filed now.
+
+| Section      | Its pages                                | What it is for                                        |
+| ------------ | ---------------------------------------- | ----------------------------------------------------- |
+| **Brief**    | Today · This week                        | What to read this morning, and the week's record       |
+| **News**     | Inbox · Stories · Feeds                  | The wire: what arrived, grouped, and what subscribes   |
+| **Library**  | Sources · Quotes · Topics                | What you own, the passages you starred, how it's filed |
+| **Pedia**    | Entries · Network                        | What was built from the library, one at a time or all  |
+| **Write**    | —                                        | Drafts and ideas, with the citations to hand           |
+| **Search**   | Library · News · Books & papers          | Three searches: your own text, the wire, the catalogues |
+| **Settings** | —                                        | Keys, routing, schedules, corrections                  |
+
 ## Using more than one service
 
 There are three services, and each is here for a reason: **Gemini** reads, **Claude**
@@ -271,6 +287,8 @@ live article, and checks the cleaner does not mistake cited prose for a bibliogr
 
 ```
 app/                 pages and API routes
+  components/sections.ts  what the rail lists, and what is folded under each
+public/fonts/        Amiri, subsetted to Arabic — the pedia is half Arabic
 lib/
   db/schema.sql      the whole data model
   queue.ts           runs and tasks

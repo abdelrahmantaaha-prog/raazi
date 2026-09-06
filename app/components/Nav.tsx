@@ -1,7 +1,9 @@
 "use client";
 
+import type { ReactElement } from "react";
 import Link from "next/link";
 import { usePathname } from "next/navigation";
+import { SECTIONS, sectionFor, sectionHref } from "./sections";
 
 /**
  * The side rail.
@@ -9,39 +11,35 @@ import { usePathname } from "next/navigation";
  * This was a row of ten text links across the top, which is fine on a desktop
  * and falls apart on a phone: the labels ran off the edge of the screen as one
  * unbroken word — "LibraryWritePediaNetworkTopicsSearchQuotes" — and there
- * was no way to reach the last four. Ten destinations do not fit across 360
- * pixels in any typography, so they go down the side instead, where there is
- * room for as many as the app ever needs.
+ * was no way to reach the last four. So they went down the side instead, where
+ * there is room for as many as the app needs.
+ *
+ * Then there were fifteen of them, which is a different failure: room is not
+ * shape, and a flat list of fifteen peers has to be read end to end every time
+ * because nothing in it is subordinate to anything else. It is seven sections
+ * now, each holding the pages that belong to it — see `sections.ts` for what
+ * went where and why. No page moved: the second and third page of a section are
+ * reached from the tab strip the layout draws, which costs one click and saves
+ * eight lines of rail.
  *
  * Icons alone on a narrow screen, icons with labels once there is width for
  * them. Every icon keeps its label as a tooltip and as screen-reader text, so
  * the compact form loses nothing but the printing.
  */
 
-const NAV = [
-  // The brief is first because it is what a morning starts with; the library
-  // is where you go when you already know what you are looking for.
-  { href: "/brief", label: "Brief", icon: Sun },
-  // Then the two halves of a working week: what the feeds pulled in and is
-  // waiting on you, and what you kept, which is what gets presented.
-  { href: "/inbox", label: "Inbox", icon: Tray },
-  { href: "/week", label: "This week", icon: Week },
-  { href: "/", label: "Library", icon: Books, exact: true },
-  { href: "/stories", label: "Stories", icon: Thread },
-  { href: "/write", label: "Write", icon: Pen },
-  { href: "/pedia", label: "Pedia", icon: Cards },
-  { href: "/network", label: "Network", icon: Graph },
-  { href: "/tags", label: "Topics", icon: Tag },
-  { href: "/feeds", label: "Feeds", icon: Rss },
-  { href: "/discover", label: "Search news", icon: Radar },
-  { href: "/scholar", label: "Books & papers", icon: Question },
-  { href: "/search", label: "Search", icon: Glass },
-  { href: "/quotes", label: "Quotes", icon: Quote },
-  { href: "/settings", label: "Settings", icon: Gear },
-];
+/** One drawing per section, by id. */
+const ICONS: Record<string, (p: IconProps) => ReactElement> = {
+  brief: Sun,
+  news: Tray,
+  library: Books,
+  pedia: Cards,
+  write: Pen,
+  search: Glass,
+  settings: Gear,
+};
 
 export function Nav() {
-  const path = usePathname();
+  const here = sectionFor(usePathname());
 
   return (
     <nav
@@ -62,14 +60,16 @@ export function Nav() {
 
       {/* Scrolls on a short screen rather than clipping the last few. */}
       <div className="flex min-h-0 flex-1 flex-col gap-0.5 overflow-y-auto px-1.5 pb-3 lg:px-2">
-        {NAV.map((n) => {
-          const active = n.exact ? path === n.href : path === n.href || path.startsWith(`${n.href}/`);
-          const Icon = n.icon;
+        {SECTIONS.map((section) => {
+          // Lit for every page in the section, not only its first tab, so the
+          // rail goes on saying where you are once you move along the strip.
+          const active = here?.id === section.id;
+          const Icon = ICONS[section.id];
           return (
             <Link
-              key={n.href}
-              href={n.href}
-              title={n.label}
+              key={section.id}
+              href={sectionHref(section)}
+              title={section.label}
               aria-current={active ? "page" : undefined}
               className={`flex items-center gap-3 rounded-md px-2 py-2.5 transition lg:px-3 ${
                 active
@@ -80,8 +80,8 @@ export function Nav() {
               <span className="mx-auto lg:mx-0">
                 <Icon active={active} />
               </span>
-              <span className="hidden text-sm lg:inline">{n.label}</span>
-              <span className="sr-only lg:hidden">{n.label}</span>
+              <span className="hidden text-sm lg:inline">{section.label}</span>
+              <span className="sr-only lg:hidden">{section.label}</span>
             </Link>
           );
         })}
@@ -121,51 +121,11 @@ function Sun({ active }: IconProps) {
   );
 }
 
-function Thread({ active }: IconProps) {
-  return (
-    <svg {...box} strokeWidth={active ? 2 : 1.7}>
-      <circle cx="6" cy="6" r="2" />
-      <circle cx="6" cy="18" r="2" />
-      <circle cx="18" cy="12" r="2" />
-      <path d="M8 6h4a4 4 0 0 1 4 4M8 18h4a4 4 0 0 0 4-4" />
-    </svg>
-  );
-}
-
-function Radar({ active }: IconProps) {
-  return (
-    <svg {...box} strokeWidth={active ? 2 : 1.7}>
-      <circle cx="12" cy="12" r="9" />
-      <circle cx="12" cy="12" r="5" />
-      <path d="M12 12l6-4" />
-    </svg>
-  );
-}
-
 function Tray({ active }: IconProps) {
   return (
     <svg {...box} strokeWidth={active ? 2 : 1.7}>
       <path d="M3 13h4l2 3h6l2-3h4" />
       <path d="M5 5h14l2 8v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4z" />
-    </svg>
-  );
-}
-
-function Week({ active }: IconProps) {
-  return (
-    <svg {...box} strokeWidth={active ? 2 : 1.7}>
-      <rect x="3" y="5" width="18" height="16" rx="2" />
-      <path d="M3 10h18M8 3v4M16 3v4" />
-      <path d="M7 14h4" />
-    </svg>
-  );
-}
-
-function Rss({ active }: IconProps) {
-  return (
-    <svg {...box} strokeWidth={active ? 2 : 1.7}>
-      <circle cx="5.5" cy="18.5" r="1.4" fill="currentColor" stroke="none" />
-      <path d="M4 11a9 9 0 0 1 9 9M4 5a15 15 0 0 1 15 15" />
     </svg>
   );
 }
@@ -198,66 +158,11 @@ function Cards({ active }: IconProps) {
   );
 }
 
-function Graph({ active }: IconProps) {
-  return (
-    <svg {...box} strokeWidth={active ? 2 : 1.7}>
-      <circle cx="12" cy="12" r="2.4" />
-      <circle cx="5" cy="6" r="2" />
-      <circle cx="19" cy="7" r="2" />
-      <circle cx="17" cy="18" r="2" />
-      <path d="m6.6 7.4 3.7 3.2M17.3 8.6 13.6 11M15.6 16.6 13.4 14" />
-    </svg>
-  );
-}
-
-function Question({ active }: IconProps) {
-  return (
-    <svg {...box} strokeWidth={active ? 2 : 1.7}>
-      <path d="M21 12a8.5 8.5 0 1 1-3.4-6.8" />
-      <path d="M9.4 9a2.7 2.7 0 1 1 3.4 2.6c-.7.2-1 .8-1 1.5v.4" />
-      <path d="M12 17.2h.01" />
-    </svg>
-  );
-}
-
-function Cap({ active }: IconProps) {
-  return (
-    <svg {...box} strokeWidth={active ? 2 : 1.7}>
-      <path d="m12 4 9 4.5-9 4.5-9-4.5z" />
-      <path d="M7 10.6V16c0 1.4 2.2 2.6 5 2.6s5-1.2 5-2.6v-5.4" />
-    </svg>
-  );
-}
-
-function Tag({ active }: IconProps) {
-  return (
-    <svg {...box} strokeWidth={active ? 2 : 1.7}>
-      <path d="M4 4h7.2a2 2 0 0 1 1.4.6l7 7a2 2 0 0 1 0 2.8l-4.8 4.8a2 2 0 0 1-2.8 0l-7-7A2 2 0 0 1 4 11.2z" />
-      <path d="M8.5 8.5h.01" />
-    </svg>
-  );
-}
-
 function Glass({ active }: IconProps) {
   return (
     <svg {...box} strokeWidth={active ? 2 : 1.7}>
       <circle cx="10.8" cy="10.8" r="6.3" />
       <path d="m20 20-4.7-4.7" />
-    </svg>
-  );
-}
-
-/**
- * A quoted passage: the rule down its side, and the lines it holds.
- *
- * The obvious drawing — a pair of curly quotation marks — came out at this size
- * looking like the digits 66 sitting in the middle of a column of icons.
- */
-function Quote({ active }: IconProps) {
-  return (
-    <svg {...box} strokeWidth={active ? 2 : 1.7}>
-      <path d="M5 5.5v13" strokeWidth={active ? 2.6 : 2.2} />
-      <path d="M9.5 8h10M9.5 12h10M9.5 16h6" />
     </svg>
   );
 }

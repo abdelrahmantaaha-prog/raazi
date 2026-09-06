@@ -24,7 +24,8 @@ export interface Passage {
   locator: string;
   label: string | null;
   extracted: boolean;
-  mentions: { surface: string; entityId: number; name: string }[];
+  /** `model` is which model read the passage and found this, when known. */
+  mentions: { surface: string; entityId: number; name: string; model: string | null }[];
 }
 
 export interface Mark {
@@ -1178,9 +1179,10 @@ export function Reader({
           maxWidth: `${prefs.measure}em`,
           fontSize: `${prefs.size}px`,
           lineHeight: 1.72,
-          fontFamily: prefs.serif
-            ? 'Georgia, "Iowan Old Style", "Times New Roman", serif'
-            : 'ui-sans-serif, system-ui, "Segoe UI", sans-serif',
+          // Both stacks lead with Amiri, which claims only the Arabic
+          // codepoints — so the serif switch still switches the English and an
+          // Arabic book is set in Amiri either way.
+          fontFamily: prefs.serif ? "var(--font-serif)" : "var(--font-sans)",
           textAlign: prefs.justify ? "justify" : "start",
           // Hyphenation is what keeps justified prose from opening rivers of
           // whitespace; without it a narrow measure looks broken.
@@ -1191,7 +1193,7 @@ export function Reader({
       >
         <h1
           className="mb-1 text-[1.6em] font-semibold leading-tight"
-          style={{ fontFamily: 'Georgia, "Times New Roman", serif' }}
+          style={{ fontFamily: "var(--font-serif)" }}
         >
           {title}
         </h1>

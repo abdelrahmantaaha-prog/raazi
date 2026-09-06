@@ -107,7 +107,7 @@ export function Lookup({
         background: theme.bg,
         color: theme.fg,
         border: `1px solid ${theme.rule}`,
-        fontFamily: 'ui-sans-serif, system-ui, "Segoe UI", sans-serif',
+        fontFamily: "var(--font-sans)",
         textAlign: "start",
         hyphens: "manual",
       }}
@@ -117,7 +117,7 @@ export function Lookup({
       <div className="flex items-baseline justify-between gap-2">
         <strong
           className="text-[1.05rem] font-semibold leading-tight"
-          style={{ fontFamily: 'Georgia, "Times New Roman", serif' }}
+          style={{ fontFamily: "var(--font-serif)" }}
           dir={dirOf(def?.word ?? at.word)}
         >
           {def?.word ?? at.word}

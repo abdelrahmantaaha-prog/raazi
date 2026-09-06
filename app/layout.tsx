@@ -2,6 +2,7 @@ import type { Metadata } from "next";
 import "./globals.css";
 import { Nav } from "./components/Nav";
 import { PageTransition } from "./components/PageTransition";
+import { SectionTabs } from "./components/SectionTabs";
 
 export const metadata: Metadata = {
   title: "Corpus",
@@ -28,6 +29,10 @@ export default function RootLayout({ children }: { children: React.ReactNode }) 
               transition's own children are the page's sections — which is what
               the stagger in globals.css reaches for. */}
           <div className="mx-auto max-w-6xl">
+            {/* Above the transition, and outside it: the strip belongs to the
+                section rather than to the page, so it should hold still while
+                the page under it changes. */}
+            <SectionTabs />
             <PageTransition>{children}</PageTransition>
           </div>
         </main>

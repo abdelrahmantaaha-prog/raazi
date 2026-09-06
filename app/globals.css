@@ -1,5 +1,78 @@
 @import "tailwindcss";
 
+/* ---------------------------------------------------------------------------
+   Arabic: Amiri
+
+   Half the library is Arabic, and the fallback was whatever the system reached
+   for — Tahoma on most Windows machines, a UI face with no book in it, set
+   next to Georgia in the same paragraph. Amiri is a Naskh cut after the Bulaq
+   press, which is the register the sources are already in.
+
+   Subsetted to the Arabic ranges and served from `public/fonts`, so:
+
+   - Latin is untouched. The `unicode-range` covers no Latin codepoint, so a
+     page with no Arabic on it never downloads these files at all and Georgia
+     goes on setting the English. One family name covers both scripts and a
+     mixed line picks the right face per character, which is why "Amiri" can
+     sit at the front of every stack below without taking anything over.
+   - Nothing is fetched from Google at runtime. Corpus runs on a laptop that is
+     not always online, and a font that arrives over the network is a font that
+     sometimes does not.
+
+   `size-adjust` because Amiri draws small: at a shared font-size its body sits
+   well below Georgia's x-height, and an Arabic quote beside an English one
+   read as the quieter of the two. 112% puts them at the same weight on the
+   page without either being set at a different size.
+
+   Licence: SIL OFL 1.1, in `public/fonts/OFL.txt`.
+   --------------------------------------------------------------------------- */
+
+@font-face {
+  font-family: "Amiri";
+  font-style: normal;
+  font-weight: 400;
+  font-display: swap;
+  size-adjust: 112%;
+  src: url("/fonts/amiri-arabic-400.woff2") format("woff2");
+  unicode-range: U+0600-06FF, U+0750-077F, U+0870-088E, U+0890-0891, U+0897-08E1,
+    U+08E3-08FF, U+200C-200E, U+204F, U+2E41, U+FB50-FDFF, U+FE70-FE74,
+    U+FE76-FEFC, U+10E60-10E7E, U+1EE00-1EEFF;
+}
+@font-face {
+  font-family: "Amiri";
+  font-style: normal;
+  font-weight: 700;
+  font-display: swap;
+  size-adjust: 112%;
+  src: url("/fonts/amiri-arabic-700.woff2") format("woff2");
+  unicode-range: U+0600-06FF, U+0750-077F, U+0870-088E, U+0890-0891, U+0897-08E1,
+    U+08E3-08FF, U+200C-200E, U+204F, U+2E41, U+FB50-FDFF, U+FE70-FE74,
+    U+FE76-FEFC, U+10E60-10E7E, U+1EE00-1EEFF;
+}
+@font-face {
+  font-family: "Amiri";
+  font-style: italic;
+  font-weight: 400;
+  font-display: swap;
+  size-adjust: 112%;
+  src: url("/fonts/amiri-arabic-400i.woff2") format("woff2");
+  unicode-range: U+0600-06FF, U+0750-077F, U+0870-088E, U+0890-0891, U+0897-08E1,
+    U+08E3-08FF, U+200C-200E, U+204F, U+2E41, U+FB50-FDFF, U+FE70-FE74,
+    U+FE76-FEFC, U+10E60-10E7E, U+1EE00-1EEFF;
+}
+@font-face {
+  font-family: "Amiri";
+  font-style: italic;
+  font-weight: 700;
+  font-display: swap;
+  size-adjust: 112%;
+  src: url("/fonts/amiri-arabic-700i.woff2") format("woff2");
+  unicode-range: U+0600-06FF, U+0750-077F, U+0870-088E, U+0890-0891, U+0897-08E1,
+    U+08E3-08FF, U+200C-200E, U+204F, U+2E41, U+FB50-FDFF, U+FE70-FE74,
+    U+FE76-FEFC, U+10E60-10E7E, U+1EE00-1EEFF;
+}
+
+
 @theme {
   --color-paper: #fbfaf7;
   --color-ink: #1c1a17;
@@ -7,7 +80,8 @@
   --color-rule: #e2ddd3;
   --color-accent: #7a4b2a;
   --color-accent-soft: #f0e7dd;
-  --font-serif: Georgia, "Iowan Old Style", "Times New Roman", serif;
+  --font-serif: "Amiri", Georgia, "Iowan Old Style", "Times New Roman", serif;
+  --font-sans: "Amiri", ui-sans-serif, system-ui, -apple-system, "Segoe UI", sans-serif;
 }
 
 :root {
@@ -17,7 +91,7 @@
 body {
   background: var(--color-paper);
   color: var(--color-ink);
-  font-family: ui-sans-serif, system-ui, -apple-system, "Segoe UI", sans-serif;
+  font-family: var(--font-sans);
 }
 
 /* Entries are for reading, so they get the book treatment. */
@@ -148,7 +222,7 @@ body {
    --------------------------------------------------------------------------- */
 
 .prose-draft {
-  font-family: Georgia, "Iowan Old Style", "Times New Roman", serif;
+  font-family: var(--font-serif);
   font-size: 1.02rem;
   line-height: 1.75;
 }
