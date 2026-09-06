@@ -6,6 +6,7 @@ import { useRouter } from "next/navigation";
 import { EntryBody, type Citation } from "../components/EntryBody";
 import { CitationPopover } from "../components/CitationPopover";
 import { RunChip } from "../components/RunChip";
+import { Badge } from "../components/ui";
 import { formatDate, formatDateTime } from "@/lib/dates";
 
 interface BriefCitation extends Citation {
@@ -31,7 +32,15 @@ export function BriefView({
   stats,
 }: {
   today: string;
-  brief: { day: string; body: string; state: string; from: string | null; to: string | null; error: string | null } | null;
+  brief: {
+    day: string;
+    body: string;
+    state: string;
+    from: string | null;
+    to: string | null;
+    error: string | null;
+    model: string | null;
+  } | null;
   days: { day: string; state: string }[];
   citations: BriefCitation[];
   watchlist: { id: number; label: string; kind: string; entityId: number | null; recent: number }[];
@@ -46,14 +55,23 @@ export function BriefView({
   const citationMap = useMemo(() => new Map(citations.map((c) => [c.id, c])), [citations]);
   const open = openCite ? citationMap.get(openCite.id) : undefined;
 
-  async function write(force: boolean) {
+  /**
+   * Writes a brief for a named day.
+   *
+   * The day is a parameter and not `brief?.day` because of what that cost: the
+   * page opens on the newest brief there is, which after a quiet few days is an
+   * old one, and the button then rewrote *that* — you pressed it expecting
+   * today and got the fourth rewritten again. Which day is being written is now
+   * the caller's decision and the label's promise.
+   */
+  async function write(force: boolean, day: string) {
     setBusy(true);
     setError(null);
     try {
       const res = await fetch("/api/brief", {
         method: "POST",
         headers: { "content-type": "application/json" },
-        body: JSON.stringify({ day: brief?.day ?? today, force }),
+        body: JSON.stringify({ day, force }),
       });
       const data = (await res.json().catch(() => ({}))) as { runId?: number; note?: string; error?: string };
       if (!res.ok) throw new Error(data.error ?? "That did not work.");
@@ -66,7 +84,10 @@ export function BriefView({
     }
   }
 
-  const isToday = !brief || brief.day === today;
+  /** What is on screen is today's, and it has been written. */
+  const todayIsWritten = brief?.day === today && brief.state === "done";
+  /** What is on screen is an older brief, because today has none yet. */
+  const stale = Boolean(brief && brief.day !== today);
 
   return (
     <div className="space-y-6">
@@ -76,9 +97,11 @@ export function BriefView({
             {brief ? (brief.day === today ? "Today" : formatDate(brief.day)) : "The brief"}
           </h1>
           <p className="mt-1 text-sm text-[var(--color-muted)]">
-            {brief?.from && brief.to
-              ? `What came in between ${formatDateTime(brief.from)} and ${formatDateTime(brief.to)}.`
-              : "What came in from the feeds you follow, with a citation on every line."}
+            {stale
+              ? `No brief for today yet — this is the last one written. The daily brief waits for an empty inbox.`
+              : brief?.from && brief.to
+                ? `What came in between ${formatDateTime(brief.from)} and ${formatDateTime(brief.to)}.`
+                : "What came in from the feeds you follow, with a citation on every line."}
           </p>
         </div>
 
@@ -88,12 +111,22 @@ export function BriefView({
           ) : null}
           <button
             type="button"
-            onClick={() => write(Boolean(brief && brief.state === "done"))}
+            onClick={() => write(todayIsWritten, today)}
             disabled={busy}
             className="rounded border border-[var(--color-rule)] px-3 py-1.5 text-sm hover:border-[var(--color-accent)] disabled:opacity-50"
           >
-            {busy ? "Asking…" : brief?.state === "done" ? "Write it again" : isToday ? "Write today's brief" : "Write this brief"}
+            {busy ? "Asking…" : todayIsWritten ? "Write today's again" : "Write today's brief"}
           </button>
+          {stale && brief ? (
+            <button
+              type="button"
+              onClick={() => write(true, brief.day)}
+              disabled={busy}
+              className="rounded border border-[var(--color-rule)] px-3 py-1.5 text-sm text-[var(--color-muted)] hover:border-[var(--color-accent)] disabled:opacity-50"
+            >
+              Rewrite {formatDate(brief.day)}
+            </button>
+          ) : null}
           <Link
             href="/feeds"
             className="rounded border border-[var(--color-rule)] px-3 py-1.5 text-sm hover:border-[var(--color-accent)]"
@@ -157,10 +190,20 @@ export function BriefView({
             />
           ) : null}
 
-          {Object.keys(stats).length ? (
+          {Object.keys(stats).length || brief.model ? (
             <p className="text-xs text-[var(--color-muted)]">
-              {stats.sources ?? 0} source(s), {stats.passages ?? 0} passage(s), {stats.entities ?? 0} subject(s)
-              {stats.stories ? `, ${stats.stories} new story` : ""} in this window.
+              {Object.keys(stats).length ? (
+                <>
+                  {stats.sources ?? 0} source(s), {stats.passages ?? 0} passage(s), {stats.entities ?? 0} subject(s)
+                  {stats.stories ? `, ${stats.stories} new story` : ""} in this window.
+                </>
+              ) : null}
+              {brief.model ? (
+                <>
+                  {" "}
+                  Written by <Badge>{brief.model}</Badge>.
+                </>
+              ) : null}
             </p>
           ) : null}
         </>
