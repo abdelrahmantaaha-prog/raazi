@@ -1,64 +1,18 @@
-import { Type, type Schema } from "@google/genai";
-import { db, tx } from "../db";
-import { generateJson } from "../ai/client";
-import { finishTask } from "../queue";
-import { formatLocator } from "../chunk";
-import { normalize } from "../normalize";
-import type { Locator, Task } from "../types";
+import { db } from "./db";
+import { formatLocator } from "./chunk";
+import { normalize } from "./normalize";
+import type { Locator } from "./types";
 
 /**
- * Answering a question from the library, and nothing else.
+ * Finding the passages that bear on a question.
  *
- * The retrieval is deliberately plain — full-text search over the passages and
- * the written entries, widened by entity name. No embeddings: the corpus is
- * small enough that FTS with a decent query beats a vector index, and it stays
- * explainable, which matters when the answer is going into someone's research.
- *
- * The hard rule is the same one the entries follow: every claim carries a
- * citation to a passage that is actually in the library, and anything the
- * library does not cover is said to be uncovered rather than filled in from
- * the model's own knowledge.
+ * This was the first half of the Ask feature. Ask itself is gone — a question
+ * put to the whole library cost a premium call every time and was usually
+ * answered better by reading the entry — but retrieval is not about answering
+ * anything. It is a search over evidence, scored by entity, phrase and
+ * recency, and the fact-checker still needs exactly that: for each claim in a
+ * draft, the passages that speak to it.
  */
-
-const SCHEMA: Schema = {
-  type: Type.OBJECT,
-  properties: {
-    answer: {
-      type: Type.STRING,
-      description:
-        "The answer in Markdown. Every factual sentence ends with one or more [[m:ID]] markers using the passage IDs supplied.",
-    },
-    gaps: {
-      type: Type.STRING,
-      description:
-        "What the question asks that these sources do not answer. Empty string if they cover it.",
-    },
-    followUps: {
-      type: Type.ARRAY,
-      description: "Two or three questions this material would also answer well.",
-      items: { type: Type.STRING },
-    },
-  },
-  required: ["answer", "gaps"],
-};
-
-const SYSTEM = `You answer questions using only the passages supplied, for a
-researcher who will cite your answer.
-
-Absolute rules:
-- Every factual sentence ends with at least one [[m:ID]] marker naming the
-  passage it came from. A sentence you cannot cite is one you must not write.
-- Use only the supplied passages. You certainly know things about these subjects
-  from training; including them would corrupt a body of work that is supposed to
-  represent what THESE sources say. Leaving them out is the entire point.
-- Where the sources disagree, say so and attribute each side.
-- Each passage carries its outlet and publication date. When the question turns
-  on what happened when, or on what is most recent, use them and say which
-  date a statement belongs to.
-- Where they only partly cover the question, answer what they cover and put the
-  rest in "gaps". A short honest answer beats a padded one.
-- Match the language of the question. If it is asked in Arabic, answer in Arabic.
-- Structure a long answer with short Markdown headings. Do not pad.`;
 
 export interface Passage {
   id: number;
@@ -281,94 +235,4 @@ const STOP = new Set([
 /** "The Globe and Mail, Jane Doe, 2026-09-01, p. 4" — what a reader needs to find it. */
 export function citationOf(p: Passage): string {
   return [p.outlet, p.author, p.published?.slice(0, 10), p.source, p.locator].filter(Boolean).join(", ");
-}
-
-export async function handleAsk(task: Task): Promise<void> {
-  const { questionId } = JSON.parse(task.payload_json) as { questionId: number };
-
-  const row = db().prepare("SELECT * FROM questions WHERE id=?").get(questionId) as
-    | { id: number; question: string; tag_id: number | null }
-    | undefined;
-  if (!row) {
-    finishTask(task.id, task.run_id, { tokensIn: 0, tokensOut: 0 }, "skipped", "Question is gone.");
-    return;
-  }
-
-  // The questions table carries no date or source filters yet; they are
-  // accepted by retrieve() for callers that have them.
-  const passages = retrieve(row.question, row.tag_id ?? undefined);
-
-  if (passages.length === 0) {
-    tx(() => {
-      db()
-        .prepare("UPDATE questions SET state='done', answer_md=?, evidence='[]' WHERE id=?")
-        .run(
-          "Nothing in the library touches this. Add a source that covers it and ask again.",
-          questionId
-        );
-      finishTask(task.id, task.run_id, { tokensIn: 0, tokensOut: 0 }, "done", "No matching passages.");
-    });
-    return;
-  }
-
-  const evidence = passages
-    .map(
-      (p) =>
-        `[[m:${p.id}]] ${p.entity} — ${citationOf(p)}\n   "${p.quote}"${
-          p.claim ? `\n   claim: ${p.claim}` : ""
-        }`
-    )
-    .join("\n\n");
-
-  const { data, usage } = await generateJson<{
-    answer: string;
-    gaps: string;
-    followUps?: string[];
-  }>({
-    stage: "ask",
-    system: SYSTEM,
-    schema: SCHEMA,
-    temperature: 0.2,
-    parts: [`QUESTION: ${row.question}\n\nPASSAGES FROM THE LIBRARY:\n${evidence}`],
-  });
-
-  // A marker pointing at a passage that was never supplied is a fabrication.
-  const valid = new Set(passages.map((p) => p.id));
-  const answer = data.answer.replace(/\[\[m:(\d+)\]\]/g, (whole, id) =>
-    valid.has(Number(id)) ? whole : ""
-  );
-  const cited = [...answer.matchAll(/\[\[m:(\d+)\]\]/g)].map((m) => Number(m[1]));
-
-  tx(() => {
-    db()
-      .prepare(
-        `UPDATE questions SET state='done', answer_md=?, evidence=?, tokens_in=?, tokens_out=?
-          WHERE id=?`
-      )
-      .run(
-        [answer, data.gaps?.trim() ? `\n\n**Not covered by your sources:** ${data.gaps.trim()}` : ""].join(""),
-        // The cited passages are copied in whole, not merely referenced.
-        // Re-extracting a source deletes and recreates its mentions, which had
-        // already left both existing answers citing passage ids that no longer
-        // exist — an answer nobody can check is exactly what this app refuses
-        // to produce, and it had been quietly producing them.
-        JSON.stringify({
-          cited: [...new Set(cited)],
-          considered: passages.length,
-          followUps: data.followUps ?? [],
-          passages: passages
-            .filter((p) => cited.includes(p.id))
-            .map((p) => ({
-              id: p.id,
-              quote: p.quote,
-              entity: p.entity,
-              citation: citationOf(p),
-            })),
-        }),
-        usage.tokensIn,
-        usage.tokensOut,
-        questionId
-      );
-    finishTask(task.id, task.run_id, usage, "done", `Answered from ${cited.length} passages.`);
-  });
 }

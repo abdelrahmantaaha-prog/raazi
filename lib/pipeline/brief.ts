@@ -295,7 +295,7 @@ export async function handleBrief(task: Task): Promise<void> {
     body: string;
     questions?: string[];
   }>({
-    stage: "entry",
+    stage: "brief",
     system: `${week ? WEEKLY_SYSTEM : SYSTEM}\n\nLANGUAGE: write in ${LANGUAGE_NAMES[language.split("-")[0]] ?? language}.`,
     schema: SCHEMA,
     temperature: 0.2,

@@ -85,12 +85,8 @@ export type TaskKind =
   | "verify"
   /** Files a source under the research topics it belongs to. Runs first. */
   | "tag"
-  /** Answers a question put to the whole library. */
-  | "ask"
   /** Checks a draft against the library. Reports; never edits. */
   | "factcheck"
-  /** Builds study cards from evidence. */
-  | "cards"
   /** Finds a picture for one entity. Costs no tokens; costs patience. */
   | "portrait"
   /** Decides which entries deserve a picture and queues them. */

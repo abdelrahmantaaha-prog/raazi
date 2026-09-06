@@ -319,6 +319,7 @@ export async function handleEntry(task: Task): Promise<void> {
         built_from_hash: string;
         passes: number;
         flag_rewrites: number;
+        flag_rewritten_at: string | null;
         lang: string | null;
       }
     | undefined;
@@ -432,15 +433,29 @@ export async function handleEntry(task: Task): Promise<void> {
 
     db()
       .prepare(
-        `INSERT INTO entries (entity_id, summary, body_md, built_from_hash, model, passes, flag_rewrites, lang, updated_at)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?, datetime('now'))
+        `INSERT INTO entries (entity_id, summary, body_md, built_from_hash, model, passes, flag_rewrites, flag_rewritten_at, lang, updated_at)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, datetime('now'))
          ON CONFLICT(entity_id) DO UPDATE SET
            summary=excluded.summary, body_md=excluded.body_md,
            built_from_hash=excluded.built_from_hash, model=excluded.model,
-           passes=excluded.passes, flag_rewrites=excluded.flag_rewrites, lang=excluded.lang,
+           passes=excluded.passes, flag_rewrites=excluded.flag_rewrites,
+           flag_rewritten_at=excluded.flag_rewritten_at, lang=excluded.lang,
            updated_at=datetime('now')`
       )
-      .run(entityId, summary, body, hash, null, passes, flagRewrites, language);
+      .run(
+        entityId,
+        summary,
+        body,
+        hash,
+        null,
+        passes,
+        flagRewrites,
+        // Stamped only when the flags are what asked for this rewrite, and
+        // carried forward otherwise — an ordinary refresh must not reset the
+        // clock that stops the morning routine chasing the same entry daily.
+        fromFlags ? new Date().toISOString() : (existing?.flag_rewritten_at ?? null),
+        language
+      );
 
     db()
       .prepare(

@@ -177,4 +177,9 @@ export function migrateFeeds(db: Database.Database) {
   // week's is its Friday, prefixed — so the UNIQUE constraint still holds and
   // no table has to be rebuilt.
   addColumn(db, "briefs", "kind", "TEXT NOT NULL DEFAULT 'day'");
+
+  // When an entry was last rewritten to chase verification flags. See
+  // flaggedForRewrite(): the rewrite counter beside it resets whenever the
+  // evidence changes, so on a daily beat it never reached its cap.
+  addColumn(db, "entries", "flag_rewritten_at", "TEXT");
 }

@@ -78,6 +78,81 @@ const SHELF_ORDER = ["books", "reading", "watching"] as const;
 /** How many of the newest arrivals the chronological strip shows. */
 const RECENT = 10;
 
+/** How many articles or notes a page of the shelf holds. */
+const PER_PAGE = 10;
+
+/**
+ * A shelf that comes in pages.
+ *
+ * The reading shelf was one long list, which was fine at forty articles and is
+ * not at four hundred: a beat adds a dozen a day, and a list you have to scroll
+ * past to reach anything else stops being a shelf and becomes a wall. Ten at a
+ * time, with the count said plainly, and the page resets when what it is
+ * showing changes underneath it.
+ */
+function Paged<T>({
+  items,
+  perPage,
+  children,
+}: {
+  items: T[];
+  perPage: number;
+  children: (page: T[]) => React.ReactNode;
+}) {
+  const [page, setPage] = useState(0);
+  const pages = Math.max(1, Math.ceil(items.length / perPage));
+  const current = Math.min(page, pages - 1);
+  const from = current * perPage;
+  const slice = items.slice(from, from + perPage);
+
+  return (
+    <div className="space-y-3">
+      {children(slice)}
+      {pages > 1 ? (
+        <div className="flex flex-wrap items-center gap-2 text-sm">
+          <button
+            type="button"
+            disabled={current === 0}
+            onClick={() => setPage(current - 1)}
+            className="rounded border border-[var(--color-rule)] px-2.5 py-1 transition hover:border-[var(--color-accent)] disabled:opacity-30"
+          >
+            Newer
+          </button>
+          <button
+            type="button"
+            disabled={current >= pages - 1}
+            onClick={() => setPage(current + 1)}
+            className="rounded border border-[var(--color-rule)] px-2.5 py-1 transition hover:border-[var(--color-accent)] disabled:opacity-30"
+          >
+            Older
+          </button>
+          <span className="text-[var(--color-muted)]">
+            {from + 1}–{Math.min(from + perPage, items.length)} of {items.length}
+          </span>
+          {pages <= 12 ? (
+            <span className="ms-auto flex flex-wrap gap-1">
+              {Array.from({ length: pages }, (_, i) => (
+                <button
+                  key={i}
+                  type="button"
+                  onClick={() => setPage(i)}
+                  className={`h-7 w-7 rounded text-xs transition ${
+                    i === current
+                      ? "bg-[var(--color-accent)] text-white"
+                      : "border border-[var(--color-rule)] hover:border-[var(--color-accent)]"
+                  }`}
+                >
+                  {i + 1}
+                </button>
+              ))}
+            </span>
+          ) : null}
+        </div>
+      ) : null}
+    </div>
+  );
+}
+
 /** A run still has somewhere to go. Failed runs are finished, just badly. */
 const isActive = (r: Run) => r.state !== "done" && r.state !== "failed";
 
@@ -366,11 +441,15 @@ export default function Library() {
                   })}
 
                 {shelf === "reading" && (
-                  <div className="cascade divide-y divide-[var(--color-rule)] rounded-lg border border-[var(--color-rule)] bg-white">
-                    {items.map((s) => (
-                      <ArticleRow key={s.id} s={s} onRemove={removeSource} />
-                    ))}
-                  </div>
+                  <Paged items={items} perPage={PER_PAGE}>
+                    {(page) => (
+                      <div className="cascade divide-y divide-[var(--color-rule)] rounded-lg border border-[var(--color-rule)] bg-white">
+                        {page.map((s) => (
+                          <ArticleRow key={s.id} s={s} onRemove={removeSource} />
+                        ))}
+                      </div>
+                    )}
+                  </Paged>
                 )}
 
                 {shelf === "watching" && (

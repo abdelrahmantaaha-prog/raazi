@@ -16,9 +16,7 @@ import { handleEntry } from "./entry";
 import { handleOcr } from "./ocr";
 import { handleTranscribe } from "./transcribe";
 import { handleTag } from "./tag";
-import { handleAsk } from "./ask";
 import { handleFactcheck } from "./factcheck";
-import { handleCards } from "./cards";
 import { handlePortrait, handlePlanPortraits } from "./portrait";
 import { handlePlanPolls, handlePoll, handleFetchItem } from "./poll";
 import { handleBrief } from "./brief";
@@ -59,9 +57,7 @@ async function handlePlanEntries(task: Task): Promise<void> {
 
 export const handlers: Record<string, Handler> = {
   tag: handleTag,
-  ask: handleAsk,
   factcheck: handleFactcheck,
-  cards: handleCards,
   extract: handleExtract,
   enhance: handleEnhance,
   sweep: handleSweep,

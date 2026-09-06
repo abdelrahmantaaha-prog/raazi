@@ -105,28 +105,39 @@ export const PROVIDERS: Record<ProviderId, ProviderSpec> = {
 
 export const PROVIDER_IDS = Object.keys(PROVIDERS) as ProviderId[];
 
-/** The stages that can be routed. OCR, transcription and embeddings are not
- *  here: they need capabilities the alternatives do not have. */
-export type Stage = "extract" | "resolve" | "entry" | "tag" | "ask" | "cards";
-export const STAGES: Stage[] = ["extract", "resolve", "entry", "tag", "ask", "cards"];
+/**
+ * The stages that can be routed. OCR, transcription and embeddings are not
+ * here: they need capabilities the alternatives do not have.
+ *
+ * `verify` and `brief` are separate knobs because of what happened when they
+ * were not. Both used to travel under `entry`, along with the coherence pass —
+ * so pointing "writing entries" at Claude silently pointed four different
+ * kinds of work at it, and the bill for two days was $20 rather than the $2 a
+ * day the estimate said. A routing table that hides three quarters of what it
+ * routes is not a routing table.
+ */
+export type Stage = "extract" | "resolve" | "entry" | "verify" | "tag" | "brief";
+export const STAGES: Stage[] = ["extract", "resolve", "entry", "verify", "tag", "brief"];
 
 export const STAGE_LABEL: Record<Stage, string> = {
   extract: "Reading passages",
   resolve: "Matching names",
   entry: "Writing entries",
+  verify: "Checking entries",
   tag: "Filing sources",
-  ask: "Answering questions",
-  cards: "Making study cards",
+  brief: "Writing the brief",
 };
 
 export const STAGE_NOTE: Record<Stage, string> = {
   extract:
-    "The bulk of the work — around 88% of all tokens. Moving this is what makes your Gemini quota last.",
+    "The bulk of the work — around 88% of all calls. Volume and schema reliability matter here more than judgement.",
   resolve: "Occasional and small. Judgement-heavy, so a weaker model costs accuracy.",
-  entry: "Where the writing quality shows. Worth keeping on the strongest model you have.",
+  entry: "Where the writing shows. A local model does this well and costs nothing but time.",
+  verify:
+    "Reads each finished entry back against its own citations, and the coherence pass with it. Runs about as often as writing does, so it costs about as much — which is why it has its own line.",
   tag: "One short call per source. Barely worth routing.",
-  ask: "One call per question, over the passages retrieved for it. Answer quality shows here.",
-  cards: "A batch per set of cards. A weaker model writes duller questions, not wrong ones.",
+  brief:
+    "A handful of calls a week, over every passage the week collected. The one place long context beats everything else, and the one you present from.",
 };
 
 export function spec(id: ProviderId): ProviderSpec {

@@ -75,16 +75,33 @@ export function flaggedForRewrite(min = MIN_FLAGS_FOR_REWRITE): { entityId: numb
           -- are the verifier's opinion of the evidence, not of the prose, and
           -- the morning routine was rewriting the same entries every day.
           WHERE en.flag_rewrites < ?
+          -- And not more than once a week whatever the evidence does. The
+          -- counter above resets the moment the evidence changes, which for a
+          -- subject a news beat is actually about — Donald Trump, the Trump
+          -- administration, Canada — is every single day. So the cap never
+          -- engaged for exactly the entries that cost the most: six rewrites
+          -- of one entry in two days, each with a verification pass behind it,
+          -- was most of a $20 bill. New evidence still refreshes an entry; it
+          -- is chasing the verifier's flags that is rationed.
+            AND (en.flag_rewritten_at IS NULL
+                 OR en.flag_rewritten_at < datetime('now', ?))
           GROUP BY f.entity_id
          HAVING COUNT(*) >= ?
           ORDER BY COUNT(*) DESC, f.entity_id`
       )
-      .all(MAX_FLAG_REWRITES, min) as { entityId: number; name: string; flags: number }[]
+      .all(MAX_FLAG_REWRITES, `-${FLAG_REWRITE_COOLDOWN_DAYS} days`, min) as {
+        entityId: number;
+        name: string;
+        flags: number;
+      }[]
   );
 }
 
 /** How many flag-driven rewrites one evidence set may receive. */
 export const MAX_FLAG_REWRITES = 2;
+
+/** And how long an entry rests afterwards, whatever new evidence arrives. */
+export const FLAG_REWRITE_COOLDOWN_DAYS = 7;
 
 /**
  * Queues the morning's work as one run, and says what it queued.

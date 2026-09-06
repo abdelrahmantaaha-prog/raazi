@@ -136,7 +136,7 @@ for (const stage of STAGES) {
 }
 check("context does too, though it is not routable on its own", LEVELS.includes(EFFORT.context));
 check("mechanical reading is cheap", EFFORT.extract === "low" && EFFORT.tag === "low");
-check("writing and answering are not", EFFORT.entry === "high" && EFFORT.ask === "high");
+check("writing and checking are not", EFFORT.entry === "high" && EFFORT.verify === "high");
 check("an unknown stage falls through to the adapter's default", EFFORT[""] === undefined);
 
 // ---------------------------------------------------------------------------

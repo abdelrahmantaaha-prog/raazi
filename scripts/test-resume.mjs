@@ -282,11 +282,11 @@ section("What jumps the queue");
   const decorate = q.createRun({ kind: "portraits", label: "pictures" });
   q.enqueue(decorate, [{ kind: "portrait", payload: { entityId: 1 } }]);
   // Queued last, and by far the newest run.
-  const asked = q.createRun({ kind: "ask", label: "a question" });
-  q.enqueue(asked, [{ kind: "ask", payload: { questionId: 1 } }]);
+  const asked = q.createRun({ kind: "poll", label: "the feeds" });
+  q.enqueue(asked, [{ kind: "poll", payload: { feedId: 1 } }]);
 
   const first = q.claimNext();
-  check("a question goes first, however long the queue ahead of it", first.kind === "ask", first?.kind);
+  check("a poll goes first, however long the queue ahead of it", first.kind === "poll", first?.kind);
 
   const second = q.claimNext();
   check("then the pipeline resumes in its own order", second.kind === "extract", second?.kind);

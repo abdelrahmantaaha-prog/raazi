@@ -387,8 +387,8 @@ section("The discard ledger reaches every reader");
   // Structural: these are the four call sites the audit caught reading raw
   // `mentions` after everything else had moved. A regression here silently
   // hands rejected evidence back to the model or the export file.
-  const askSrc = fs.readFileSync(path.join(root, "lib", "pipeline", "ask.ts"), "utf8");
-  check("Ask's retrieval joins live_mentions", askSrc.includes("JOIN live_mentions m ON m.chunk_id"));
+  const retrievalSrc = fs.readFileSync(path.join(root, "lib", "retrieval.ts"), "utf8");
+  check("retrieval joins live_mentions", retrievalSrc.includes("JOIN live_mentions m ON m.chunk_id"));
   const searchSrc = fs.readFileSync(
     path.join(root, "app", "api", "drafts", "search", "route.ts"),
     "utf8"

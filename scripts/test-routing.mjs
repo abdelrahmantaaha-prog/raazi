@@ -206,10 +206,15 @@ check(
   PROVIDERS.anthropic.defaultModel
 );
 
-saveConfig({ routing: { extract: "gemini", tag: "gemini", entry: "anthropic", ask: "anthropic" } });
+saveConfig({ routing: { extract: "gemini", tag: "ollama", entry: "anthropic", verify: "ollama" } });
 
 check("writing goes to Claude when you send it there", providersFor("entry")[0] === "anthropic");
-check("and so does answering", providersFor("ask")[0] === "anthropic");
+check("filing goes to the local model", providersFor("tag")[0] === "ollama", providersFor("tag")[0]);
+check(
+  "and checking an entry is routed apart from writing it",
+  providersFor("verify")[0] === "ollama" && providersFor("entry")[0] === "anthropic",
+  `${providersFor("verify")[0]} / ${providersFor("entry")[0]}`
+);
 check("while the bulk reading stays on Gemini", providersFor("extract")[0] === "gemini");
 
 // ---------------------------------------------------------------------------
@@ -217,8 +222,8 @@ section("Claude's capabilities are not negotiable either");
 // ---------------------------------------------------------------------------
 check(
   "transcription never goes to Claude, however ask is routed",
-  !providersFor("ask", { need: "audio" }).includes("anthropic"),
-  JSON.stringify(providersFor("ask", { need: "audio" }))
+  !providersFor("entry", { need: "audio" }).includes("anthropic"),
+  JSON.stringify(providersFor("entry", { need: "audio" }))
 );
 check(
   "and neither do embeddings",
@@ -230,8 +235,8 @@ check(
 // because this adapter sends text only.
 check(
   "but OCR may be offered to it, because Claude does read images",
-  providersFor("ask", { need: "vision" }).includes("anthropic"),
-  JSON.stringify(providersFor("ask", { need: "vision" }))
+  providersFor("entry", { need: "vision" }).includes("anthropic"),
+  JSON.stringify(providersFor("entry", { need: "vision" }))
 );
 
 check(

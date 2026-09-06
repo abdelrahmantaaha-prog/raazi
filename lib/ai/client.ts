@@ -457,10 +457,13 @@ export async function generateJson<T>(opts: {
   temperature?: number;
   model?: string;
   stage?: Stage;
+  /** Answer with this provider, whatever the routing says. For measuring one
+   *  against another; the pipeline itself always goes through the routing. */
+  provider?: ProviderId;
   /** Ceiling on one attempt, in ms. Defaults to three minutes. */
   timeoutMs?: number;
 }): Promise<CallResult<T>> {
-  const candidates = providersFor(opts.stage);
+  const candidates = opts.provider ? [opts.provider] : providersFor(opts.stage);
   const timeoutMs = timeoutFor(undefined, opts.timeoutMs, opts.stage);
 
   const { value, key } = await withRotation(candidates, async (k): Promise<CallResult<T>> => {

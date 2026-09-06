@@ -3,7 +3,7 @@ import { db, tx } from "../db";
 import { generateJson } from "../ai/client";
 import { finishTask } from "../queue";
 import type { Task } from "../types";
-import { citationOf, retrieve, type Passage } from "./ask";
+import { citationOf, retrieve, type Passage } from "../retrieval";
 
 /**
  * Checks a draft against the library, and does nothing else.

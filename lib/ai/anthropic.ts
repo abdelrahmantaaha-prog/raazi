@@ -58,9 +58,9 @@ export const EFFORT: Record<string, AnthropicCall["effort"]> = {
   tag: "low",
   context: "low",
   resolve: "medium",
-  cards: "medium",
-  ask: "high",
   entry: "high",
+  verify: "high",
+  brief: "high",
 };
 
 /** Room for the answer. Extraction returns long JSON; a tag returns a line. */

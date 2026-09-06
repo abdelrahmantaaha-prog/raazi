@@ -1,6 +1,6 @@
 import { NextResponse } from "next/server";
 import { badRequest, readBody } from "@/lib/http";
-import { discard, heldCount, keep, listHeld, undo } from "@/lib/triage";
+import { discard, heldCount, keep, listHeld, pasteText, undo } from "@/lib/triage";
 import { kickWorker } from "@/lib/worker";
 
 export const dynamic = "force-dynamic";
@@ -11,11 +11,26 @@ export async function GET() {
 
 export async function POST(req: Request) {
   const body = await readBody<{
-    action?: "keep" | "discard" | "undo";
+    action?: "keep" | "discard" | "undo" | "paste";
     itemIds?: number[];
     reason?: string;
+    text?: string;
   }>(req);
   if (body === null) return badRequest("Malformed JSON body.");
+
+  // Pasting is about one article at a time — it is the paywalled one you went
+  // and fetched by hand.
+  if (body.action === "paste") {
+    const itemId = (body.itemIds ?? [])[0];
+    if (!Number.isInteger(itemId)) return badRequest("Say which item.");
+    if (typeof body.text !== "string") return badRequest("Nothing was pasted.");
+    try {
+      const result = pasteText(itemId, body.text);
+      return NextResponse.json({ ...result, items: listHeld(), held: heldCount() });
+    } catch (err) {
+      return badRequest((err as Error).message.slice(0, 200));
+    }
+  }
 
   const ids = (body.itemIds ?? []).filter((n) => Number.isInteger(n) && n > 0);
   if (!ids.length) return badRequest("Say which items.");

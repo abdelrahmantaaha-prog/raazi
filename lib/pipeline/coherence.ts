@@ -167,7 +167,7 @@ export async function handleCoherence(task: Task): Promise<void> {
     body?: string;
     note?: string;
   }>({
-    stage: "entry",
+    stage: "verify",
     system: SYSTEM,
     schema: SCHEMA,
     temperature: 0.15,

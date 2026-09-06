@@ -93,7 +93,6 @@ const TABLES = [
   "runs",
   "drafts",
   "ideas",
-  "cards",
   "questions",
   "bookmarks",
 ] as const;

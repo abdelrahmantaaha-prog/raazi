@@ -8,7 +8,7 @@ import { usePathname } from "next/navigation";
  *
  * This was a row of ten text links across the top, which is fine on a desktop
  * and falls apart on a phone: the labels ran off the edge of the screen as one
- * unbroken word — "LibraryWritePediaNetworkAskStudyTopicsSearchQu" — and there
+ * unbroken word — "LibraryWritePediaNetworkTopicsSearchQuotes" — and there
  * was no way to reach the last four. Ten destinations do not fit across 360
  * pixels in any typography, so they go down the side instead, where there is
  * room for as many as the app ever needs.
@@ -31,11 +31,10 @@ const NAV = [
   { href: "/write", label: "Write", icon: Pen },
   { href: "/pedia", label: "Pedia", icon: Cards },
   { href: "/network", label: "Network", icon: Graph },
-  { href: "/ask", label: "Ask", icon: Question },
-  { href: "/study", label: "Study", icon: Cap },
   { href: "/tags", label: "Topics", icon: Tag },
   { href: "/feeds", label: "Feeds", icon: Rss },
   { href: "/discover", label: "Search news", icon: Radar },
+  { href: "/scholar", label: "Books & papers", icon: Question },
   { href: "/search", label: "Search", icon: Glass },
   { href: "/quotes", label: "Quotes", icon: Quote },
   { href: "/settings", label: "Settings", icon: Gear },

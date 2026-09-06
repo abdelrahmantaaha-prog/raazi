@@ -198,7 +198,7 @@ export async function handleVerify(task: Task): Promise<void> {
   }>({
     // Routed with the entry writer rather than as a stage of its own: it is a
     // judgement about entry prose.
-    stage: "entry",
+    stage: "verify",
     system: SYSTEM,
     schema: SCHEMA,
     parts: [`SENTENCES TO CHECK:\n\n${block}`],

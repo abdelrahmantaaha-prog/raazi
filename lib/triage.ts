@@ -2,6 +2,9 @@ import { db, tx } from "./db";
 import { getConfig } from "./config";
 import { createRun, enqueue } from "./queue";
 import { appendReadingTail, queueUnreadInto } from "./reading";
+import { writeChunks } from "./pipeline/ocr";
+import { parseText } from "./ingest/text";
+import { clean } from "./ingest/clean";
 
 /**
  * The inbox: what a feed pulled in, waiting for you to say whether it matters.
@@ -153,6 +156,54 @@ export function keep(itemIds: number[]): { kept: number; runId: number | null } 
     if (read !== null) appendReadingTail(runId, read);
 
     return { kept: items.length, runId };
+  });
+}
+
+/**
+ * Replaces a held article's text with what you pasted.
+ *
+ * The reason this exists is the paywall. You have subscriptions — the Post,
+ * the Times — and Corpus does not: the fetcher gets a metered-content page or
+ * a consent wall, and what lands in the inbox is a headline and the feed's own
+ * summary. Reading that is a citation to a summary, which is the one thing
+ * this application is built not to do.
+ *
+ * So: open it in your browser, where you are signed in, copy the article, and
+ * paste it here before you keep it. The source keeps its address, its outlet
+ * and its publication date — everything that makes the citation true — and
+ * gains the text that was always meant to be behind them. Only a held item can
+ * be pasted into; once it has been read, replacing the text underneath its
+ * evidence would leave every quote pointing at a passage that no longer says
+ * what it said.
+ */
+export function pasteText(itemId: number, text: string): { chunks: number; words: number } {
+  const item = db()
+    .prepare("SELECT id, source_id, title FROM feed_items WHERE id=? AND state='held'")
+    .get(itemId) as { id: number; source_id: number | null; title: string } | undefined;
+  if (!item) throw new Error("That item is not waiting in the inbox.");
+  if (item.source_id === null) throw new Error("That item has nothing to paste into.");
+
+  const body = text.trim();
+  if (body.length < 200) throw new Error("That looks too short to be the article.");
+
+  const pieces = clean(parseText(body)).pieces;
+  if (!pieces.length) throw new Error("Nothing readable in what was pasted.");
+
+  return tx(() => {
+    // The old chunks go entirely. A held source has no evidence hanging off
+    // them yet, which is exactly why this is only offered before you keep it.
+    db().prepare("DELETE FROM chunks WHERE source_id=?").run(item.source_id);
+    const ids = writeChunks(item.source_id!, pieces);
+    db()
+      .prepare(
+        `UPDATE sources SET status='chunked', read_mode='eager',
+                note='The article text was pasted in by hand.' WHERE id=?`
+      )
+      .run(item.source_id);
+    db()
+      .prepare("UPDATE feed_items SET note='Full text pasted in.' WHERE id=?")
+      .run(item.id);
+    return { chunks: ids.length, words: body.split(/\s+/).length };
   });
 }
 

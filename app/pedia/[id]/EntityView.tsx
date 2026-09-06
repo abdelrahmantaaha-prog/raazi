@@ -482,7 +482,7 @@ export function EntityView({
               </summary>
               <div className="border-t border-[var(--color-rule)] p-4">
                 <p className="mb-3 text-xs text-[var(--color-muted)]">
-                  These are kept out of the entry, out of the study cards, and out of
+                  These are kept out of the entry and out of
                   anything Corpus writes — including after a source is read again. The
                   reasons are given back to the model next time it writes about{" "}
                   {entity.canonical_name}.
