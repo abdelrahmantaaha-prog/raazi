@@ -194,8 +194,28 @@ export function configuredProviders(): ProviderId[] {
   return [...new Set(listKeys().map((k) => k.provider ?? "gemini"))];
 }
 
+/**
+ * Which model this key asks for.
+ *
+ * Three answers in order, and the middle one was missing. A key may name its
+ * own model, and that still wins. Otherwise, for Gemini, the model named in
+ * Settings — which until now was read when validating a key and when counting
+ * tokens, and ignored by every call that actually did work. The field looked
+ * like the model setting, was documented as the model setting, and could not
+ * change the model. Last, the provider's own default.
+ *
+ * Read through config-file rather than lib/config, which imports this module:
+ * the same reason lib/lan.ts reads it directly.
+ */
 export function modelFor(key: ApiKey): string {
-  return key.model?.trim() || spec(key.provider ?? "gemini").defaultModel;
+  const provider = key.provider ?? "gemini";
+  const named = key.model?.trim();
+  if (named) return named;
+  if (provider === "gemini") {
+    const configured = readStore<{ model?: string }>().model?.trim();
+    if (configured) return configured;
+  }
+  return spec(provider).defaultModel;
 }
 
 /**
