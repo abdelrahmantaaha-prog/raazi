@@ -104,6 +104,36 @@ section("Splitting sentences without falling for abbreviations");
   check("headings are dropped, paragraphs numbered", paras.length === 4 && paras[0].paragraph === 0 && paras[2].paragraph === 1, JSON.stringify(paras));
 }
 
+/* --------------------------------------------------------- ensureHeading */
+
+section("Every entry is written under subheadings");
+{
+  const { ensureHeading } = await import("../lib/pipeline/entry.ts");
+
+  const bare = "Carney said the talks would continue [[m:1]].";
+  const nl = String.fromCharCode(10);
+  check(
+    "a one-section entry that forgot its heading gets the one it planned",
+    ensureHeading(bare, [{ heading: "Trade talks" }]) === "## Trade talks" + nl + nl + bare,
+    JSON.stringify(ensureHeading(bare, [{ heading: "Trade talks" }]))
+  );
+  const headed = "## Origins" + nl + nl + "He was born in 1965 [[m:2]].";
+  check(
+    "a body that already has one is left alone",
+    ensureHeading(headed, [{ heading: "Origins" }]) === headed
+  );
+  check(
+    "the lead is not a section, so an entry planned as lead-plus-one still gets its heading",
+    ensureHeading(bare, [{ heading: "opening" }, { heading: "Trade talks" }]).startsWith("## Trade talks")
+  );
+  check(
+    "two planned sections are left to the coherence pass rather than mislabelled",
+    ensureHeading(bare, [{ heading: "Origins" }, { heading: "Trade talks" }]) === bare
+  );
+  check("and a body with no plan at all is untouched", ensureHeading(bare, []) === bare);
+  check("an empty body stays empty", ensureHeading("", [{ heading: "Trade talks" }]) === "");
+}
+
 /* ---------------------------------------------------------- repairBody */
 
 section("A dead marker takes its sentence with it, a framing sentence survives");

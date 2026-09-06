@@ -64,8 +64,11 @@ What typically needs fixing:
   and carry BOTH citation markers onto it.
 - Sections in an arbitrary order. Put the identifying material first, then
   chronology or theme, then contested and marginal material last.
-- Headings that no longer describe what is under them, or a wall of text that
-  needs headings and has none.
+- Headings that no longer describe what is under them, or an entry with no
+  headings at all. Every entry is written under subheadings, whatever its
+  length: if this one is a single unbroken run of prose, give it the headings
+  its material implies, and if a heading no longer describes what is under it,
+  rename it. Only the lead paragraph goes unheaded.
 - Sentences that begin mid-thought because the material they followed was moved
   or removed in an earlier revision.
 - A person introduced by a bare given name or a bare surname. The first time
@@ -162,7 +165,7 @@ export async function handleCoherence(task: Task): Promise<void> {
 
   const before = markers(row.body_md);
 
-  const { data, usage } = await generateJson<{
+  const { data, usage, model } = await generateJson<{
     verdict: "fine" | "reordered";
     body?: string;
     note?: string;
@@ -231,10 +234,15 @@ export async function handleCoherence(task: Task): Promise<void> {
     // visible rather than an entry silently rearranging itself overnight.
     db()
       .prepare(
-        `INSERT INTO entry_revisions (entity_id, body_md, changelog_md)
-         VALUES (?, ?, ?)`
+        `INSERT INTO entry_revisions (entity_id, body_md, changelog_md, model)
+         VALUES (?, ?, ?, ?)`
       )
-      .run(entityId, body, `Reorganised for flow: ${data.note ?? "grouped related material"}`);
+      .run(
+        entityId,
+        body,
+        `Reorganised for flow: ${data.note ?? "grouped related material"}`,
+        model ?? null
+      );
 
     finishTask(task.id, task.run_id, usage, "done", data.note || "Reorganised.");
   });

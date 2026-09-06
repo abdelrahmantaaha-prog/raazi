@@ -68,7 +68,11 @@ const SCHEMA: Schema = {
       items: {
         type: Type.OBJECT,
         properties: {
-          heading: { type: Type.STRING, description: "Short section heading, or 'opening' for the lead." },
+          heading: {
+            type: Type.STRING,
+            description:
+              "Short section heading naming its subject; 'opening' for the lead paragraph, which is the one part printed without a heading.",
+          },
           about: { type: Type.STRING, description: "One sentence: what this section establishes." },
           mentionIds: { type: Type.ARRAY, items: { type: Type.INTEGER } },
         },
@@ -83,7 +87,7 @@ const SCHEMA: Schema = {
     body: {
       type: Type.STRING,
       description:
-        "The entry in Markdown, following the plan. Every factual sentence ends with citation markers of the form [[m:ID]], written one per id and separated by spaces.",
+        "The entry in Markdown, following the plan. Every section of the plan appears as a '## ' subheading with its prose beneath it — every entry has subheadings, whatever its length. Every factual sentence ends with citation markers of the form [[m:ID]], written one per id and separated by spaces.",
     },
     changelog: {
       type: Type.STRING,
@@ -233,7 +237,17 @@ Then write so that a reader who knows nothing follows the account:
   If the only way to use a passage is to append an unconnected sentence, leave
   the passage out; you are not scored on how many passages you cite.
 - Headings name subjects ("Oil negotiations, 1950–52"), not categories
-  ("Facts", "Other information"). Short entries need no headings at all.
+  ("Facts", "Other information").
+- EVERY entry is written under subheadings — this is not optional and it does
+  not depend on length. Each section of your plan becomes a "## " heading in
+  the body, in the order you planned them, and the prose for that section
+  follows it. A four-passage entry is one heading and one paragraph; that is
+  still a heading. The one paragraph that may sit above the first heading is
+  the lead, which says what the subject is.
+  The reason is that these entries are read by someone hunting for one thing.
+  An unbroken column of prose has to be read from the top to find out whether
+  it contains what you came for; headings let a reader land on the part they
+  need and see at a glance what the entry covers.
 
 LENGTH follows evidence: roughly one paragraph for every three to five usable
 passages, never padded. A subject with four passages is one paragraph.
@@ -402,7 +416,7 @@ export async function handleEntry(task: Task): Promise<void> {
     .filter(Boolean)
     .join("\n\n");
 
-  const { data, usage } = await generateJson<{
+  const { data, usage, model } = await generateJson<{
     plan?: { heading: string; about?: string; mentionIds: number[] }[];
     summary: string;
     body: string;
@@ -419,7 +433,8 @@ export async function handleEntry(task: Task): Promise<void> {
   tokensOut += usage.tokensOut;
 
   const validIds = new Set(mentions.map((m) => m.id));
-  const { body, dropped } = repairBody(data.body ?? "", validIds);
+  const { body: repaired, dropped } = repairBody(data.body ?? "", validIds);
+  const body = ensureHeading(repaired, data.plan);
   const summary = (data.summary ?? "").replace(/\s*\[\[m:\d+\]\]/g, "").trim();
   const triggerSource = evidence[evidence.length - 1]?.source_id ?? null;
 
@@ -447,7 +462,9 @@ export async function handleEntry(task: Task): Promise<void> {
         summary,
         body,
         hash,
-        null,
+        // What the provider said answered, or nothing — never a guess. The
+        // pool may have handed the call to a smaller model than was asked for.
+        model ?? null,
         passes,
         flagRewrites,
         // Stamped only when the flags are what asked for this rewrite, and
@@ -459,10 +476,10 @@ export async function handleEntry(task: Task): Promise<void> {
 
     db()
       .prepare(
-        `INSERT INTO entry_revisions (entity_id, body_md, changelog_md, trigger_source_id)
-         VALUES (?, ?, ?, ?)`
+        `INSERT INTO entry_revisions (entity_id, body_md, changelog_md, trigger_source_id, model)
+         VALUES (?, ?, ?, ?, ?)`
       )
-      .run(entityId, body, data.changelog?.trim() || null, triggerSource);
+      .run(entityId, body, data.changelog?.trim() || null, triggerSource, model ?? null);
 
     // Contradictions are findings, and a finding recorded twice is noise. The
     // same pair from a later rewrite is skipped.
@@ -591,6 +608,35 @@ async function planEntry(
  * was the way that rule used to be broken. A framing sentence that never had a
  * marker is left alone; the verifier judges those against their paragraph.
  */
+/**
+ * The heading a short entry keeps forgetting.
+ *
+ * Every entry is written under subheadings now, and the prompt says so twice.
+ * Models still drop them on a four-passage subject, partly because that is
+ * what the instructions used to permit. Where the plan named exactly one
+ * section, the fix is mechanical and honest: the writer's own heading for its
+ * own single section, put at the top of the prose it describes.
+ *
+ * Deliberately narrow. With two or more planned sections there is no way to
+ * tell from the outside where one ends and the next begins, and a heading over
+ * the wrong material is worse than none — those are left to the coherence
+ * pass, which reads the whole entry and is asked to give it headings.
+ */
+export function ensureHeading(
+  body: string,
+  plan?: { heading: string; mentionIds?: number[] }[]
+): string {
+  const text = body.trim();
+  if (!text || /^#{1,4}\s+\S/m.test(text)) return body;
+
+  const sections = (plan ?? [])
+    .map((s) => (s.heading ?? "").trim())
+    .filter((h) => h && h.toLowerCase() !== "opening");
+  if (sections.length !== 1) return body;
+
+  return `## ${sections[0]}\n\n${text}`;
+}
+
 export function repairBody(raw: string, validIds: Set<number>): { body: string; dropped: number } {
   const SENTINEL = "\u2063DEAD\u2063";
   let dropped = 0;
