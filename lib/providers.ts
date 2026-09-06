@@ -57,7 +57,9 @@ export const PROVIDERS: Record<ProviderId, ProviderSpec> = {
     label: "Google Gemini",
     kind: "gemini",
     baseUrl: "",
-    defaultModel: "gemini-flash-latest",
+    // The head of MODEL_RING. Explicit rather than an alias so an entry can
+    // say which model wrote it and still be true a month later.
+    defaultModel: "gemini-3.8-flash",
     keysUrl: "https://aistudio.google.com/apikey",
     capabilities: { json: true, vision: true, audio: true, embed: true },
     note: "The only free tier that also does OCR, transcription and embeddings. Strong on Arabic.",
@@ -108,24 +110,43 @@ export const PROVIDER_IDS = Object.keys(PROVIDERS) as ProviderId[];
 /**
  * The models a provider will answer with, best first.
  *
- * Free-tier quota on Gemini is counted per model per project, not per key — so
- * when the model you are asking for is spent, every one of your keys is spent
- * for it and none of them is spent for anything else. Rotating thirty-five keys
- * through an exhausted model is thirty-five round trips to the same refusal,
- * which is exactly what happened on 6 September: `gemini-flash-latest` resolves
- * to 3.8-flash, that model's allowance was gone, and the app had no way to ask
- * for a different one.
+ * Free-tier quota on Gemini is counted per model, not per key — so when the
+ * model you are asking for is spent, every one of your keys is spent for it and
+ * none of them is spent for anything else. Rotating thirty-five keys through an
+ * exhausted model is thirty-five round trips to the same refusal, which is what
+ * the app spent 6 September doing. The ring therefore cycles models as well as
+ * keys: a refusal on quota sets the model aside and the same key asks the next
+ * one down immediately.
  *
- * So the ring cycles models as well as keys. The order is a preference: the
- * strongest first, and the ones that survive a busy afternoon behind it.
- * Anything unavailable is skipped, and a model that refuses on quota is set
- * aside for the rest of the day rather than tried again on the next key.
+ * Measured, on one key, at one moment, 6 September 2026:
+ *
+ *   gemini-flash-latest     429  RESOURCE_EXHAUSTED
+ *   gemini-3.8-flash        503  busy
+ *   gemini-3.7-flash        200
+ *   gemini-3.6-flash        200
+ *   gemini-3.5-flash        200
+ *   gemini-3.5-flash-lite   200
+ *
+ * Which settles two things. The allowance really is per model — the same key,
+ * seconds apart, refused for one and served by the next. And the useful
+ * fallback is the version below, not the lite tier: the first ring here went
+ * straight from the alias to flash-lite and stepped over four full-flash
+ * models that were sitting there unspent.
+ *
+ * No aliases. `gemini-flash-latest` was the first entry and the only one out of
+ * quota, and an alias is the wrong thing for this library anyway: it moves when
+ * Google ships, so two entries written a month apart come from different models
+ * with nothing on the page to say so. Explicit versions, newest first, and the
+ * lite tier at the back as the last thing before the local model.
  */
 export const MODEL_RING: Partial<Record<ProviderId, string[]>> = {
   gemini: [
-    "gemini-flash-latest",
+    "gemini-3.8-flash",
+    "gemini-3.7-flash",
+    "gemini-3.6-flash",
+    "gemini-3.5-flash",
     "gemini-3.5-flash-lite",
-    "gemini-flash-lite-latest",
+    "gemini-3.1-flash-lite",
   ],
   // One model each, and neither meters the way Gemini's free tier does: Claude
   // bills rather than refuses, and Ollama is a file on this disk.
