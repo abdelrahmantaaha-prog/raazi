@@ -167,6 +167,29 @@ check(
 );
 
 // ---------------------------------------------------------------------------
+section("The local model is the last resort, never the first");
+// ---------------------------------------------------------------------------
+// A busy provider is not a broken key: Gemini's free tier answers 503 to every
+// key at once, so the router has to step past the provider and land somewhere.
+{
+  const { isProviderUnavailable } = await import("../lib/ai/errors.ts");
+  check("a 503 reads as busy", isProviderUnavailable(Object.assign(new Error("503"), { status: 503 })));
+  check("so does 'high demand' in the body", isProviderUnavailable(new Error("model is currently experiencing high demand")));
+  check("a 400 does not", !isProviderUnavailable(Object.assign(new Error("400 bad request"), { status: 400 })));
+  check("nor does a rejected key", !isProviderUnavailable(Object.assign(new Error("401"), { status: 401 })));
+
+  saveConfig({ routing: { extract: "gemini", entry: "gemini" } });
+  const chain = providersFor("extract");
+  check("the local model sits behind Gemini", chain.indexOf("ollama") === chain.length - 1, JSON.stringify(chain));
+  check("and never in front of it", chain.indexOf("gemini") < chain.indexOf("ollama"), JSON.stringify(chain));
+  check(
+    "it is not offered work it cannot do",
+    !providersFor("extract", { need: "vision" }).includes("ollama"),
+    JSON.stringify(providersFor("extract", { need: "vision" }))
+  );
+}
+
+// ---------------------------------------------------------------------------
 section("Keys belong to their provider");
 // ---------------------------------------------------------------------------
 check("each provider sees only its own keys", keys.usableKeys("ollama").length === 1);

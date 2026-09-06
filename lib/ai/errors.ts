@@ -157,6 +157,30 @@ export function isSchemaFailure(status: number | undefined, raw: string): boolea
 }
 
 /**
+ * The service is up but will not serve right now.
+ *
+ * Distinct from every other failure here in one way that decides what to do
+ * about it: it is not about the key. Gemini's free tier answers 503 "high
+ * demand" for whole afternoons, and it answers it to every key you own,
+ * because they all reach the same overloaded model. Rotating thirty-five keys
+ * through it is thirty-five wasted round trips to the same answer.
+ *
+ * So the router skips the provider rather than the key, and lands on whatever
+ * is behind it — which is why the local model is on the end of every chain.
+ */
+export function isProviderUnavailable(err: unknown): boolean {
+  const status = statusOf(err);
+  const raw = (err instanceof Error ? err.message : String(err)).toLowerCase();
+  if (status === 502 || status === 503 || status === 504) return true;
+  return (
+    raw.includes("overloaded") ||
+    raw.includes("high demand") ||
+    raw.includes("unavailable") ||
+    raw.includes("model is currently experiencing")
+  );
+}
+
+/**
  * What one key's failure says about that key, as opposed to what it says about
  * the run. Used by the client to decide whether to set a key aside and reach for
  * the next one.

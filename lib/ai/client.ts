@@ -3,6 +3,7 @@ import type { Schema } from "@google/genai";
 import { getConfig } from "../config";
 import {
   earliestReset,
+  hasUsableKey,
   listKeys,
   liveKeys,
   markCooldown,
@@ -20,6 +21,7 @@ import { anthropicJson, anthropicText, validateAnthropicKey, EFFORT } from "./an
 import {
   AllKeysExhaustedError,
   SchemaUnsupportedError,
+  isProviderUnavailable,
   MissingKeyError,
   NoUsableKeysError,
   SafetyBlockError,
@@ -58,9 +60,11 @@ type Need = "vision" | "audio" | "embed" | undefined;
  *     the backbone rather than being replaced.
  *  2. Otherwise, whatever this stage is routed to — whatever language the
  *     source is in.
+ *  3. Then Gemini, then this machine's own model, as fallbacks.
  *
- * The result is a list, not one provider: if the first has no usable keys the
- * call falls through to the next rather than parking the run.
+ * The result is a list, not one provider: if the first has no usable keys — or
+ * is refusing, or is busy — the call falls through to the next rather than
+ * parking the run.
  */
 export function providersFor(
   stage: Stage | undefined,
@@ -83,6 +87,20 @@ export function providersFor(
 
   // Gemini is the last resort for everything, because it can do everything.
   if (!candidates.includes(fallback) && capable(fallback)) candidates.push(fallback);
+
+  // And behind Gemini, this machine — but only ever behind it.
+  //
+  // The free tier spends whole afternoons answering 503, and a run that parks
+  // because Google is busy is a run that has stopped for a reason that has
+  // nothing to do with you. The local model is slow and occasionally weak, so
+  // it is a poor first choice for work Gemini will do in two seconds; it is an
+  // excellent last one, because the alternative to slow is not fast, it is
+  // nothing. Reached only when everything in front of it is spent, refusing or
+  // down, and skipped for anything needing eyes, ears or embeddings.
+  if (hasUsableKey("ollama") && capable("ollama") && !candidates.includes("ollama")) {
+    candidates.push("ollama");
+  }
+
   return candidates.length ? candidates : [fallback];
 }
 
@@ -251,6 +269,19 @@ async function withRotation<T>(
         if (err instanceof SchemaUnsupportedError) {
           console.warn(
             `[corpus] ${spec(provider).label} could not produce the JSON shape; trying the next provider`
+          );
+          break;
+        }
+
+        // Busy, not broken, and busy for every key at once. Step past the
+        // provider — but only when there is something behind it to step to,
+        // because with nothing there the old behaviour is the right one: throw,
+        // and let the worker back off and try again in a minute.
+        if (isProviderUnavailable(err) && candidates.indexOf(provider) < candidates.length - 1) {
+          console.warn(
+            `[corpus] ${spec(provider).label} is busy; handing this one to ${spec(
+              candidates[candidates.indexOf(provider) + 1]
+            ).label}`
           );
           break;
         }
