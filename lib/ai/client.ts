@@ -12,6 +12,7 @@ import {
   markUsed,
   modelFor,
   nextKey,
+  noteCall,
   usableKeys,
   type ApiKey,
 } from "../keys";
@@ -204,6 +205,9 @@ async function pace(keyId: string) {
   const wait = last + minGap - Date.now();
   if (wait > 0) await new Promise((r) => setTimeout(r, wait));
   globalThis.__corpusLastCall.set(keyId, Date.now());
+  // The ring needs to know too, so the next call reaches for a rested key
+  // rather than this one. See nextKey().
+  noteCall(keyId);
 }
 
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));

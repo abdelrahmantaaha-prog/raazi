@@ -133,13 +133,56 @@ export function liveKeys(provider?: ProviderId): ApiKey[] {
 /** `prefer` pins a particular key when it is still usable — the Files API hands
  *  back a URI only the uploading key can read, so that call and the one that
  *  reads the file have to agree on which key they are. */
+declare global {
+  // eslint-disable-next-line no-var
+  var __corpusKeyLastUsed: Map<string, number> | undefined;
+}
+
+/** Noted on every call, so the next one can go to a different key. */
+export function noteCall(keyId: string): void {
+  (globalThis.__corpusKeyLastUsed ??= new Map()).set(keyId, Date.now());
+}
+
+export function lastCallAt(keyId: string): number {
+  return globalThis.__corpusKeyLastUsed?.get(keyId) ?? 0;
+}
+
+/**
+ * Which key answers this call: the one that has rested longest.
+ *
+ * It used to be `free[0]`, and that one line was the whole throughput of the
+ * application. The pacer waits a per-key interval between calls — six seconds
+ * at the default ten a minute — and every call asked for the same first key,
+ * so thirty-five keys ran at the speed of one. The morning's backlog was not
+ * Gemini being slow; it was Corpus queueing behind itself.
+ *
+ * Least-recently-used rather than round-robin because it needs no cursor to
+ * keep, survives a key going out of quota and coming back, and lands on a
+ * never-used key first — the map starts empty, so a fresh ring fans out
+ * immediately.
+ */
 export function nextKey(
   provider?: ProviderId,
   exclude: Set<string> = new Set(),
   prefer?: string
 ): ApiKey | undefined {
   const free = usableKeys(provider).filter((k) => !exclude.has(k.id));
-  return (prefer ? free.find((k) => k.id === prefer) : undefined) ?? free[0];
+  if (prefer) {
+    const pinned = free.find((k) => k.id === prefer);
+    if (pinned) return pinned;
+  }
+  if (free.length <= 1) return free[0];
+
+  let best = free[0];
+  let bestAt = lastCallAt(best.id);
+  for (const k of free) {
+    const at = lastCallAt(k.id);
+    if (at < bestAt) {
+      best = k;
+      bestAt = at;
+    }
+  }
+  return best;
 }
 
 export function hasUsableKey(provider?: ProviderId): boolean {

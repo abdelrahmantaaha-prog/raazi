@@ -327,5 +327,45 @@ check("and the legacy field is cleared, so it cannot come back",
   JSON.parse(fs.readFileSync(path.join(SANDBOX, "config.json"), "utf8")).apiKey === undefined);
 
 fs.rmSync(SANDBOX, { recursive: true, force: true });
+// ---------------------------------------------------------------------------
+section("The ring spreads the work");
+// ---------------------------------------------------------------------------
+// One line — nextKey returning free[0] — was the throughput of the whole
+// application: the pacer waits per key, so asking for the same key every time
+// ran thirty-five keys at the speed of one.
+{
+  for (const k of keys.listKeys()) keys.removeKey(k.id);
+  const a = keys.addKey("aaaa-1111", "A", { provider: "gemini" });
+  const b = keys.addKey("bbbb-2222", "B", { provider: "gemini" });
+  const c = keys.addKey("cccc-3333", "C", { provider: "gemini" });
+
+  const first = keys.nextKey("gemini");
+  keys.noteCall(first.id);
+  const second = keys.nextKey("gemini");
+  keys.noteCall(second.id);
+  const third = keys.nextKey("gemini");
+  keys.noteCall(third.id);
+
+  check(
+    "three calls reach three different keys",
+    new Set([first.id, second.id, third.id]).size === 3,
+    [first.label, second.label, third.label].join(" ")
+  );
+
+  const fourth = keys.nextKey("gemini");
+  check("the fourth comes back to the one that rested longest", fourth.id === first.id, fourth.label);
+
+  keys.markExhausted(second.id, "spent", 60);
+  const after = keys.nextKey("gemini");
+  check("a spent key is skipped rather than waited for", after.id !== second.id, after.label);
+
+  check(
+    "a pinned key still wins outright",
+    keys.nextKey("gemini", new Set(), third.id).id === third.id
+  );
+  void a; void b; void c;
+}
+
+
 console.log(`\n${failed === 0 ? "All passed" : "FAILURES PRESENT"}: ${passed} passed, ${failed} failed\n`);
 process.exit(failed === 0 ? 0 : 1);

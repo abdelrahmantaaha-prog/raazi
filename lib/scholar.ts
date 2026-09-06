@@ -84,8 +84,14 @@ export async function searchTerms(question: string): Promise<string[]> {
       parts: [`QUESTION: ${asked}`],
       schema: QUERY_SCHEMA,
       system: QUERY_SYSTEM,
-      stage: "tag",
-      timeoutMs: 120_000,
+      // Deliberately no stage, which means Gemini first and the local model
+      // only behind it. A search is something you are sitting and waiting for,
+      // and the local model is a single GPU that the worker keeps busy for
+      // three minutes at a time writing entries — routing an interactive call
+      // there puts you in a queue behind the background. Twenty seconds is the
+      // whole budget: past that the question goes to the catalogues as typed,
+      // which is a worse search and an immediate one.
+      timeoutMs: 20_000,
     });
     const queries = (data.queries ?? [])
       .map((q) => q.replace(/["?]/g, "").trim())
