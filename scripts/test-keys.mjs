@@ -367,5 +367,52 @@ section("The ring spreads the work");
 }
 
 
+// ---------------------------------------------------------------------------
+section("The ring cycles models, not just keys");
+// ---------------------------------------------------------------------------
+// Gemini's free quota is per model and shared by every key you own, so a
+// refusal means the model is spent — burning thirty-five keys against it is
+// thirty-five trips to the same wall.
+{
+  const providers = await import("../lib/providers.ts");
+  const { saveConfig } = await import("../lib/config.ts");
+  for (const k of keys.listKeys()) keys.removeKey(k.id);
+  keys.clearSpentModels();
+  saveConfig({ model: "" });
+  const key = keys.addKey("gem-ring-0001", "Ring", { provider: "gemini" });
+
+  const ring = providers.modelsFor("gemini");
+  check("gemini has more than one model to try", ring.length > 1, JSON.stringify(ring));
+  check("the first is what a fresh ring asks for", keys.modelFor(key) === ring[0], keys.modelFor(key));
+
+  keys.markModelSpent("gemini", ring[0], 60);
+  check("a spent model is skipped", keys.modelFor(key) === ring[1], keys.modelFor(key));
+  check("and the provider still has something to ask", keys.hasLiveModel("gemini"));
+  check("the key itself is untouched", keys.usableKeys("gemini").length === 1);
+
+  for (const m of ring) keys.markModelSpent("gemini", m, 60);
+  check("with every model spent the provider has nothing left", !keys.hasLiveModel("gemini"));
+
+  keys.clearSpentModels();
+  check("and they come back when cleared", keys.modelFor(key) === ring[0]);
+
+  // A model pinned in Settings leads the ring rather than replacing it.
+  saveConfig({ model: ring[1] });
+  check("a pinned model is asked for first", keys.modelFor(key) === ring[1], keys.modelFor(key));
+  keys.markModelSpent("gemini", ring[1], 60);
+  check(
+    "and when it is spent the ring carries on without it",
+    keys.modelFor(key) === ring[0],
+    keys.modelFor(key)
+  );
+  saveConfig({ model: "" });
+  keys.clearSpentModels();
+
+  // A key that names its own model is a deliberate pin and always wins.
+  const pinned = keys.addKey("gem-pin-0002", "Pinned", { provider: "gemini", model: "some-other-model" });
+  check("a key's own model still wins outright", keys.modelFor(pinned) === "some-other-model");
+}
+
+
 console.log(`\n${failed === 0 ? "All passed" : "FAILURES PRESENT"}: ${passed} passed, ${failed} failed\n`);
 process.exit(failed === 0 ? 0 : 1);

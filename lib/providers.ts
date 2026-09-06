@@ -106,6 +106,40 @@ export const PROVIDERS: Record<ProviderId, ProviderSpec> = {
 export const PROVIDER_IDS = Object.keys(PROVIDERS) as ProviderId[];
 
 /**
+ * The models a provider will answer with, best first.
+ *
+ * Free-tier quota on Gemini is counted per model per project, not per key — so
+ * when the model you are asking for is spent, every one of your keys is spent
+ * for it and none of them is spent for anything else. Rotating thirty-five keys
+ * through an exhausted model is thirty-five round trips to the same refusal,
+ * which is exactly what happened on 6 September: `gemini-flash-latest` resolves
+ * to 3.8-flash, that model's allowance was gone, and the app had no way to ask
+ * for a different one.
+ *
+ * So the ring cycles models as well as keys. The order is a preference: the
+ * strongest first, and the ones that survive a busy afternoon behind it.
+ * Anything unavailable is skipped, and a model that refuses on quota is set
+ * aside for the rest of the day rather than tried again on the next key.
+ */
+export const MODEL_RING: Partial<Record<ProviderId, string[]>> = {
+  gemini: [
+    "gemini-flash-latest",
+    "gemini-3.5-flash-lite",
+    "gemini-flash-lite-latest",
+  ],
+  // One model each, and neither meters the way Gemini's free tier does: Claude
+  // bills rather than refuses, and Ollama is a file on this disk.
+  anthropic: ["claude-sonnet-5"],
+  ollama: ["qwen3.5:9b"],
+};
+
+/** Every model this provider might use, for the settings page and for tests. */
+export function modelsFor(id: ProviderId): string[] {
+  const ring = MODEL_RING[id] ?? [];
+  return ring.length ? ring : [spec(id).defaultModel];
+}
+
+/**
  * The stages that can be routed. OCR, transcription and embeddings are not
  * here: they need capabilities the alternatives do not have.
  *

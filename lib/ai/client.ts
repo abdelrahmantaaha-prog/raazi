@@ -3,12 +3,14 @@ import type { Schema } from "@google/genai";
 import { getConfig } from "../config";
 import {
   earliestReset,
+  hasLiveModel,
   hasUsableKey,
   listKeys,
   liveKeys,
   markCooldown,
   markExhausted,
   markInvalid,
+  markModelSpent,
   markUsed,
   modelFor,
   nextKey,
@@ -16,7 +18,7 @@ import {
   usableKeys,
   type ApiKey,
 } from "../keys";
-import { spec, type ProviderId, type Stage } from "../providers";
+import { modelsFor, spec, type ProviderId, type Stage } from "../providers";
 import { chatJson, chatText, validateOpenAiKey } from "./openai";
 import { anthropicJson, anthropicText, validateAnthropicKey, EFFORT } from "./anthropic";
 import {
@@ -294,6 +296,18 @@ async function withRotation<T>(
 
         if (failure.kind === "daily") {
           invalidInARow = 0;
+          // Whose quota was it? On Gemini's free tier the allowance is counted
+          // per model, and every key you own draws on the same one — so a
+          // refusal here says the MODEL is spent, not the key, and setting the
+          // key aside would burn thirty-five of them against the same wall.
+          // Retire the model, keep the key, and let modelFor() pick the next
+          // one down the ring on the very next attempt.
+          const spent = modelFor(key);
+          if (modelsFor(provider).includes(spent) && hasLiveModel(provider)) {
+            markModelSpent(provider, spent, getConfig().keyRetryMinutes);
+            tried.delete(key.id);
+            continue;
+          }
           markExhausted(key.id, failure.reason, getConfig().keyRetryMinutes);
           console.log(`[corpus] key "${key.label}" is out of quota for the day; trying the next one`);
           continue;

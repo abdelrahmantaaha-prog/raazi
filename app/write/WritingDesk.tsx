@@ -556,6 +556,25 @@ export function WritingDesk({
               dir={dirOf(stripTags(body)) as "ltr" | "rtl"}
             />
 
+            {/* Under the text, where you look when you are writing to a length.
+                There was a count beside the title, in grey, sharing a line with
+                the save state and a Delete button — which is where a number
+                goes to be missed. */}
+            <div className="flex flex-wrap items-baseline gap-x-4 gap-y-1 border-t border-[var(--color-rule)] pt-2 text-sm tabular-nums">
+              <span className="font-medium">
+                {countWords(body).toLocaleString()} <span className="font-normal">words</span>
+              </span>
+              <span className="text-[var(--color-muted)]">
+                {countCharacters(body).toLocaleString()} characters
+              </span>
+              <span className="text-[var(--color-muted)]">{readingTime(countWords(body))} to read</span>
+              {refs.length > 0 ? (
+                <span className="text-[var(--color-muted)]">
+                  {refs.length} citation{refs.length === 1 ? "" : "s"}
+                </span>
+              ) : null}
+            </div>
+
             <div className="flex flex-wrap items-center gap-3">
               <Button variant="primary" onClick={check} disabled={checking || !body.trim()}>
                 {checking ? "Checking…" : "Fact-check draft"}
@@ -871,6 +890,18 @@ function wait(ms: number, signal: AbortSignal): Promise<void> {
 function countWords(s: string): number {
   const t = stripTags(s).trim();
   return t ? t.split(/\s+/).length : 0;
+}
+
+/** Characters as a sub-editor counts them: the text, spaces included. */
+function countCharacters(s: string): number {
+  return stripTags(s).trim().length;
+}
+
+/** At 230 words a minute, which is a reading pace rather than a speaking one. */
+function readingTime(words: number): string {
+  if (words < 115) return "under a minute";
+  const minutes = Math.round(words / 230);
+  return `${minutes} min`;
 }
 
 function truncate(s: string, n: number): string {

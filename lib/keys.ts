@@ -1,6 +1,6 @@
 import crypto from "node:crypto";
 import { readStore, writeStore } from "./config-file";
-import { spec, type ProviderId } from "./providers";
+import { modelsFor, spec, type ProviderId } from "./providers";
 
 /**
  * The key ring.
@@ -211,11 +211,57 @@ export function modelFor(key: ApiKey): string {
   const provider = key.provider ?? "gemini";
   const named = key.model?.trim();
   if (named) return named;
-  if (provider === "gemini") {
-    const configured = readStore<{ model?: string }>().model?.trim();
-    if (configured) return configured;
-  }
-  return spec(provider).defaultModel;
+
+  // The ring, minus whatever is out of quota today. A model pinned in Settings
+  // goes to the front of it rather than replacing it, so choosing a model is
+  // still a preference and not a way to strand the app on a spent one.
+  const configured = provider === "gemini" ? readStore<{ model?: string }>().model?.trim() : undefined;
+  const ring = configured
+    ? [configured, ...modelsFor(provider).filter((m) => m !== configured)]
+    : modelsFor(provider);
+
+  const live = ring.filter((m) => !modelSpent(provider, m));
+  return live[0] ?? ring[0] ?? spec(provider).defaultModel;
+}
+
+declare global {
+  // eslint-disable-next-line no-var
+  var __corpusSpentModels: Map<string, number> | undefined;
+}
+
+/**
+ * Models that answered "out of quota", and when to believe in them again.
+ *
+ * Held in memory rather than on disk: a daily allowance is a fact about today
+ * that a restart is entitled to re-test, and the cost of re-testing is one
+ * call. Keyed by provider and model, never by key — this is the whole point,
+ * since the quota belongs to the model and is shared by every key you own.
+ */
+function spentModels(): Map<string, number> {
+  return (globalThis.__corpusSpentModels ??= new Map());
+}
+
+export function markModelSpent(provider: ProviderId, model: string, minutes = 60): void {
+  spentModels().set(`${provider}:${model}`, Date.now() + minutes * 60_000);
+  console.log(`[corpus] ${model} is out of quota; the ring moves on for ${minutes} minutes`);
+}
+
+export function modelSpent(provider: ProviderId, model: string): boolean {
+  const until = spentModels().get(`${provider}:${model}`);
+  if (until === undefined) return false;
+  if (until > Date.now()) return true;
+  spentModels().delete(`${provider}:${model}`);
+  return false;
+}
+
+/** For tests, and for a settings page that has just been given a new key. */
+export function clearSpentModels(): void {
+  spentModels().clear();
+}
+
+/** Whether any model of this provider is still worth asking. */
+export function hasLiveModel(provider: ProviderId): boolean {
+  return modelsFor(provider).some((m) => !modelSpent(provider, m));
 }
 
 /**
