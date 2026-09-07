@@ -16,6 +16,12 @@ const nextConfig: NextConfig = {
    */
   distDir: process.env.NODE_ENV === "development" ? ".next-dev" : ".next",
 
+  // Additive: `next build` still produces the ordinary output this machine runs
+  // from, and ALSO a self-contained server under .next/standalone that carries
+  // the node_modules it actually needs. That is what `npm run dist` packages, so
+  // a copy can be handed over without a checkout or an `npm install`.
+  output: "standalone",
+
   // Native module + libraries that must not be bundled by webpack/turbopack.
   serverExternalPackages: ["better-sqlite3", "jsdom", "pdfjs-dist"],
   experimental: {

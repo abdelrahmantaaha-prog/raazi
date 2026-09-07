@@ -49,8 +49,13 @@ static class Corpus
                 return;
             }
 
+            // A packaged copy carries a self-contained server instead of a
+            // checkout: no node_modules/next to point at, just server.js.
+            string standalone = Path.Combine(Root, "server", "server.js");
+            bool packaged = File.Exists(standalone);
+
             string nextBin = Path.Combine(Root, "node_modules", "next", "dist", "bin", "next");
-            if (!File.Exists(nextBin))
+            if (!packaged && !File.Exists(nextBin))
             {
                 Error("Corpus isn't set up yet.\n\nOpen a terminal in\n" + Root +
                       "\nand run:  npm install\n\nThen run Corpus again.");
@@ -58,7 +63,8 @@ static class Corpus
             }
 
             bool alreadyRunning = ClaimPort();
-            if (!alreadyRunning && !Start(node, nextBin)) return;
+            if (!alreadyRunning &&
+                !(packaged ? StartStandalone(node, standalone) : Start(node, nextBin))) return;
 
             tray = BuildTray();
 
@@ -207,6 +213,58 @@ static class Corpus
     }
 
     static bool lanMode;
+
+    /**
+     * Starts a packaged copy: Next's standalone server, which carries the
+     * node_modules it needs and takes its port and hostname from the
+     * environment rather than the command line.
+     *
+     * The data directory is pinned to the folder the exe sits in, so a copy on
+     * a USB stick keeps its own library beside it instead of writing into
+     * wherever the process happened to start. LAN mode is still read from
+     * data/config.json and still means the same two things — bind every
+     * interface, and set CORPUS_LAN so middleware.ts demands the token — but
+     * without scripts/lan.mjs, which a handed-over copy does not carry.
+     */
+    static bool StartStandalone(string node, string serverJs)
+    {
+        lanMode = LanWanted();
+
+        var psi = new ProcessStartInfo
+        {
+            FileName = node,
+            Arguments = "\"" + serverJs + "\"",
+            WorkingDirectory = Path.GetDirectoryName(serverJs),
+            UseShellExecute = false,
+            CreateNoWindow = true,
+            RedirectStandardOutput = true,
+            RedirectStandardError = true,
+        };
+        psi.EnvironmentVariables["NODE_ENV"] = "production";
+        psi.EnvironmentVariables["PORT"] = Port.ToString();
+        psi.EnvironmentVariables["HOSTNAME"] = lanMode ? "0.0.0.0" : "127.0.0.1";
+        psi.EnvironmentVariables["CORPUS_DATA_DIR"] = Path.Combine(Root, "data");
+        if (lanMode) psi.EnvironmentVariables["CORPUS_LAN"] = "1";
+
+        try
+        {
+            server = Process.Start(psi);
+            OpenLog();
+            server.OutputDataReceived += (s, e) => Log(e.Data);
+            server.ErrorDataReceived += (s, e) => Log(e.Data);
+            server.BeginOutputReadLine();
+            server.BeginErrorReadLine();
+
+            server.EnableRaisingEvents = true;
+            server.Exited += (s, e) => OnServerExit();
+            return true;
+        }
+        catch (Exception ex)
+        {
+            Error("Couldn't start the server:\n\n" + ex.Message);
+            return false;
+        }
+    }
 
     static bool Start(string node, string nextBin)
     {

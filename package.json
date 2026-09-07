@@ -1,6 +1,6 @@
 {
   "name": "corpus",
-  "version": "0.3.0",
+  "version": "0.3.1",
   "private": true,
   "scripts": {
     "dev": "next dev --port 5400 --hostname 127.0.0.1",
@@ -16,6 +16,7 @@
     "test:formats": "tsx scripts/test-formats.mjs",
     "test:tags": "tsx scripts/test-tags.mjs",
     "build:exe": "powershell -ExecutionPolicy Bypass -File launcher/build.ps1",
+    "dist": "node scripts/dist.mjs",
     "test:keys": "tsx scripts/test-keys.mjs",
     "test:routing": "tsx scripts/test-routing.mjs",
     "test:render": "tsx scripts/test-render.mjs",
