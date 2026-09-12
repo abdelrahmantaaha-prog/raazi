@@ -52,11 +52,20 @@ export function enqueue(
  * ordered by who is waiting on it.
  *
  *   0 — you are looking at the screen right now
- *   1 — the reading pipeline, which nobody is watching in real time
- *   2 — decoration, which can always wait for everything else
+ *   1 — the feeds' articles, fetched and chunked into the inbox; free, and
+ *       what the inbox is waiting on
+ *   2 — the reading pipeline, which nobody is watching in real time
+ *   3 — decoration, which can always wait for everything else
  *
  * Within a band it is still first come, first served, so nothing starves and a
  * long ingest still runs in the order it was queued.
+ *
+ * The fetch used to share the reading's band, and within a band the older run
+ * goes first — so three hundred articles a morning's polls had found sat
+ * behind an older ingest whose every model call was failing, and the inbox
+ * stayed empty for an hour while the worker retried entries nobody was
+ * waiting for. A fetch costs no tokens; nothing the reading does should be
+ * ahead of it.
  */
 export const PRIORITY: Record<string, number> = {
   factcheck: 0,
@@ -65,12 +74,12 @@ export const PRIORITY: Record<string, number> = {
   // is a brief about yesterday.
   poll: 0,
   plan_polls: 0,
-  fetch_item: 1,
   brief: 0,
-  portrait: 2,
-  plan_portraits: 2,
+  fetch_item: 1,
+  portrait: 3,
+  plan_portraits: 3,
 };
-const DEFAULT_PRIORITY = 1;
+const DEFAULT_PRIORITY = 2;
 
 const PRIORITY_SQL = `CASE t.kind ${Object.entries(PRIORITY)
   .map(([kind, p]) => `WHEN '${kind}' THEN ${p}`)

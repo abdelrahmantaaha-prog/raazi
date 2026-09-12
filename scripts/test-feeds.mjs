@@ -385,10 +385,12 @@ section("Checking the feeds comes before chunking and parsing articles");
 
   const first = queue.claimNext();
   check("the poll is claimed ahead of the older ingest", first && first.kind === "poll", first && first.kind);
+  // The fetch is free and the inbox is waiting on it; the extraction, though
+  // queued earlier, is a model call nobody is watching.
   const second = queue.claimNext();
-  check("then the ingest resumes in its own order", second && second.kind === "extract", second && second.kind);
+  check("then the article fetch, ahead of the older extraction", second && second.kind === "fetch_item", second && second.kind);
   const third = queue.claimNext();
-  check("and the article fetch after that", third && third.kind === "fetch_item", third && third.kind);
+  check("and the reading resumes after that", third && third.kind === "extract", third && third.kind);
   check("a running poll still counts as pending", poll.pollPending());
 
   db().prepare("DELETE FROM tasks").run();

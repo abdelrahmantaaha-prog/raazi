@@ -305,7 +305,9 @@ you say otherwise.
 
 Polling is ordinary queue work, so a closed laptop picks up where it left off, and
 it comes ahead of the reading: a feed that falls due while a book is being chunked
-and read is checked on the worker's next pass, not once the book is done. An
+and read is checked on the worker's next pass, not once the book is done, and the
+articles it finds are fetched into the inbox before the reading carries on — a
+fetch costs no tokens, and the inbox is what is waiting on it. An
 item already in the library — the same story from a second feed, matched on its
 address with the tracking parameters stripped — is recorded and not fetched again.
 
