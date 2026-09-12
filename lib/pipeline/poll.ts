@@ -259,7 +259,31 @@ export function queuePolls(label = "Checking feeds"): { runId: number; feeds: nu
   });
 }
 
-/** True when a poll is already queued or running, so nothing piles up. */
+/**
+ * True when a poll itself is queued or running — the check of the feeds,
+ * not the article fetches it left behind.
+ *
+ * This is the guard for queueing the next check. The fetches are the
+ * chunking and parsing the feeds are meant to run ahead of, and a feed that
+ * has fallen due is due whether or not the last poll's articles have been
+ * read: gating on them meant an hourly feed was checked once per batch of
+ * articles rather than once an hour.
+ */
+export function pollPending(): boolean {
+  return (
+    (
+      db()
+        .prepare(
+          `SELECT COUNT(*) AS n FROM tasks
+            WHERE kind IN ('poll', 'plan_polls') AND state IN ('pending', 'running')`
+        )
+        .get() as { n: number }
+    ).n > 0
+  );
+}
+
+/** True when a poll or anything it queued is still in flight — the brief
+ *  waits on this, since "after the articles are in" is what it means. */
 export function pollInFlight(): boolean {
   return (
     (

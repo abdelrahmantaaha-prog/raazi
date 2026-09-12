@@ -2,7 +2,7 @@ import { classify, explain, type Disposition } from "./ai/errors";
 import { takeModelsUsed } from "./ai/client";
 import { getConfig } from "./config";
 import { queueStaleEntries, refreshInFlight } from "./entries";
-import { pollInFlight, queuePolls } from "./pipeline/poll";
+import { pollInFlight, pollPending, queuePolls } from "./pipeline/poll";
 import { nextFeedDueAt } from "./feeds";
 import { briefInFlight, queueBrief } from "./pipeline/brief";
 import { heldCount } from "./triage";
@@ -327,6 +327,13 @@ export async function startWorker(override?: Record<string, Handler>): Promise<v
       // The claim is a lease; renewing it here is free once it is fresh.
       claimWorkerPid();
       wakeDueRuns();
+      // The feeds, whenever one falls due — on every pass, not only when the
+      // queue is empty. This used to live in the idle branch below, which
+      // meant a feed was checked only after everything else had been chunked
+      // and read: a book ingested at nine kept an hourly feed unchecked until
+      // the afternoon. A poll outranks the reading in claimNext, so queueing
+      // it here is what puts checking the feeds ahead of parsing articles.
+      sweepFeeds();
       const task = claimNext();
 
       if (!task) {
@@ -339,11 +346,6 @@ export async function startWorker(override?: Record<string, Handler>): Promise<v
         // The morning routine, if the machine slept past its hour or the
         // timer never got armed. Queues work, so loop back and claim it.
         if (runMorningChores()) continue;
-
-        // The feeds, whenever one falls due — not only in the morning. This
-        // is what makes the app a reader rather than a filing cabinet: it is
-        // running, so it may as well be watching.
-        if (sweepFeeds()) continue;
 
         // And the brief, once everything the morning brought in has been read.
         // Queued from here rather than with the morning's other work because
@@ -510,16 +512,18 @@ function sweepStaleEntries(): boolean {
 /**
  * Polls any feed whose interval has elapsed.
  *
- * Guarded the same way the entry sweep is: once per quiet spell, and never
- * while a poll is already in the queue. A feed with a sixty-minute interval
- * that is checked the moment the queue empties is being checked as often as it
- * asked to be, and no more.
+ * Called on every pass of the loop, so it is cheap by construction: a look at
+ * the feeds at most once a minute, and never while a poll is already queued.
+ * Only a poll counts as "already queued" — not the article fetches the last
+ * poll left behind. Those are the chunking and parsing the feeds are meant
+ * to run ahead of, and a feed that is due is due whether or not yesterday's
+ * articles have been read yet.
  */
 function sweepFeeds(): boolean {
   const s = state();
   if (!getConfig().feedPolling) return false;
   if (s.polledAt && Date.now() - s.polledAt < 60_000) return false;
-  if (pollInFlight()) return false;
+  if (pollPending()) return false;
 
   s.polledAt = Date.now();
   const queued = queuePolls();

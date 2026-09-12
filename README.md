@@ -303,7 +303,9 @@ its archive is the failure worth guarding against and it costs tokens per item. 
 feed added today reads what comes next rather than what it already holds, unless
 you say otherwise.
 
-Polling is ordinary queue work, so a closed laptop picks up where it left off. An
+Polling is ordinary queue work, so a closed laptop picks up where it left off, and
+it comes ahead of the reading: a feed that falls due while a book is being chunked
+and read is checked on the worker's next pass, not once the book is done. An
 item already in the library — the same story from a second feed, matched on its
 address with the tracking parameters stripped — is recorded and not fetched again.
 

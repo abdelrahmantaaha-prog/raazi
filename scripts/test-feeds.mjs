@@ -356,6 +356,45 @@ section("The brief is a query, not a summary");
   check("today's key is a local calendar day", /^\d{4}-\d{2}-\d{2}$/.test(brief.todayKey()));
 }
 
+/* ------------------------------------------------------- the queue */
+
+section("Checking the feeds comes before chunking and parsing articles");
+// A poll outranks the reading in claimNext, and the guard that queues the
+// next check counts only polls — not the article fetches a poll left behind.
+// Together these are what let an hourly feed be checked hourly while a book
+// is being read, rather than once the book is done.
+{
+  const queue = await import("../lib/queue.ts");
+  const poll = await import("../lib/pipeline/poll.ts");
+  db().prepare("DELETE FROM tasks").run();
+  db().prepare("DELETE FROM runs").run();
+
+  // A long ingest, queued first: an extraction and an article fetch.
+  const ingest = queue.createRun({ kind: "ingest", label: "A book" });
+  queue.enqueue(ingest, [
+    { kind: "extract", payload: { chunkId: 1 } },
+    { kind: "fetch_item", payload: { itemId: 1 } },
+  ]);
+  check("with only fetches and extractions waiting, no poll is pending", !poll.pollPending());
+  check("though the brief still sees the articles as in flight", poll.pollInFlight());
+
+  // A poll, queued after — and claimed first.
+  const polls = queue.createRun({ kind: "poll", label: "Checking feeds" });
+  queue.enqueue(polls, [{ kind: "poll", payload: { feedId: 1 } }]);
+  check("now a poll is pending", poll.pollPending());
+
+  const first = queue.claimNext();
+  check("the poll is claimed ahead of the older ingest", first && first.kind === "poll", first && first.kind);
+  const second = queue.claimNext();
+  check("then the ingest resumes in its own order", second && second.kind === "extract", second && second.kind);
+  const third = queue.claimNext();
+  check("and the article fetch after that", third && third.kind === "fetch_item", third && third.kind);
+  check("a running poll still counts as pending", poll.pollPending());
+
+  db().prepare("DELETE FROM tasks").run();
+  db().prepare("DELETE FROM runs").run();
+}
+
 db().close();
 fs.rmSync(SANDBOX, { recursive: true, force: true });
 console.log(`\n${failed === 0 ? "All passed" : "FAILURES PRESENT"}: ${passed} passed, ${failed} failed\n`);
