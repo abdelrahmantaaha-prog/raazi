@@ -5,6 +5,7 @@ import { Button, Card, Field, inputClass } from "../components/ui";
 import { PROVIDERS, PROVIDER_IDS, STAGES, STAGE_LABEL, STAGE_NOTE, type ProviderId, type Stage } from "@/lib/providers";
 import { formatDateTime, relativeDate } from "@/lib/dates";
 import { CorrectionsCard } from "./Corrections";
+import { LanCard, SyncCard } from "./SyncCard";
 
 /** The languages entries can be written in. Quotes stay in their own. */
 const ENTRY_LANGUAGES: [string, string][] = [
@@ -513,6 +514,10 @@ export default function SettingsPage() {
           </Field>
         </div>
       </Card>
+
+      <LanCard />
+
+      <SyncCard />
 
       <CorrectionsCard />
 

@@ -1,0 +1,21 @@
+{
+  "manifest_version": 3,
+  "name": "Corpus Inbox",
+  "version": "0.1.0",
+  "description": "Send the article you are reading — as you see it, signed in — to your Corpus inbox.",
+  "permissions": ["activeTab", "scripting", "storage"],
+  "host_permissions": ["http://*/*", "https://*/*"],
+  "background": { "service_worker": "background.js" },
+  "action": {
+    "default_popup": "popup.html",
+    "default_title": "Send to Corpus inbox"
+  },
+  "options_ui": { "page": "options.html", "open_in_tab": false },
+  "commands": {
+    "clip": {
+      "suggested_key": { "default": "Alt+Shift+C" },
+      "description": "Send this page to the Corpus inbox"
+    }
+  },
+  "icons": { "16": "icon16.png", "48": "icon48.png", "128": "icon128.png" }
+}

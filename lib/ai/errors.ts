@@ -39,6 +39,53 @@ export class AllKeysExhaustedError extends Error {
   }
 }
 
+/**
+ * One MODEL is out of quota, and the call cannot be served by another.
+ *
+ * Raised only for a call with a hard pin — embeddings, where no text model is
+ * a substitute. When that model refuses there is nothing to fall back to, and
+ * nothing to gain by asking the next key either: on the free tier the
+ * allowance belongs to the model and every key draws on the same one. Asking
+ * anyway is how one refused call could set aside every key on the ring and
+ * take the reading down with it for the next hour. (Mutarjim met exactly this
+ * on its figure redraw, 9 September 2026; the fix is the same here.)
+ */
+export class ModelExhaustedError extends Error {
+  resumeAt: Date;
+  constructor(
+    public readonly model: string,
+    resumeAt: Date,
+    /** What the provider itself said, kept for the log. */
+    public readonly reason: string,
+    /** The free tier's allowance for this model is zero — not spent, absent.
+     *  Waiting will not help; only billing will. */
+    public readonly noFreeTier: boolean = false
+  ) {
+    super(
+      noFreeTier
+        ? `The free tier gives ${model} no allowance at all (limit 0), so waiting will not help; ` +
+            `it needs billing enabled on the key's account. The keys themselves are fine and every other stage carries on.`
+        : `${model} is out of quota for the day. The keys themselves are fine and every other stage carries on; ` +
+            `this one resumes after ${resumeAt.toLocaleString()}.`
+    );
+    this.resumeAt = resumeAt;
+  }
+}
+
+/**
+ * Did the provider say the free allowance for this model is ZERO, rather than
+ * spent?
+ *
+ * Gemini words both as "You exceeded your current quota", and the difference
+ * matters entirely: a spent allowance comes back tomorrow, while `limit: 0`
+ * means this model is not on the free tier at all and no amount of waiting
+ * will change it.
+ */
+export function noFreeTierQuota(err: unknown): boolean {
+  const raw = err instanceof Error ? err.message : String(err);
+  return /limit:\s*0\b/.test(raw);
+}
+
 /** Every key was rejected by Google. Only you can fix this. */
 export class NoUsableKeysError extends Error {
   constructor(message: string) {
@@ -276,6 +323,16 @@ export function classify(err: unknown, attempts: number): Disposition {
   // to gain by retrying sooner than the first one coming back.
   if (err instanceof AllKeysExhaustedError) {
     return { kind: "pause_quota", resumeAt: err.resumeAt, reason: err.message };
+  }
+  // The model is spent, not the ring. Every key stays available for the rest
+  // of the pipeline meanwhile — which is the whole point of this error.
+  if (err instanceof ModelExhaustedError) {
+    console.log(`[corpus] ${err.model} refused: ${err.reason}`);
+    // A model the free tier gives nothing at all will not come back by
+    // waiting, so the task is settled rather than parked to retry forever.
+    return err.noFreeTier
+      ? { kind: "skip", reason: err.message }
+      : { kind: "pause_quota", resumeAt: err.resumeAt, reason: err.message };
   }
   if (err instanceof TruncatedOutputError) {
     return { kind: "split", reason: "Output hit the token limit; splitting input." };

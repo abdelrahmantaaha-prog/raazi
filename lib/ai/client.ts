@@ -3,7 +3,6 @@ import type { Schema } from "@google/genai";
 import { getConfig } from "../config";
 import {
   earliestReset,
-  hasLiveModel,
   hasUsableKey,
   listKeys,
   liveKeys,
@@ -13,12 +12,13 @@ import {
   markModelSpent,
   markUsed,
   modelFor,
+  modelSpent,
   nextKey,
   noteCall,
   usableKeys,
   type ApiKey,
 } from "../keys";
-import { modelsFor, spec, type ProviderId, type Stage } from "../providers";
+import { spec, type ProviderId, type Stage } from "../providers";
 import { chatJson, chatText, validateOpenAiKey } from "./openai";
 import { anthropicJson, anthropicText, validateAnthropicKey, EFFORT } from "./anthropic";
 import {
@@ -26,10 +26,12 @@ import {
   SchemaUnsupportedError,
   isProviderUnavailable,
   MissingKeyError,
+  ModelExhaustedError,
   NoUsableKeysError,
   SafetyBlockError,
   TruncatedOutputError,
   keyFailure,
+  noFreeTierQuota,
 } from "./errors";
 
 export interface Usage {
@@ -230,6 +232,29 @@ const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
 const MAX_INVALID_PER_CALL = 2;
 
 /**
+ * Which model this call asks THIS key for.
+ *
+ * One place, decided before the call and handed to it, because the rotation
+ * has to know what it is about to spend: when the answer comes back "out of
+ * quota for the day", the model that was actually asked is the one to set
+ * aside. Working it out inside each provider branch, as the call used to,
+ * left the rotation retiring modelFor(key) — whatever the ring would have
+ * chosen — which for a call that asked for something else by name retired
+ * every model in the ring without one of them being called.
+ *
+ * A key that names its own model is an outright pin. Otherwise, on Gemini, a
+ * caller's model is a PREFERENCE rather than a pin: when its own allowance
+ * is gone the ring answers instead, which beats reporting everything spent.
+ * The other providers do not meter per model, so there the caller's model
+ * simply stands.
+ */
+export function modelOfCall(k: ApiKey, opts: { model?: string }): string {
+  const provider = k.provider ?? "gemini";
+  if (spec(provider).kind !== "gemini") return k.model?.trim() || opts.model || modelFor(k);
+  return opts.model && !modelSpent(provider, opts.model) ? opts.model : modelFor(k);
+}
+
+/**
  * Runs a call against the candidate providers, rotating keys within each.
  *
  * A key that hits its daily quota is set aside until it resets and the work
@@ -249,8 +274,24 @@ const MAX_INVALID_PER_CALL = 2;
  */
 async function withRotation<T>(
   candidates: ProviderId[],
-  fn: (key: ApiKey) => Promise<T>
+  fn: (key: ApiKey, model: string) => Promise<T>,
+  opts: {
+    /** Which model to ask a given key for. Defaults to the ring's choice. */
+    modelOf?: (key: ApiKey) => string;
+    /**
+     * This call can only be served by the one model `modelOf` names —
+     * embeddings, where no text model is a substitute.
+     *
+     * It changes what a quota refusal means. On the free tier the allowance
+     * belongs to the MODEL and every key draws on the same one, so the next
+     * key meets the same wall: rotating through the ring achieves nothing and
+     * sets aside every key on it for an hour on the way. So a pinned model
+     * that refuses stops there, with the ring untouched.
+     */
+    hardPin?: boolean;
+  } = {}
 ): Promise<{ value: T; key: ApiKey }> {
+  const pick = opts.modelOf ?? modelFor;
   const tried = new Set<string>();
   let lastError: unknown;
   let invalidInARow = 0;
@@ -262,9 +303,10 @@ async function withRotation<T>(
 
       tried.add(key.id);
       await pace(key.id);
+      const model = pick(key);
 
       try {
-        const value = await fn(key);
+        const value = await fn(key, model);
         return { value, key };
       } catch (err) {
         lastError = err;
@@ -300,16 +342,40 @@ async function withRotation<T>(
           // per model, and every key you own draws on the same one — so a
           // refusal here says the MODEL is spent, not the key, and setting the
           // key aside would burn thirty-five of them against the same wall.
-          // Retire the model, keep the key, and let modelFor() pick the next
-          // one down the ring on the very next attempt.
-          const spent = modelFor(key);
-          if (modelsFor(provider).includes(spent) && hasLiveModel(provider)) {
-            markModelSpent(provider, spent, getConfig().keyRetryMinutes);
+          // Retire the model that ANSWERED, keep the key, and let it ask for
+          // the next one down.
+          //
+          // It used to retire modelFor(key) — whatever the ring would have
+          // chosen — no matter what this call had actually asked for, and
+          // only when that model was in the ring. A refusal on a model the
+          // ring did not list (the embedding model, say) was charged to the
+          // key instead, and the next key met the same wall.
+          const minutes = getConfig().keyRetryMinutes;
+          markModelSpent(provider, model, minutes);
+
+          // A model nothing can stand in for: the ring has no answer, and
+          // asking the rest of the keys would only set them aside for a wall
+          // they all share. Say which model it was and leave the ring alone.
+          if (opts.hardPin) {
+            throw new ModelExhaustedError(
+              model,
+              new Date(Date.now() + minutes * 60_000),
+              failure.reason,
+              noFreeTierQuota(err)
+            );
+          }
+
+          // Anything left for this key to be asked? `pick` is asked again
+          // rather than reasoned about, because it owns the fallback order —
+          // and its answer is only useful if it is not itself spent, which is
+          // also what stops this looping once everything is.
+          const next = pick(key);
+          if (next !== model && !modelSpent(provider, next)) {
             tried.delete(key.id);
             continue;
           }
-          markExhausted(key.id, failure.reason, getConfig().keyRetryMinutes);
-          console.log(`[corpus] key "${key.label}" is out of quota for the day; trying the next one`);
+          markExhausted(key.id, failure.reason, minutes);
+          console.log(`[corpus] key "${key.label}" has nothing left to ask; trying the next one`);
           continue;
         }
         if (failure.kind === "invalid") {
@@ -373,7 +439,8 @@ const PIN_MAX_WAIT_MS = 90_000;
  */
 async function withPinnedKey<T>(
   pin: string,
-  fn: (key: ApiKey) => Promise<T>
+  fn: (key: ApiKey, model: string) => Promise<T>,
+  modelOf: (key: ApiKey) => string = modelFor
 ): Promise<{ value: T; key: ApiKey }> {
   const usableNow = (k: ApiKey) => !k.disabled && !k.invalid && past(k.exhaustedUntil) && past(k.cooldownUntil);
   const waitingOn = (k: ApiKey) =>
@@ -407,8 +474,9 @@ async function withPinnedKey<T>(
     }
 
     await pace(key.id);
+    const model = modelOf(key);
     try {
-      const value = await fn(key);
+      const value = await fn(key, model);
       return { value, key };
     } catch (err) {
       const failure = keyFailure(err);
@@ -419,7 +487,15 @@ async function withPinnedKey<T>(
         markCooldown(key.id, Math.min(failure.delayMs, PIN_MAX_WAIT_MS), failure.reason);
         continue;
       }
-      if (failure.kind === "daily") markExhausted(key.id, failure.reason, getConfig().keyRetryMinutes);
+      if (failure.kind === "daily") {
+        // The same attribution as the rotation: the model that answered is
+        // spent, and the pinned key may still have a next one to ask.
+        const minutes = getConfig().keyRetryMinutes;
+        markModelSpent(key.provider ?? "gemini", model, minutes);
+        const next = modelOf(key);
+        if (next !== model && !modelSpent(key.provider ?? "gemini", next)) continue;
+        markExhausted(key.id, failure.reason, minutes);
+      }
       if (failure.kind === "invalid") markInvalid(key.id, failure.reason);
       throw err;
     }
@@ -515,14 +591,14 @@ export async function generateJson<T>(opts: {
   const candidates = opts.provider ? [opts.provider] : providersFor(opts.stage);
   const timeoutMs = timeoutFor(undefined, opts.timeoutMs, opts.stage);
 
-  const { value, key } = await withRotation(candidates, async (k): Promise<CallResult<T>> => {
+  const { value, key } = await withRotation(candidates, async (k, model): Promise<CallResult<T>> => {
     const provider = k.provider ?? "gemini";
 
     if (spec(provider).kind === "openai") {
       return chatJson<T>({
         provider,
         apiKey: k.key,
-        model: opts.model ?? modelFor(k),
+        model,
         baseUrl: k.baseUrl,
         system: opts.system,
         prompt: partsToPrompt(opts.parts),
@@ -538,7 +614,7 @@ export async function generateJson<T>(opts: {
       // per stage rather than per call — see EFFORT.
       return anthropicJson<T>({
         apiKey: k.key,
-        model: opts.model ?? modelFor(k),
+        model,
         baseUrl: k.baseUrl,
         system: opts.system,
         prompt: partsToPrompt(opts.parts),
@@ -550,7 +626,7 @@ export async function generateJson<T>(opts: {
 
     const ai = gemini(k, timeoutMs);
     const res = await ai.models.generateContent({
-      model: opts.model ?? modelFor(k),
+      model,
       contents: [{ role: "user", parts: geminiParts(opts.parts) }],
       config: {
         responseMimeType: "application/json",
@@ -561,16 +637,16 @@ export async function generateJson<T>(opts: {
     });
 
     const usage = usageOfGemini(res);
-    const model = modelOfGemini(res);
+    const answered = modelOfGemini(res) ?? model;
     checkGeminiFinish(res.candidates?.[0]?.finishReason, res.promptFeedback?.blockReason);
     if (!res.text) throw new Error("Empty response.");
 
     try {
-      return { data: JSON.parse(res.text) as T, usage, model };
+      return { data: JSON.parse(res.text) as T, usage, model: answered };
     } catch {
       throw new TruncatedOutputError();
     }
-  });
+  }, { modelOf: (k) => modelOfCall(k, opts) });
 
   bill(key.id, value.usage);
   noteModel(value.model);
@@ -594,14 +670,14 @@ export async function generateText(opts: {
   const candidates = providersFor(opts.stage, { need: opts.need });
   const timeoutMs = timeoutFor(opts.need, opts.timeoutMs, opts.stage);
 
-  const call = async (k: ApiKey): Promise<CallResult<string>> => {
+  const call = async (k: ApiKey, model: string): Promise<CallResult<string>> => {
     const provider = k.provider ?? "gemini";
 
     if (spec(provider).kind === "openai") {
       return chatText({
         provider,
         apiKey: k.key,
-        model: opts.model ?? modelFor(k),
+        model,
         baseUrl: k.baseUrl,
         system: opts.system,
         prompt: partsToPrompt(opts.parts),
@@ -622,7 +698,7 @@ export async function generateText(opts: {
       // Again no `temperature` — see generateJson.
       return anthropicText({
         apiKey: k.key,
-        model: opts.model ?? modelFor(k),
+        model,
         baseUrl: k.baseUrl,
         system: opts.system,
         prompt: partsToPrompt(opts.parts),
@@ -633,7 +709,7 @@ export async function generateText(opts: {
 
     const ai = gemini(k, timeoutMs);
     const res = await ai.models.generateContent({
-      model: opts.model ?? modelFor(k),
+      model,
       contents: [{ role: "user", parts: geminiParts(opts.parts) }],
       config: {
         temperature: opts.temperature ?? 0.2,
@@ -642,15 +718,16 @@ export async function generateText(opts: {
     });
 
     const usage = usageOfGemini(res);
-    const model = modelOfGemini(res);
+    const answered = modelOfGemini(res) ?? model;
     checkGeminiFinish(res.candidates?.[0]?.finishReason, res.promptFeedback?.blockReason);
     if (!res.text) throw new Error("Empty response.");
-    return { data: res.text, usage, model };
+    return { data: res.text, usage, model: answered };
   };
 
+  const modelOf = (k: ApiKey) => modelOfCall(k, opts);
   const { value, key } = opts.pin
-    ? await withPinnedKey(opts.pin, call)
-    : await withRotation(candidates, call);
+    ? await withPinnedKey(opts.pin, call, modelOf)
+    : await withRotation(candidates, call, { modelOf });
 
   bill(key.id, value.usage);
   noteModel(value.model);
@@ -662,10 +739,14 @@ export async function embed(texts: string[]): Promise<{ vectors: Float32Array[];
   const cfg = getConfig();
   const candidates = providersFor(undefined, { need: "embed" });
 
-  const { value, key } = await withRotation(candidates, async (k) => {
+  // A hard pin, unlike every other call here: no text model can embed, so
+  // there is nothing to fall back to when this one is out of quota. The ring
+  // still rotates KEYS for a rate limit or a rejection — but a quota refusal
+  // stops at the model, with every key left as it was.
+  const { value, key } = await withRotation(candidates, async (k, model) => {
     const ai = gemini(k);
     const res = await ai.models.embedContent({
-      model: cfg.embedModel,
+      model,
       contents: texts,
       config: { taskType: "SEMANTIC_SIMILARITY", outputDimensionality: 768 },
     });
@@ -677,7 +758,7 @@ export async function embed(texts: string[]): Promise<{ vectors: Float32Array[];
       // figures in Settings knew nothing about.
       usage: { tokensIn: Math.ceil(texts.join("").length / 4), tokensOut: 0 },
     };
-  });
+  }, { modelOf: () => cfg.embedModel, hardPin: true });
 
   bill(key.id, value.usage);
   return value;

@@ -6,6 +6,7 @@ import { createRun, enqueue, finishTask } from "../queue";
 import { gather, getBrief, hasMaterial, todayKey, type BriefMaterial, type BriefPassage } from "../brief";
 import { describeWeek, isWeekKey, weekKey, weekRange } from "../week";
 import { normaliseMarkers } from "../markers";
+import { logCalendar } from "../calendar";
 import type { Task } from "../types";
 
 /**
@@ -252,6 +253,14 @@ export async function handleBrief(task: Task): Promise<void> {
   const to = range ? new Date(Math.min(Date.now(), range.to.getTime())) : new Date();
   const from = range ? range.from : new Date(to.getTime() - (hours ?? 24) * 3600_000);
   const m = gather(from, to, week ? { perWatch: 30, maxOther: 150 } : {});
+
+  // Every date these sources mention goes on the watching calendar before a
+  // word of prose is written — an election three weeks out, a ruling due
+  // "next month", the anniversary of an attack. The calendar is built from the
+  // events extraction already recorded, so it costs nothing, and it is filed
+  // whether or not there turns out to be enough material for a brief.
+  const dated = logCalendar(from, to, key);
+  if (dated > 0) console.log(`[corpus] calendar: ${dated} date(s) noticed for ${key}`);
 
   const row = getBrief(key);
   if (!row) {

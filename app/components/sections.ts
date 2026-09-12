@@ -24,7 +24,8 @@
  * - **Search** is three searches that were three rail entries: your own text,
  *   the news, and the catalogues. They differ in what they look in, which is
  *   exactly what a tab strip is for.
- * - **Brief** is the day and the week — the same document over two windows.
+ * - **Brief** is the day and the week — the same document over two windows —
+ *   and the calendar of every date those documents have mentioned.
  *
  * A section's `href` is its first tab, so the rail still goes straight where it
  * always went: News opens the Inbox, Library opens the shelves.
@@ -60,6 +61,7 @@ export const SECTIONS: Section[] = [
     tabs: [
       { href: "/brief", label: "Today" },
       { href: "/week", label: "This week" },
+      { href: "/calendar", label: "Calendar" },
     ],
   },
   {

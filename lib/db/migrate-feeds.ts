@@ -186,4 +186,11 @@ export function migrateFeeds(db: Database.Database) {
   // flaggedForRewrite(): the rewrite counter beside it resets whenever the
   // evidence changes, so on a daily beat it never reached its cap.
   addColumn(db, "entries", "flag_rewritten_at", "TEXT");
+
+  // A picture for the inbox (2026-09-11). Feeds carry one as media:content,
+  // media:thumbnail or an enclosure; a fetched page declares one as og:image.
+  // The feed's is kept here, the page's in the source's meta_json, and the
+  // inbox takes whichever exists. Nothing is downloaded: the address is enough
+  // for a browser to show it, and an inbox is looked at once.
+  addColumn(db, "feed_items", "image_url", "TEXT");
 }

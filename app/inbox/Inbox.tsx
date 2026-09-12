@@ -1,10 +1,25 @@
 "use client";
 
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { RunChip } from "../components/RunChip";
+import { Modal } from "../components/Modal";
+import {
+  IconCheck,
+  IconClipboard,
+  IconExternal,
+  IconEye,
+  IconFeed,
+  IconSelectAll,
+  IconText,
+  IconUndo,
+  IconWeek,
+  IconX,
+} from "../components/Icons";
 import { formatDateTime, relativeDate } from "@/lib/dates";
+import { dirOf } from "@/lib/dir";
+import type { HeldText } from "@/lib/triage";
 
 interface Item {
   id: number;
@@ -25,6 +40,8 @@ interface Item {
   story_id: number | null;
   story_title: string | null;
   story_accounts: number;
+  image: string | null;
+  source_note: string | null;
 }
 
 /**
@@ -35,8 +52,14 @@ interface Item {
  *
  * Grouping by story, so five accounts of one thing are one decision. Filtering
  * by outlet, because "clear the wires first" is how you actually triage.
- * And a keyboard: J and K move, K keeps, D discards, P opens the paste box, so
- * a hundred items is a rhythm rather than a hundred trips to the mouse.
+ * And a keyboard: J and K move, Enter keeps, D discards, P opens the paste box,
+ * so a hundred items is a rhythm rather than a hundred trips to the mouse.
+ *
+ * On a wide screen the item under the cursor opens in a pane on the right:
+ * the text the fetch actually got, with a verdict on whether it is the
+ * article or a paywall's stub. That is the question the paste box exists to
+ * answer, and it used to be answerable only by keeping the item and finding
+ * out. On a phone the same pane opens as a sheet from the eye button.
  *
  * What it deliberately does not do is summarise anything with a model. Judging
  * an article by a machine summary of it is the failure this whole application
@@ -66,6 +89,12 @@ export default function Inbox({
   const [pasting, setPasting] = useState<number | null>(null);
   const [pasted, setPasted] = useState("");
   const [cursor, setCursor] = useState(0);
+  /** The text behind the item under the cursor, fetched once per item. */
+  const [preview, setPreview] = useState<HeldText | null>(null);
+  const [previewLoading, setPreviewLoading] = useState(false);
+  const previews = useRef(new Map<number, HeldText>());
+  /** On a phone the pane is a sheet, opened on purpose. */
+  const [sheet, setSheet] = useState(false);
 
   /** Outlets, biggest first — the filter bar doubles as a picture of the day. */
   const outlets = useMemo(() => {
@@ -101,6 +130,36 @@ export default function Inbox({
   }, [visible]);
 
   const flat = useMemo(() => groups.flatMap((g) => g.items), [groups]);
+  const current = flat[cursor] ?? null;
+
+  // The pane follows the cursor. Cached per item, so moving back up the list
+  // costs nothing, and abandoned on the next move so a slow answer for the
+  // item you left cannot land on the one you are looking at.
+  useEffect(() => {
+    if (!current) {
+      setPreview(null);
+      return;
+    }
+    const hit = previews.current.get(current.id);
+    if (hit) {
+      setPreview(hit);
+      return;
+    }
+    const ctrl = new AbortController();
+    setPreviewLoading(true);
+    fetch(`/api/inbox/${current.id}`, { signal: ctrl.signal })
+      .then((r) => (r.ok ? (r.json() as Promise<HeldText>) : null))
+      .then((data) => {
+        if (!data || ctrl.signal.aborted) return;
+        previews.current.set(data.id, data);
+        setPreview(data);
+      })
+      .catch(() => undefined)
+      .finally(() => {
+        if (!ctrl.signal.aborted) setPreviewLoading(false);
+      });
+    return () => ctrl.abort();
+  }, [current]);
 
   const toggle = (id: number) =>
     setSelected((prev) => {
@@ -146,6 +205,8 @@ export default function Inbox({
       setSelected(new Set());
       setLastDiscarded(action === "discard" ? itemIds : []);
       setCursor((c) => Math.max(0, Math.min(c, (data.items?.length ?? 1) - 1)));
+      for (const id of itemIds) previews.current.delete(id);
+      setSheet(false);
       router.refresh();
     } catch (err) {
       setError((err as Error).message);
@@ -172,6 +233,9 @@ export default function Inbox({
       if (data.items) setItems(data.items);
       setPasting(null);
       setPasted("");
+      // The pane must show the new text, not the stub it cached.
+      previews.current.delete(itemId);
+      setPreview(null);
     } catch (err) {
       setError((err as Error).message);
     } finally {
@@ -179,7 +243,7 @@ export default function Inbox({
     }
   }
 
-  /** J/K to move, K to keep, D to discard, P to paste. Not while typing. */
+  /** J/K to move, Enter to keep, D to discard, P to paste, X to select, O to open. Not while typing. */
   function onKey(e: React.KeyboardEvent) {
     const tag = (e.target as HTMLElement).tagName;
     if (tag === "TEXTAREA" || tag === "INPUT" || pasting !== null) return;
@@ -192,12 +256,75 @@ export default function Inbox({
       setPasting(here.id);
       setPasted("");
     } else if (e.key === "x" && here) toggle(here.id);
+    else if (e.key === "o" && here?.url) window.open(here.url, "_blank", "noopener");
     else return;
     e.preventDefault();
   }
 
   const selectedIds = [...selected];
   const visibleIds = visible.map((i) => i.id);
+
+  const pasteBox = (item: Item) => (
+    <div className="rounded-lg border border-[var(--color-accent)]/50 bg-white p-3">
+      <p className="text-xs text-[var(--color-muted)]">
+        Open it where you are signed in, select the article, and paste it here. The address, outlet
+        and date stay as they are — this only replaces the text.
+      </p>
+      <textarea
+        autoFocus
+        value={pasted}
+        onChange={(e) => setPasted(e.target.value)}
+        rows={10}
+        placeholder="Paste the full article…"
+        className="mt-2 w-full rounded border border-[var(--color-rule)] p-2 text-sm outline-none focus:border-[var(--color-accent)]"
+      />
+      <div className="mt-2 flex items-center gap-2">
+        <button
+          type="button"
+          disabled={busy || pasted.trim().length < 200}
+          onClick={() => void savePaste(item.id)}
+          className="inline-flex items-center gap-1.5 rounded-full bg-[var(--color-accent)] px-3 py-1.5 text-sm text-white disabled:opacity-30"
+        >
+          <IconClipboard /> Save the text
+        </button>
+        <button
+          type="button"
+          onClick={() => {
+            setPasting(null);
+            setPasted("");
+          }}
+          className="text-sm text-[var(--color-muted)] hover:text-[var(--color-accent)]"
+        >
+          Cancel
+        </button>
+        <span className="ml-auto text-xs text-[var(--color-muted)]">
+          {pasted.trim() ? `${pasted.trim().split(/\s+/).length} words` : "nothing yet"}
+        </span>
+      </div>
+    </div>
+  );
+
+  const pane = current ? (
+    <Preview
+      item={current}
+      text={preview?.id === current.id ? preview : null}
+      loading={previewLoading}
+      busy={busy}
+      pasting={pasting === current.id}
+      pasteBox={pasting === current.id ? pasteBox(current) : null}
+      onKeep={() => act("keep", [current.id])}
+      onDiscard={() => act("discard", [current.id])}
+      onPaste={() => {
+        setPasting(pasting === current.id ? null : current.id);
+        setPasted("");
+      }}
+    />
+  ) : (
+    <div className="p-6 text-sm text-[var(--color-muted)]">
+      Move along the list, or hover an item, and what was fetched for it shows here — so you can
+      tell an article from a paywall&apos;s stub before you keep it.
+    </div>
+  );
 
   return (
     <div className="space-y-5" onKeyDown={onKey} tabIndex={-1}>
@@ -229,15 +356,15 @@ export default function Inbox({
           ) : null}
           <Link
             href="/week"
-            className="rounded-full border border-[var(--color-rule)] px-3 py-1.5 text-sm transition hover:border-[var(--color-accent)]"
+            className="inline-flex items-center gap-1.5 rounded-full border border-[var(--color-rule)] px-3 py-1.5 text-sm transition hover:border-[var(--color-accent)]"
           >
-            This week
+            <IconWeek /> This week
           </Link>
           <Link
             href="/feeds"
-            className="rounded-full border border-[var(--color-rule)] px-3 py-1.5 text-sm transition hover:border-[var(--color-accent)]"
+            className="inline-flex items-center gap-1.5 rounded-full border border-[var(--color-rule)] px-3 py-1.5 text-sm transition hover:border-[var(--color-accent)]"
           >
-            Feeds
+            <IconFeed /> Feeds
           </Link>
         </div>
       </header>
@@ -290,25 +417,25 @@ export default function Inbox({
               type="button"
               disabled={busy || !selectedIds.length}
               onClick={() => act("keep", selectedIds)}
-              className="rounded-full bg-[var(--color-accent)] px-4 py-1.5 text-sm font-medium text-white transition disabled:opacity-30"
+              className="inline-flex items-center gap-1.5 rounded-full bg-[var(--color-accent)] px-4 py-1.5 text-sm font-medium text-white transition disabled:opacity-30"
             >
-              Keep{selectedIds.length ? ` ${selectedIds.length}` : ""}
+              <IconCheck /> Keep{selectedIds.length ? ` ${selectedIds.length}` : ""}
             </button>
             <button
               type="button"
               disabled={busy || !selectedIds.length}
               onClick={() => act("discard", selectedIds)}
-              className="rounded-full border border-[var(--color-rule)] px-4 py-1.5 text-sm transition hover:border-red-400 hover:text-red-700 disabled:opacity-30"
+              className="inline-flex items-center gap-1.5 rounded-full border border-[var(--color-rule)] px-4 py-1.5 text-sm transition hover:border-red-400 hover:text-red-700 disabled:opacity-30"
             >
-              Discard{selectedIds.length ? ` ${selectedIds.length}` : ""}
+              <IconX /> Discard{selectedIds.length ? ` ${selectedIds.length}` : ""}
             </button>
             <span className="mx-1 h-4 w-px bg-[var(--color-rule)]" />
             <button
               type="button"
               onClick={() => setSelected(new Set(visibleIds))}
-              className="text-xs text-[var(--color-muted)] transition hover:text-[var(--color-accent)]"
+              className="inline-flex items-center gap-1 text-xs text-[var(--color-muted)] transition hover:text-[var(--color-accent)]"
             >
-              Select all {outlet ? `from ${outlet}` : ""}
+              <IconSelectAll size={14} /> Select all {outlet ? `from ${outlet}` : ""}
             </button>
             {selectedIds.length ? (
               <button
@@ -324,9 +451,9 @@ export default function Inbox({
                 type="button"
                 disabled={busy}
                 onClick={() => act("undo", lastDiscarded)}
-                className="text-xs text-[var(--color-accent)] hover:underline"
+                className="inline-flex items-center gap-1 text-xs text-[var(--color-accent)] hover:underline"
               >
-                Undo {lastDiscarded.length}
+                <IconUndo size={14} /> Undo {lastDiscarded.length}
               </button>
             ) : null}
             <span className="ml-auto hidden text-xs text-[var(--color-muted)] sm:inline">
@@ -334,7 +461,8 @@ export default function Inbox({
               <kbd className="rounded border border-[var(--color-rule)] px-1">k</kbd> move ·{" "}
               <kbd className="rounded border border-[var(--color-rule)] px-1">↵</kbd> keep ·{" "}
               <kbd className="rounded border border-[var(--color-rule)] px-1">d</kbd> discard ·{" "}
-              <kbd className="rounded border border-[var(--color-rule)] px-1">p</kbd> paste
+              <kbd className="rounded border border-[var(--color-rule)] px-1">p</kbd> paste ·{" "}
+              <kbd className="rounded border border-[var(--color-rule)] px-1">o</kbd> open
             </span>
           </div>
         </>
@@ -349,207 +477,362 @@ export default function Inbox({
           </p>
         </div>
       ) : (
-        <div className="space-y-3">
-          {groups.map((group) => {
-            const many = group.items.length > 1;
-            return (
-              <section
-                key={group.key}
-                className={`overflow-hidden rounded-xl border transition ${
-                  many ? "border-[var(--color-accent)]/40 bg-[var(--color-accent-soft)]/20" : "border-[var(--color-rule)]"
-                }`}
-              >
-                {many ? (
-                  <div className="flex flex-wrap items-center gap-2 border-b border-[var(--color-rule)] bg-[var(--color-accent-soft)]/40 px-4 py-2">
-                    <span className="text-sm font-medium">
-                      {group.storyId ? (
-                        <Link href={`/stories/${group.storyId}`} className="hover:text-[var(--color-accent)]">
-                          {group.title}
-                        </Link>
-                      ) : (
-                        group.title
-                      )}
-                    </span>
-                    <span className="text-xs text-[var(--color-muted)]">
-                      {group.items.length} accounts of one story
-                      {group.items[0].story_accounts > group.items.length
-                        ? `, ${group.items[0].story_accounts - group.items.length} already kept`
-                        : ""}
-                    </span>
-                    <button
-                      type="button"
-                      onClick={() => selectGroup(group)}
-                      className="ml-auto text-xs text-[var(--color-muted)] transition hover:text-[var(--color-accent)]"
-                    >
-                      Select all
-                    </button>
-                  </div>
-                ) : null}
-
-                <ul className="divide-y divide-[var(--color-rule)]">
-                  {group.items.map((item) => {
-                    const isCursor = flat[cursor]?.id === item.id;
-                    const chosen = selected.has(item.id);
-                    // Not "did the fetch return something" but "is there an
-                    // article here": a paywalled piece arrives as its headline
-                    // and a sentence, which is a citation that opens on nothing.
-                    const thin = item.chars < ENOUGH_TO_READ;
-                    return (
-                      <li
-                        key={item.id}
-                        onMouseEnter={() => setCursor(flat.findIndex((f) => f.id === item.id))}
-                        className={`group relative px-4 py-3 transition ${
-                          chosen ? "bg-[var(--color-accent-soft)]/60" : "hover:bg-[var(--color-accent-soft)]/25"
-                        }`}
+        <div className="lg:grid lg:grid-cols-[minmax(0,1fr)_minmax(19rem,24rem)] lg:items-start lg:gap-5">
+          <div className="space-y-3">
+            {groups.map((group) => {
+              const many = group.items.length > 1;
+              return (
+                <section
+                  key={group.key}
+                  className={`overflow-hidden rounded-xl border transition ${
+                    many ? "border-[var(--color-accent)]/40 bg-[var(--color-accent-soft)]/20" : "border-[var(--color-rule)]"
+                  }`}
+                >
+                  {many ? (
+                    <div className="flex flex-wrap items-center gap-2 border-b border-[var(--color-rule)] bg-[var(--color-accent-soft)]/40 px-4 py-2">
+                      <span className="text-sm font-medium">
+                        {group.storyId ? (
+                          <Link href={`/stories/${group.storyId}`} className="hover:text-[var(--color-accent)]">
+                            {group.title}
+                          </Link>
+                        ) : (
+                          group.title
+                        )}
+                      </span>
+                      <span className="text-xs text-[var(--color-muted)]">
+                        {group.items.length} accounts of one story
+                        {group.items[0].story_accounts > group.items.length
+                          ? `, ${group.items[0].story_accounts - group.items.length} already kept`
+                          : ""}
+                      </span>
+                      <button
+                        type="button"
+                        onClick={() => selectGroup(group)}
+                        className="ml-auto inline-flex items-center gap-1 text-xs text-[var(--color-muted)] transition hover:text-[var(--color-accent)]"
                       >
-                        {isCursor ? (
-                          <span className="absolute inset-y-0 left-0 w-[3px] bg-[var(--color-accent)]" />
-                        ) : null}
+                        <IconSelectAll size={14} /> Select all
+                      </button>
+                    </div>
+                  ) : null}
 
-                        <div className="flex gap-3">
-                          <input
-                            type="checkbox"
-                            checked={chosen}
-                            onChange={() => toggle(item.id)}
-                            className="mt-1.5 h-4 w-4 shrink-0 accent-[var(--color-accent)]"
-                            aria-label={`Select ${item.title}`}
-                          />
+                  <ul className="divide-y divide-[var(--color-rule)]">
+                    {group.items.map((item) => {
+                      const isCursor = current?.id === item.id;
+                      const chosen = selected.has(item.id);
+                      // Not "did the fetch return something" but "is there an
+                      // article here": a paywalled piece arrives as its headline
+                      // and a sentence, which is a citation that opens on nothing.
+                      const thin = item.chars < ENOUGH_TO_READ;
+                      return (
+                        <li
+                          key={item.id}
+                          onMouseEnter={() => setCursor(flat.findIndex((f) => f.id === item.id))}
+                          className={`group relative px-4 py-3 transition ${
+                            chosen ? "bg-[var(--color-accent-soft)]/60" : "hover:bg-[var(--color-accent-soft)]/25"
+                          }`}
+                        >
+                          {isCursor ? (
+                            <span className="absolute inset-y-0 left-0 w-[3px] bg-[var(--color-accent)]" />
+                          ) : null}
 
-                          <div className="min-w-0 flex-1">
-                            <div className="flex flex-wrap items-baseline gap-x-2">
-                              <h2 className="font-medium leading-snug">
-                                {item.url ? (
-                                  <a
-                                    href={item.url}
-                                    target="_blank"
-                                    rel="noreferrer"
-                                    className="transition hover:text-[var(--color-accent)]"
-                                    title="Open it on the outlet's own site"
-                                  >
-                                    {item.title}
-                                  </a>
-                                ) : (
-                                  item.title
-                                )}
-                              </h2>
-                              <span className="text-xs text-[var(--color-muted)]">
-                                {item.outlet ?? item.feed_title}
-                                {item.published_at ? ` · ${relativeDate(item.published_at)}` : ""}
-                              </span>
-                              {thin ? (
-                                <span className="rounded-full bg-amber-100 px-2 py-0.5 text-[11px] text-amber-800">
-                                  paste the article to keep it
+                          <div className="flex gap-3">
+                            <input
+                              type="checkbox"
+                              checked={chosen}
+                              onChange={() => toggle(item.id)}
+                              className="mt-1.5 h-4 w-4 shrink-0 accent-[var(--color-accent)]"
+                              aria-label={`Select ${item.title}`}
+                            />
+
+                            <div className="min-w-0 flex-1">
+                              <div className="flex flex-wrap items-baseline gap-x-2">
+                                <h2 className="font-medium leading-snug">
+                                  {item.url ? (
+                                    <a
+                                      href={item.url}
+                                      target="_blank"
+                                      rel="noreferrer"
+                                      className="transition hover:text-[var(--color-accent)]"
+                                      title="Open it on the outlet's own site"
+                                    >
+                                      {item.title}
+                                    </a>
+                                  ) : (
+                                    item.title
+                                  )}
+                                </h2>
+                                <span className="text-xs text-[var(--color-muted)]">
+                                  {item.outlet ?? item.feed_title}
+                                  {item.published_at ? ` · ${relativeDate(item.published_at)}` : ""}
                                 </span>
-                              ) : null}
-                              {item.note === "Full text pasted in." ? (
-                                <span className="rounded-full bg-emerald-100 px-2 py-0.5 text-[11px] text-emerald-800">
-                                  full text
-                                </span>
-                              ) : null}
-                            </div>
+                                {thin ? (
+                                  <span className="rounded-full bg-amber-100 px-2 py-0.5 text-[11px] text-amber-800">
+                                    paste the article to keep it
+                                  </span>
+                                ) : null}
+                                {item.note === "Full text pasted in." || item.note === "Full text clipped from the browser." ? (
+                                  <span className="rounded-full bg-emerald-100 px-2 py-0.5 text-[11px] text-emerald-800">
+                                    full text
+                                  </span>
+                                ) : null}
+                              </div>
 
-                            <p className="mt-1 text-sm leading-relaxed text-[var(--color-muted)]">
-                              {item.lede ??
-                                (item.summary
-                                  ? item.summary.replace(/<[^>]+>/g, " ").replace(/\s+/g, " ").trim().slice(0, 400)
-                                  : "The page would not open — paste the article in and it becomes a real source.")}
-                            </p>
+                              <p className="mt-1 text-sm leading-relaxed text-[var(--color-muted)]">
+                                {item.lede ??
+                                  (item.summary
+                                    ? item.summary.replace(/<[^>]+>/g, " ").replace(/\s+/g, " ").trim().slice(0, 400)
+                                    : "The page would not open — paste the article in and it becomes a real source.")}
+                              </p>
 
-                            {pasting === item.id ? (
-                              <div className="mt-3 rounded-lg border border-[var(--color-accent)]/50 bg-white p-3">
-                                <p className="text-xs text-[var(--color-muted)]">
-                                  Open it where you are signed in, select the article, and paste it here. The
-                                  address, outlet and date stay as they are — this only replaces the text.
-                                </p>
-                                <textarea
-                                  autoFocus
-                                  value={pasted}
-                                  onChange={(e) => setPasted(e.target.value)}
-                                  rows={10}
-                                  placeholder="Paste the full article…"
-                                  className="mt-2 w-full rounded border border-[var(--color-rule)] p-2 text-sm outline-none focus:border-[var(--color-accent)]"
-                                />
-                                <div className="mt-2 flex items-center gap-2">
-                                  <button
-                                    type="button"
-                                    disabled={busy || pasted.trim().length < 200}
-                                    onClick={() => void savePaste(item.id)}
-                                    className="rounded-full bg-[var(--color-accent)] px-3 py-1.5 text-sm text-white disabled:opacity-30"
-                                  >
-                                    Save the text
-                                  </button>
+                              {pasting === item.id ? <div className="mt-3 lg:hidden">{pasteBox(item)}</div> : null}
+
+                              <div className="mt-1.5 flex flex-wrap items-center gap-x-3 gap-y-1 text-xs text-[var(--color-muted)]">
+                                <span title={formatDateTime(item.seen_at)}>pulled {relativeDate(item.seen_at)}</span>
+                                {item.chunks > 0 ? (
+                                  <span>
+                                    {item.chunks} passage{item.chunks === 1 ? "" : "s"}
+                                  </span>
+                                ) : null}
+                                {item.reliability ? <span className="italic">{item.reliability}</span> : null}
+
+                                <span className="ms-auto flex items-center gap-2.5 opacity-0 transition group-hover:opacity-100 focus-within:opacity-100">
                                   <button
                                     type="button"
                                     onClick={() => {
-                                      setPasting(null);
+                                      setCursor(flat.findIndex((f) => f.id === item.id));
+                                      setSheet(true);
+                                    }}
+                                    title="See what was fetched"
+                                    className="inline-flex items-center gap-1 transition hover:text-[var(--color-accent)] lg:hidden"
+                                  >
+                                    <IconEye /> Preview
+                                  </button>
+                                  <button
+                                    type="button"
+                                    disabled={busy}
+                                    onClick={() => {
+                                      setPasting(pasting === item.id ? null : item.id);
                                       setPasted("");
                                     }}
-                                    className="text-sm text-[var(--color-muted)] hover:text-[var(--color-accent)]"
+                                    title="Replace the text with the article, pasted from where you are signed in"
+                                    className="inline-flex items-center gap-1 transition hover:text-[var(--color-accent)]"
                                   >
-                                    Cancel
+                                    <IconClipboard /> Paste text
                                   </button>
-                                  <span className="ml-auto text-xs text-[var(--color-muted)]">
-                                    {pasted.trim() ? `${pasted.trim().split(/\s+/).length} words` : "nothing yet"}
-                                  </span>
-                                </div>
-                              </div>
-                            ) : null}
-
-                            <div className="mt-1.5 flex flex-wrap items-center gap-x-3 gap-y-1 text-xs text-[var(--color-muted)]">
-                              <span title={formatDateTime(item.seen_at)}>pulled {relativeDate(item.seen_at)}</span>
-                              {item.chunks > 0 ? (
-                                <span>
-                                  {item.chunks} passage{item.chunks === 1 ? "" : "s"}
+                                  <button
+                                    type="button"
+                                    disabled={busy}
+                                    onClick={() => act("discard", [item.id])}
+                                    title="Not worth reading"
+                                    className="inline-flex items-center gap-1 transition hover:text-red-700"
+                                  >
+                                    <IconX /> Discard
+                                  </button>
+                                  <button
+                                    type="button"
+                                    disabled={busy || thin}
+                                    title={
+                                      thin
+                                        ? "There is no article behind this yet — paste it in first"
+                                        : "Read it into the pedia"
+                                    }
+                                    onClick={() => act("keep", [item.id])}
+                                    className="inline-flex items-center gap-1 rounded-full bg-[var(--color-accent)] px-3 py-1 font-medium text-white transition disabled:opacity-30"
+                                  >
+                                    <IconCheck /> Keep
+                                  </button>
                                 </span>
-                              ) : null}
-                              {item.reliability ? <span className="italic">{item.reliability}</span> : null}
-
-                              <span className="ms-auto flex items-center gap-3 opacity-0 transition group-hover:opacity-100 focus-within:opacity-100">
-                                <button
-                                  type="button"
-                                  disabled={busy}
-                                  onClick={() => {
-                                    setPasting(pasting === item.id ? null : item.id);
-                                    setPasted("");
-                                  }}
-                                  className="transition hover:text-[var(--color-accent)]"
-                                >
-                                  Paste text
-                                </button>
-                                <button
-                                  type="button"
-                                  disabled={busy}
-                                  onClick={() => act("discard", [item.id])}
-                                  className="transition hover:text-red-700"
-                                >
-                                  Discard
-                                </button>
-                                <button
-                                  type="button"
-                                  disabled={busy || thin}
-                                  title={
-                                    thin
-                                      ? "There is no article behind this yet — paste it in first"
-                                      : "Read it into the pedia"
-                                  }
-                                  onClick={() => act("keep", [item.id])}
-                                  className="rounded-full bg-[var(--color-accent)] px-3 py-1 font-medium text-white transition disabled:opacity-30"
-                                >
-                                  Keep
-                                </button>
-                              </span>
+                              </div>
                             </div>
+
+                            {pictureOf(item) ? <Thumb src={pictureOf(item)!} /> : null}
                           </div>
-                        </div>
-                      </li>
-                    );
-                  })}
-                </ul>
-              </section>
-            );
-          })}
+                        </li>
+                      );
+                    })}
+                  </ul>
+                </section>
+              );
+            })}
+          </div>
+
+          {/* The pane. Sticky under the action bar; scrolls on its own. */}
+          <aside className="sticky top-14 hidden max-h-[calc(100vh-4.5rem)] overflow-y-auto rounded-xl border border-[var(--color-rule)] bg-white lg:block">
+            {pane}
+          </aside>
         </div>
       )}
+
+      {sheet && current ? (
+        <Modal label={current.title} onClose={() => setSheet(false)} width="max-w-2xl" className="max-h-[85vh] overflow-y-auto !p-0">
+          {pane}
+        </Modal>
+      ) : null}
+    </div>
+  );
+}
+
+/**
+ * Where an item's picture comes from.
+ *
+ * The feed's own, or the page's og:image noted when it was fetched. Items
+ * from before pictures were kept have neither, so they fall back to the
+ * cover route, which looks the page's picture up once and keeps it on disk —
+ * the same thing the Library shelf does for every source. Lazy-loaded, so
+ * only the rows on screen ask.
+ */
+function pictureOf(item: Item): string | null {
+  if (item.image) return item.image;
+  // Items from before pictures were kept still carry the feed's summary, and
+  // a summary often opens with the picture. Same rule as itemImage() in
+  // lib/feeds.ts, applied late.
+  if (item.summary) {
+    const m = /<img\b[^>]*\bsrc=["'](https?:\/\/[^"']+)["']/i.exec(item.summary);
+    if (m) return m[1];
+  }
+  if (item.source_id) return `/api/sources/${item.source_id}/cover`;
+  return null;
+}
+
+/** A picture beside the row. Gone without a trace when it will not load. */
+function Thumb({ src, large = false }: { src: string; large?: boolean }) {
+  const [failed, setFailed] = useState(false);
+  if (failed) return null;
+  return (
+    // eslint-disable-next-line @next/next/no-img-element
+    <img
+      src={src}
+      alt=""
+      loading="lazy"
+      referrerPolicy="no-referrer"
+      onError={() => setFailed(true)}
+      className={
+        large
+          ? "aspect-video w-full object-cover"
+          : "h-[4.5rem] w-28 shrink-0 self-start rounded-md object-cover ring-1 ring-black/10"
+      }
+    />
+  );
+}
+
+/**
+ * What was fetched for one item, and whether it is enough.
+ *
+ * The verdict comes from the server under the same rule keep() applies, so
+ * the pane can never say "enough" about something the keep would refuse.
+ */
+function Preview({
+  item,
+  text,
+  loading,
+  busy,
+  pasting,
+  pasteBox,
+  onKeep,
+  onDiscard,
+  onPaste,
+}: {
+  item: Item;
+  text: HeldText | null;
+  loading: boolean;
+  busy: boolean;
+  pasting: boolean;
+  pasteBox: React.ReactNode;
+  onKeep: () => void;
+  onDiscard: () => void;
+  onPaste: () => void;
+}) {
+  const verdict = text?.verdict ?? (item.chars < ENOUGH_TO_READ ? "thin" : "enough");
+  const body = text ? text.passages.map((p) => p.text).join("\n\n") : "";
+  return (
+    <div>
+      {pictureOf(item) ? <Thumb src={pictureOf(item)!} large /> : null}
+      <div className="space-y-3 p-4">
+        <div>
+          <h2 className="font-serif text-lg font-semibold leading-snug">
+            {item.url ? (
+              <a href={item.url} target="_blank" rel="noreferrer" className="hover:text-[var(--color-accent)]">
+                {item.title} <IconExternal size={14} className="inline align-baseline opacity-60" />
+              </a>
+            ) : (
+              item.title
+            )}
+          </h2>
+          <p className="mt-0.5 text-xs text-[var(--color-muted)]">
+            {item.outlet ?? item.feed_title}
+            {item.published_at ? ` · ${formatDateTime(item.published_at)}` : ""}
+          </p>
+        </div>
+
+        {verdict === "enough" ? (
+          <p className="rounded-lg border border-emerald-200 bg-emerald-50 px-3 py-2 text-sm text-emerald-900">
+            <IconCheck className="mr-1 inline align-[-2px]" />
+            Enough to read
+            {text ? ` — ${text.words.toLocaleString()} words in ${text.passages.length} passage${text.passages.length === 1 ? "" : "s"}` : ""}
+            . Keeping it reads all of this.
+          </p>
+        ) : verdict === "summary" ? (
+          <p className="rounded-lg border border-amber-300 bg-amber-50 px-3 py-2 text-sm text-amber-900">
+            <IconText className="mr-1 inline align-[-2px]" />
+            Only the feed&apos;s summary is here — the page would not open. Paste the article to keep
+            it.
+          </p>
+        ) : (
+          <p className="rounded-lg border border-amber-300 bg-amber-50 px-3 py-2 text-sm text-amber-900">
+            <IconText className="mr-1 inline align-[-2px]" />
+            Too little to be an article
+            {text ? ` — ${text.words.toLocaleString()} words` : ""}. Paste the article to keep it.
+          </p>
+        )}
+
+        <div className="flex flex-wrap items-center gap-2">
+          <button
+            type="button"
+            disabled={busy || verdict !== "enough"}
+            onClick={onKeep}
+            className="inline-flex items-center gap-1.5 rounded-full bg-[var(--color-accent)] px-3 py-1.5 text-sm font-medium text-white transition disabled:opacity-30"
+          >
+            <IconCheck /> Keep
+          </button>
+          <button
+            type="button"
+            disabled={busy}
+            onClick={onDiscard}
+            className="inline-flex items-center gap-1.5 rounded-full border border-[var(--color-rule)] px-3 py-1.5 text-sm transition hover:border-red-400 hover:text-red-700 disabled:opacity-30"
+          >
+            <IconX /> Discard
+          </button>
+          <button
+            type="button"
+            disabled={busy}
+            onClick={onPaste}
+            className={`inline-flex items-center gap-1.5 rounded-full border px-3 py-1.5 text-sm transition disabled:opacity-30 ${
+              pasting ? "border-[var(--color-accent)] text-[var(--color-accent)]" : "border-[var(--color-rule)] hover:border-[var(--color-accent)]"
+            }`}
+          >
+            <IconClipboard /> Paste text
+          </button>
+        </div>
+
+        {pasteBox ? <div className="hidden lg:block">{pasteBox}</div> : null}
+
+        {text?.source_note ? (
+          <p className="text-xs italic text-[var(--color-muted)]">{text.source_note}</p>
+        ) : null}
+
+        {loading && !text ? (
+          <p className="text-sm text-[var(--color-muted)]">Opening…</p>
+        ) : body ? (
+          <div
+            dir={dirOf(body)}
+            className="whitespace-pre-wrap border-t border-[var(--color-rule)] pt-3 font-serif text-[0.95rem] leading-relaxed"
+          >
+            {body}
+          </div>
+        ) : text ? (
+          <p className="text-sm text-[var(--color-muted)]">Nothing was fetched for this item.</p>
+        ) : null}
+      </div>
     </div>
   );
 }

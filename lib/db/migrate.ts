@@ -2,6 +2,7 @@ import type Database from "better-sqlite3";
 import { migrateQueue } from "./migrate-queue";
 import { migrateFeeds } from "./migrate-feeds";
 import { migrateWatch } from "./migrate-watch";
+import { migrateCalendar } from "./migrate-calendar";
 
 /**
  * `schema.sql` is all CREATE IF NOT EXISTS, which means it can add tables to an
@@ -478,6 +479,7 @@ export function migrate(db: Database.Database) {
   migrateQueue(db);
   migrateFeeds(db);
   migrateWatch(db);
+  migrateCalendar(db);
 }
 
 /**

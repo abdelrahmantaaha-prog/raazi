@@ -1,0 +1,111 @@
+/**
+ * Draws the extension's icons: a rounded square in the accent brown with a
+ * white "C" — the rail's own mark — at 16, 48 and 128 pixels. A tiny PNG
+ * encoder rather than a dependency, since three images do not justify one.
+ *
+ *   node scripts/extension-icons.mjs
+ */
+import fs from "node:fs";
+import path from "node:path";
+import zlib from "node:zlib";
+import { fileURLToPath } from "node:url";
+
+const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
+const out = path.join(root, "extension");
+
+const CRC = new Int32Array(256).map((_, n) => {
+  let c = n;
+  for (let k = 0; k < 8; k++) c = c & 1 ? 0xedb88320 ^ (c >>> 1) : c >>> 1;
+  return c;
+});
+function crc32(buf) {
+  let c = -1;
+  for (const b of buf) c = CRC[(c ^ b) & 0xff] ^ (c >>> 8);
+  return (c ^ -1) >>> 0;
+}
+function chunk(type, data) {
+  const len = Buffer.alloc(4);
+  len.writeUInt32BE(data.length);
+  const body = Buffer.concat([Buffer.from(type, "ascii"), data]);
+  const crc = Buffer.alloc(4);
+  crc.writeUInt32BE(crc32(body));
+  return Buffer.concat([len, body, crc]);
+}
+function png(size, pixel) {
+  const raw = Buffer.alloc((size * 4 + 1) * size);
+  for (let y = 0; y < size; y++) {
+    raw[y * (size * 4 + 1)] = 0;
+    for (let x = 0; x < size; x++) {
+      const [r, g, b, a] = pixel(x + 0.5, y + 0.5);
+      const o = y * (size * 4 + 1) + 1 + x * 4;
+      raw[o] = r;
+      raw[o + 1] = g;
+      raw[o + 2] = b;
+      raw[o + 3] = a;
+    }
+  }
+  const ihdr = Buffer.alloc(13);
+  ihdr.writeUInt32BE(size, 0);
+  ihdr.writeUInt32BE(size, 4);
+  ihdr[8] = 8; // bit depth
+  ihdr[9] = 6; // RGBA
+  return Buffer.concat([
+    Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]),
+    chunk("IHDR", ihdr),
+    chunk("IDAT", zlib.deflateSync(raw)),
+    chunk("IEND", Buffer.alloc(0)),
+  ]);
+}
+
+/** Supersampled so the edges are smooth at 16px. */
+function draw(size) {
+  const S = 4;
+  const bg = [0x7a, 0x4b, 0x2a];
+  const inside = (x, y) => {
+    // Rounded square.
+    const r = size * 0.22;
+    const dx = Math.max(Math.abs(x - size / 2) - (size / 2 - r), 0);
+    const dy = Math.max(Math.abs(y - size / 2) - (size / 2 - r), 0);
+    return Math.hypot(dx, dy) <= r;
+  };
+  const glyph = (x, y) => {
+    // A "C": a ring with a gap on the right.
+    const cx = size / 2;
+    const cy = size / 2;
+    const d = Math.hypot(x - cx, y - cy);
+    const R = size * 0.34;
+    const w = size * 0.13;
+    if (d < R - w / 2 || d > R + w / 2) return false;
+    const angle = Math.atan2(y - cy, x - cx);
+    return Math.abs(angle) > 0.7;
+  };
+  return (x, y) => {
+    let cover = 0;
+    let ink = 0;
+    for (let i = 0; i < S; i++) {
+      for (let j = 0; j < S; j++) {
+        const sx = x - 0.5 + (i + 0.5) / S;
+        const sy = y - 0.5 + (j + 0.5) / S;
+        if (inside(sx, sy)) {
+          cover++;
+          if (glyph(sx, sy)) ink++;
+        }
+      }
+    }
+    const a = cover / (S * S);
+    if (a === 0) return [0, 0, 0, 0];
+    const t = ink / Math.max(cover, 1);
+    return [
+      Math.round(bg[0] + (255 - bg[0]) * t),
+      Math.round(bg[1] + (255 - bg[1]) * t),
+      Math.round(bg[2] + (255 - bg[2]) * t),
+      Math.round(a * 255),
+    ];
+  };
+}
+
+for (const size of [16, 48, 128]) {
+  const file = path.join(out, `icon${size}.png`);
+  fs.writeFileSync(file, png(size, draw(size)));
+  console.log(`wrote ${path.relative(root, file)}`);
+}

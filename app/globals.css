@@ -186,8 +186,16 @@ body {
    --------------------------------------------------------------------------- */
 
 @media (prefers-reduced-motion: no-preference) {
+  /* `backwards`, not `both`. A filled-forward animation keeps its final
+     keyframe applied, and a transform that has finished at `none` is still
+     an animated transform — the browser leaves an identity matrix on the
+     element, which makes it the containing block for every fixed-position
+     descendant. That is how the citation popover ended up placed against a
+     page section rather than the screen. With `backwards` the element
+     returns to its own static style the moment the animation ends, which is
+     what the last keyframe drew anyway. */
   .view-enter {
-    animation: view-in 0.34s cubic-bezier(0.22, 0.61, 0.36, 1) both;
+    animation: view-in 0.34s cubic-bezier(0.22, 0.61, 0.36, 1) backwards;
   }
 
   @keyframes view-in {
@@ -199,7 +207,7 @@ body {
      staggering; past that the last rows would be waiting noticeably long, so
      everything beyond falls back to the tenth delay. */
   .cascade > * {
-    animation: view-in 0.36s cubic-bezier(0.22, 0.61, 0.36, 1) both;
+    animation: view-in 0.36s cubic-bezier(0.22, 0.61, 0.36, 1) backwards;
   }
   .cascade > *:nth-child(1)  { animation-delay: 0ms; }
   .cascade > *:nth-child(2)  { animation-delay: 34ms; }
@@ -277,7 +285,7 @@ body {
   }
 
   .page-enter > * > * {
-    animation: view-in 0.34s cubic-bezier(0.22, 0.61, 0.36, 1) both;
+    animation: view-in 0.34s cubic-bezier(0.22, 0.61, 0.36, 1) backwards;
   }
   .page-enter > * > *:nth-child(1) { animation-delay: 30ms; }
   .page-enter > * > *:nth-child(2) { animation-delay: 66ms; }

@@ -48,6 +48,10 @@ export interface HeldItem {
   story_title: string | null;
   /** Other accounts of the same story already in the library. */
   story_accounts: number;
+  /** A picture: the feed's, or failing that the page's own. An address, not a file. */
+  image: string | null;
+  /** The fetcher's note on the source — says when only the feed's summary could be read. */
+  source_note: string | null;
 }
 
 const HELD_COLUMNS = `
@@ -59,11 +63,14 @@ const HELD_COLUMNS = `
   (SELECT COALESCE(SUM(LENGTH(c.text)), 0) FROM chunks c WHERE c.source_id = i.source_id) AS chars,
   ss.story_id AS story_id,
   st.title AS story_title,
-  (SELECT COUNT(*) FROM story_sources s2 WHERE s2.story_id = ss.story_id) AS story_accounts`;
+  (SELECT COUNT(*) FROM story_sources s2 WHERE s2.story_id = ss.story_id) AS story_accounts,
+  COALESCE(i.image_url, json_extract(s.meta_json, '$.image')) AS image,
+  s.note AS source_note`;
 
 const HELD_JOINS = `
   FROM feed_items i
   JOIN feeds f ON f.id = i.feed_id
+  LEFT JOIN sources s ON s.id = i.source_id
   LEFT JOIN story_sources ss ON ss.source_id = i.source_id
   LEFT JOIN stories st ON st.id = ss.story_id`;
 
@@ -84,6 +91,94 @@ export function listHeld(limit = 200): HeldItem[] {
     ...r,
     lede: r.lede ? r.lede.replace(/\s+/g, " ").trim().slice(0, 400) : null,
   }));
+}
+
+export interface HeldText {
+  id: number;
+  title: string;
+  url: string | null;
+  outlet: string | null;
+  published_at: string | null;
+  image: string | null;
+  /** What the fetcher said about the source, e.g. that only the summary was read. */
+  source_note: string | null;
+  chars: number;
+  words: number;
+  /**
+   * enough   — a real article is here; keeping it reads all of it.
+   * summary  — the page would not open and only the feed's summary was kept.
+   * thin     — something was read, but not enough to be an article.
+   */
+  verdict: "enough" | "summary" | "thin";
+  passages: { seq: number; text: string }[];
+}
+
+/**
+ * Everything that would be read if you kept this item, so you can see it
+ * before deciding — and see whether it is the article or a paywall's stub.
+ *
+ * The verdict is the same rule keep() applies, spelled out: below
+ * ENOUGH_TO_READ there is no article, and a source whose note says the page
+ * would not open is the feed's summary however long it is.
+ */
+export function heldText(itemId: number): HeldText | null {
+  const item = db()
+    .prepare(
+      `SELECT i.id, i.title, i.url, i.published_at, i.source_id, i.image_url,
+              f.outlet, s.note AS source_note, s.meta_json
+         FROM feed_items i
+         JOIN feeds f ON f.id = i.feed_id
+    LEFT JOIN sources s ON s.id = i.source_id
+        WHERE i.id = ? AND i.state = 'held'`
+    )
+    .get(itemId) as
+    | {
+        id: number;
+        title: string;
+        url: string | null;
+        published_at: string | null;
+        source_id: number | null;
+        image_url: string | null;
+        outlet: string | null;
+        source_note: string | null;
+        meta_json: string | null;
+      }
+    | undefined;
+  if (!item) return null;
+
+  const passages = item.source_id
+    ? (db()
+        .prepare("SELECT seq, text FROM chunks WHERE source_id=? ORDER BY seq")
+        .all(item.source_id) as { seq: number; text: string }[])
+    : [];
+  const chars = passages.reduce((n, p) => n + p.text.length, 0);
+  const words = passages.reduce((n, p) => n + wordCount(p.text), 0);
+
+  let image: string | null = item.image_url;
+  if (!image && item.meta_json) {
+    try {
+      image = (JSON.parse(item.meta_json) as { image?: string }).image ?? null;
+    } catch {
+      image = null;
+    }
+  }
+
+  const summaryOnly = /could not be read|summary the feed carried/i.test(item.source_note ?? "");
+  const verdict = !enoughToRead(chars, words) ? "thin" : summaryOnly ? "summary" : "enough";
+
+  return {
+    id: item.id,
+    title: item.title,
+    url: item.url,
+    outlet: item.outlet,
+    published_at: item.published_at,
+    image,
+    source_note: item.source_note,
+    chars,
+    words,
+    verdict,
+    passages,
+  };
 }
 
 export function heldCount(): number {
@@ -128,14 +223,31 @@ export function decidedBetween(from: Date, to: Date): { kept: number; discarded:
  */
 export const ENOUGH_TO_READ = 1_000;
 
+/**
+ * And a floor in words, because characters alone let a page's navigation
+ * through: a broadcaster's menu, one link per line, ran to 1,400 characters
+ * of "Skip to main content" and fifty-nine words. No article is that short.
+ */
+export const ENOUGH_WORDS = 120;
+
 /** How much text this item actually has behind it. */
-function textLength(sourceId: number | null): number {
-  if (sourceId === null) return 0;
-  return (
-    db()
-      .prepare("SELECT COALESCE(SUM(LENGTH(text)), 0) AS n FROM chunks WHERE source_id=?")
-      .get(sourceId) as { n: number }
-  ).n;
+function textLength(sourceId: number | null): { chars: number; words: number } {
+  if (sourceId === null) return { chars: 0, words: 0 };
+  const rows = db().prepare("SELECT text FROM chunks WHERE source_id=?").all(sourceId) as { text: string }[];
+  return {
+    chars: rows.reduce((n, r) => n + r.text.length, 0),
+    words: rows.reduce((n, r) => n + wordCount(r.text), 0),
+  };
+}
+
+export function wordCount(text: string): number {
+  const t = text.trim();
+  return t ? t.split(/\s+/).length : 0;
+}
+
+/** Whether there is an article here, by both floors. */
+export function enoughToRead(chars: number, words: number): boolean {
+  return chars >= ENOUGH_TO_READ && words >= ENOUGH_WORDS;
 }
 
 export function keep(itemIds: number[]): {
@@ -146,7 +258,10 @@ export function keep(itemIds: number[]): {
 } {
   const all = pick(itemIds, "held");
   const refused = all
-    .filter((i) => textLength(i.source_id) < ENOUGH_TO_READ)
+    .filter((i) => {
+      const { chars, words } = textLength(i.source_id);
+      return !enoughToRead(chars, words);
+    })
     .map((i) => ({ id: i.id, title: i.title }));
   const items = all.filter((i) => !refused.some((r) => r.id === i.id));
   if (!items.length) return { kept: 0, runId: null, refused };

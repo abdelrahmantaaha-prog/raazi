@@ -253,6 +253,9 @@ export async function addUrl(opts: Provenance & {
       lang: parsed.meta.lang,
       canonicalUrl: parsed.meta.canonicalUrl,
     });
+    // The page's own picture, kept as an address. The inbox shows it and the
+    // cover fetch uses it, so neither has to open the page a second time.
+    if (parsed.meta.image) rememberImage(sourceId, parsed.meta.image);
     return finish(sourceId, parsed.pieces, opts.budgetCap, opts.tags, {
       runId: opts.runId,
       hold: opts.hold,
@@ -285,6 +288,20 @@ export async function addPastedText(opts: Provenance & {
     runId: opts.runId,
     note: `${pieces.length} section(s) parsed.`,
   });
+}
+
+/** Records where a source's picture lives, in the same meta the cover code reads. */
+export function rememberImage(sourceId: number, image: string) {
+  const row = db().prepare("SELECT meta_json FROM sources WHERE id=?").get(sourceId) as
+    | { meta_json: string }
+    | undefined;
+  let meta: Record<string, unknown> = {};
+  try {
+    meta = JSON.parse(row?.meta_json || "{}") as Record<string, unknown>;
+  } catch {
+    meta = {};
+  }
+  db().prepare("UPDATE sources SET meta_json=? WHERE id=?").run(JSON.stringify({ ...meta, image }), sourceId);
 }
 
 export interface SourceMeta {

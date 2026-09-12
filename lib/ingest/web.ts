@@ -19,6 +19,8 @@ export interface WebMeta {
   year?: string;
   lang?: string;
   canonicalUrl?: string;
+  /** The page's own picture — og:image or twitter:image — as an absolute address. */
+  image?: string;
 }
 
 export interface WebParse {
@@ -101,6 +103,22 @@ export function readMeta(doc: Document, url: string): WebMeta {
   const siteName = metaOf('meta[property="og:site_name"]') ?? metaOf('meta[name="application-name"]');
   const outlet = siteName ?? outletFromUrl(url) ?? undefined;
 
+  let image: string | undefined;
+  const declaredImage =
+    metaOf('meta[property="og:image:secure_url"]') ??
+    metaOf('meta[property="og:image"]') ??
+    metaOf('meta[name="og:image"]') ??
+    metaOf('meta[name="twitter:image"]') ??
+    metaOf('meta[name="twitter:image:src"]');
+  if (declaredImage) {
+    try {
+      const u = new URL(declaredImage, url);
+      if (u.protocol === "http:" || u.protocol === "https:") image = u.toString().slice(0, 1000);
+    } catch {
+      // A malformed image address is no image.
+    }
+  }
+
   return {
     title: metaOf('meta[property="og:title"]') ?? (doc.title?.trim() || undefined),
     author:
@@ -118,6 +136,7 @@ export function readMeta(doc: Document, url: string): WebMeta {
       normaliseLang(metaOf('meta[property="og:locale"]')) ??
       undefined,
     canonicalUrl: canonicalUrl(url, declaredCanonical) ?? undefined,
+    image,
   };
 }
 

@@ -43,6 +43,8 @@ export interface FeedItem {
   title: string;
   summary: string | null;
   publishedAt: string | null;
+  /** A picture the feed offered for the item, when it offered one. */
+  image?: string | null;
 }
 
 export interface ParsedFeed {
@@ -96,13 +98,15 @@ export function parseFeed(xml: string): ParsedFeed {
 
     const title = text(first(e, "title")) || "(untitled)";
     const guid = text(first(e, "guid", "id")) || link || title;
+    const summary = text(first(e, "description", "summary", "content"));
 
     return {
       guid,
       url: link || null,
       title,
-      summary: text(first(e, "description", "summary", "content")).slice(0, 2000) || null,
+      summary: summary.slice(0, 2000) || null,
       publishedAt: published ? toPublishedAt(published) : null,
+      image: itemImage(e, summary, link),
     };
   });
 
@@ -112,6 +116,58 @@ export function parseFeed(xml: string): ParsedFeed {
     outlet: text(first(channel, "title")) || null,
     items,
   };
+}
+
+/**
+ * The picture a feed item carries, if any.
+ *
+ * Publishers put it in four places: Media RSS `media:content` (when it is an
+ * image — the same element carries video), `media:thumbnail`, an
+ * `enclosure` with an image type, or an `<img>` inside the description.
+ * Checked in that order, since the first two are chosen by the publisher for
+ * exactly this purpose and the last is whatever the article opened with.
+ * Relative addresses resolve against the item link. A one-pixel image is a
+ * tracker, not a picture.
+ */
+export function itemImage(e: Element, summary: string, link: string): string | null {
+  const local = (el: Element) => el.tagName.toLowerCase().replace(/^.*:/, "");
+  const children = [...e.getElementsByTagName("*")];
+  const pick = (name: string, ok: (el: Element) => boolean = () => true) =>
+    children.find((c) => local(c) === name && c.getAttribute("url") && ok(c))?.getAttribute("url") ?? null;
+
+  const media =
+    pick("content", (c) => {
+      const medium = (c.getAttribute("medium") ?? "").toLowerCase();
+      const type = (c.getAttribute("type") ?? "").toLowerCase();
+      if (medium) return medium === "image";
+      if (type) return type.startsWith("image/");
+      return /\.(jpe?g|png|webp|gif)(\?|$)/i.test(c.getAttribute("url") ?? "");
+    }) ??
+    pick("thumbnail") ??
+    children
+      .find((c) => local(c) === "enclosure" && /^image\//i.test(c.getAttribute("type") ?? ""))
+      ?.getAttribute("url") ??
+    null;
+
+  let candidate = media;
+  if (!candidate && summary) {
+    const tag = /<img\b[^>]*>/i.exec(summary)?.[0];
+    if (tag) {
+      const src = /\bsrc=["']([^"']+)["']/i.exec(tag);
+      const width = /\bwidth=["']?(\d+)/i.exec(tag);
+      const height = /\bheight=["']?(\d+)/i.exec(tag);
+      const pixel = (width && Number(width[1]) <= 1) || (height && Number(height[1]) <= 1);
+      if (src && !pixel) candidate = src[1];
+    }
+  }
+  if (!candidate) return null;
+  try {
+    const u = new URL(candidate, link || undefined);
+    if (u.protocol !== "http:" && u.protocol !== "https:") return null;
+    return u.toString().slice(0, 1000);
+  } catch {
+    return null;
+  }
 }
 
 /** A YouTube channel or playlist has a feed; this is where it lives. */
@@ -358,8 +414,8 @@ export function alreadyHave(canonical: string | null, url: string | null): { sou
 /** Records what a poll found. Returns the ids of items worth ingesting. */
 export function recordItems(feedId: number, items: FeedItem[], since: string | null): number[] {
   const insert = db().prepare(
-    `INSERT OR IGNORE INTO feed_items (feed_id, guid, url, canonical_url, title, summary, published_at, state)
-     VALUES (?, ?, ?, ?, ?, ?, ?, ?)`
+    `INSERT OR IGNORE INTO feed_items (feed_id, guid, url, canonical_url, title, summary, published_at, state, image_url)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`
   );
   const fresh: number[] = [];
 
@@ -380,7 +436,8 @@ export function recordItems(feedId: number, items: FeedItem[], since: string | n
         item.title,
         item.summary,
         item.publishedAt,
-        state
+        state,
+        item.image ?? null
       );
       if (info.changes === 0) continue; // already known under this guid
 

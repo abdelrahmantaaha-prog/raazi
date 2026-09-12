@@ -1,0 +1,36 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Corpus Inbox — options</title>
+<style>
+  body { font: 14px/1.5 system-ui, -apple-system, "Segoe UI", sans-serif; background: #fbfaf7; color: #1c1a17; margin: 0; padding: 1rem 1.2rem; min-width: 24rem; }
+  h1 { font: 600 1.1rem/1.3 Georgia, serif; margin: 0 0 .5rem; }
+  label { display: block; margin-top: .8rem; font-weight: 600; font-size: .85rem; }
+  input { font: inherit; width: 100%; box-sizing: border-box; padding: .45rem .6rem; border: 1px solid #e2ddd3; border-radius: 6px; background: #fff; margin-top: .25rem; }
+  .hint { color: #6b665e; font-size: .8rem; margin-top: .25rem; }
+  .row { display: flex; gap: .5rem; margin-top: 1rem; align-items: center; }
+  button { font: inherit; border: 0; border-radius: 999px; padding: .45rem .9rem; cursor: pointer; background: #7a4b2a; color: #fff; }
+  button.ghost { background: transparent; color: #6b665e; border: 1px solid #e2ddd3; }
+  #note { font-size: .85rem; margin-top: .6rem; }
+  .ok { color: #1e4d3c; } .err { color: #7a2323; }
+</style>
+</head>
+<body>
+<h1>Where Corpus is</h1>
+<label>Address
+  <input id="corpusUrl" placeholder="http://127.0.0.1:5400" spellcheck="false">
+</label>
+<p class="hint">On this computer, the default. From another machine, or over Tailscale, the address shown under LAN mode in Corpus's Settings.</p>
+<label>Token
+  <input id="token" placeholder="Only needed when Corpus is in LAN mode" spellcheck="false" autocomplete="off">
+</label>
+<p class="hint">Settings → LAN mode in Corpus shows it. Leave empty for a Corpus on this computer.</p>
+<div class="row">
+  <button id="save">Save</button>
+  <button class="ghost" id="test">Test the connection</button>
+</div>
+<div id="note"></div>
+<script src="options.js"></script>
+</body>
+</html>

@@ -8,6 +8,8 @@ import { CitationPopover } from "../components/CitationPopover";
 import { RunChip } from "../components/RunChip";
 import { Badge } from "../components/ui";
 import { formatDate, formatDateTime } from "@/lib/dates";
+import type { CalendarRow } from "@/lib/calendar";
+import { IconCalendar } from "../components/Icons";
 
 interface BriefCitation extends Citation {
   chunkId: number | null;
@@ -30,6 +32,7 @@ export function BriefView({
   citations,
   watchlist,
   stats,
+  calendar,
 }: {
   today: string;
   brief: {
@@ -45,6 +48,8 @@ export function BriefView({
   citations: BriefCitation[];
   watchlist: { id: number; label: string; kind: string; entityId: number | null; recent: number }[];
   stats: Record<string, number>;
+  /** The dates this brief noticed, for the block under it. */
+  calendar?: CalendarRow[];
 }) {
   const router = useRouter();
   const [openCite, setOpenCite] = useState<{ id: number; anchor: HTMLElement } | null>(null);
@@ -190,6 +195,8 @@ export function BriefView({
             />
           ) : null}
 
+          <BriefCalendar rows={calendar ?? []} />
+
           {Object.keys(stats).length || brief.model ? (
             <p className="text-xs text-[var(--color-muted)]">
               {Object.keys(stats).length ? (
@@ -237,5 +244,98 @@ export function BriefView({
         </nav>
       ) : null}
     </div>
+  );
+}
+
+/**
+ * The dates the brief's sources mentioned, under the prose rather than in it.
+ *
+ * Kept out of the model's hands on purpose: a date is the one thing in a
+ * brief a reporter acts on without re-reading the article, so it is drawn
+ * from the events table directly and every line opens the entity and the
+ * passage. Days the sources fixed come first; what they placed only within a
+ * week, a month or a year is piled under "Sometime in".
+ */
+function BriefCalendar({ rows }: { rows: CalendarRow[] }) {
+  if (!rows.length) return null;
+  const days = rows.filter((r) => r.kind === "day");
+  const vague = rows.filter((r) => r.kind !== "day");
+  const groups = new Map<string, CalendarRow[]>();
+  for (const r of vague) {
+    const list = groups.get(r.label) ?? [];
+    list.push(r);
+    groups.set(r.label, list);
+  }
+  const upcoming = days.filter((r) => r.tense !== "past");
+  const past = days.filter((r) => r.tense === "past");
+
+  const line = (r: CalendarRow) => (
+    <li key={r.id} className="flex gap-2 text-sm">
+      <span className="min-w-0 flex-1">
+        {r.summary}{" "}
+        <Link href={`/pedia/${r.entity_id}`} className="text-xs text-[var(--color-accent)] hover:underline">
+          {r.entity}
+        </Link>
+        {r.source_id ? (
+          <>
+            {" "}
+            <Link
+              href={`/sources/${r.source_id}${r.chunk_id ? `?chunk=${r.chunk_id}` : ""}`}
+              className="text-xs text-[var(--color-muted)] hover:underline"
+            >
+              {r.outlet ?? r.source_title ?? "source"}
+            </Link>
+          </>
+        ) : null}
+      </span>
+    </li>
+  );
+
+  const dayGroups = (list: CalendarRow[]) => {
+    const byDay = new Map<string, CalendarRow[]>();
+    for (const r of list) byDay.set(r.bucket, [...(byDay.get(r.bucket) ?? []), r]);
+    return [...byDay.entries()].map(([day, items]) => (
+      <div key={day}>
+        <p className="text-xs font-medium uppercase tracking-wide text-[var(--color-muted)]">{formatDate(day)}</p>
+        <ul className="mt-1 space-y-1">{items.map(line)}</ul>
+      </div>
+    ));
+  };
+
+  return (
+    <section className="max-w-[70ch] rounded-xl border border-[var(--color-rule)] p-4">
+      <div className="flex items-baseline gap-3">
+        <h2 className="flex items-center gap-2 font-serif text-lg font-semibold">
+          <IconCalendar className="text-[var(--color-accent)]" /> Watching calendar
+        </h2>
+        <Link href="/calendar" className="ml-auto text-xs text-[var(--color-accent)] hover:underline">
+          The whole calendar
+        </Link>
+      </div>
+      <div className="mt-3 space-y-4">
+        {upcoming.length ? (
+          <div className="space-y-3">
+            <p className="text-sm font-medium">Coming up</p>
+            {dayGroups(upcoming)}
+          </div>
+        ) : null}
+        {groups.size ? (
+          <div className="space-y-3">
+            {[...groups.entries()].map(([label, items]) => (
+              <div key={label}>
+                <p className="text-xs font-medium uppercase tracking-wide text-[var(--color-muted)]">{label}</p>
+                <ul className="mt-1 space-y-1">{items.map(line)}</ul>
+              </div>
+            ))}
+          </div>
+        ) : null}
+        {past.length ? (
+          <div className="space-y-3">
+            <p className="text-sm font-medium">Already happened</p>
+            {dayGroups(past)}
+          </div>
+        ) : null}
+      </div>
+    </section>
   );
 }

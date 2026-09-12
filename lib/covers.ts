@@ -131,10 +131,14 @@ export async function fetchCover(sourceId: number): Promise<string | null> {
 
   try {
     const video = videoId(source.url);
+    // An article's picture was usually noted when the page was first read;
+    // only a source from before that, or one added by hand, needs the page
+    // opened again.
+    const remembered = meta(sourceId).image;
     const url = video
       ? thumbnailUrl(video)
       : source.kind === "url" || source.kind === "media"
-        ? await siteImage(source.url)
+        ? (remembered ?? (await siteImage(source.url)))
         : await openLibraryCover(source.title, source.author);
 
     if (!url) {

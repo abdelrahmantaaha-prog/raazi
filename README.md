@@ -55,13 +55,61 @@ navigation bar — nothing has moved or gone, it is just filed now.
 
 | Section      | Its pages                                | What it is for                                        |
 | ------------ | ---------------------------------------- | ----------------------------------------------------- |
-| **Brief**    | Today · This week                        | What to read this morning, and the week's record       |
+| **Brief**    | Today · This week · Calendar             | What to read this morning, the week's record, and every date the sources mention |
 | **News**     | Inbox · Stories · Feeds                  | The wire: what arrived, grouped, and what subscribes   |
 | **Library**  | Sources · Quotes · Topics                | What you own, the passages you starred, how it's filed |
 | **Pedia**    | Entries · Network                        | What was built from the library, one at a time or all  |
 | **Write**    | —                                        | Drafts and ideas, with the citations to hand           |
 | **Search**   | Library · News · Books & papers          | Three searches: your own text, the wire, the catalogues |
 | **Settings** | —                                        | Keys, routing, schedules, corrections                  |
+
+## The inbox
+
+What the feeds pull in waits here, fetched and chunked but unread, until you say
+which pieces are worth the reading. On a wide screen the item under the cursor
+opens in a pane on the right: the text the fetch actually got, a word count, and
+a verdict — enough to read, only the feed's summary, or too thin to be an
+article. That is the question the paste box exists to answer, and it used to be
+answerable only by keeping the item and finding out. Items carry the picture
+their feed or their page declared, so the list reads at a glance.
+
+**From the browser.** `extension/` is a small Brave/Chrome/Edge extension
+(load it unpacked from `brave://extensions`). Click it on any article and the
+page goes into the inbox as your browser sees it — signed in, paywall open —
+with the full text, marked *full text*. `Alt+Shift+C` does the same without
+the popup. Sending an address that is already waiting replaces its text, which
+is exactly what pasting does. See `extension/README.md`.
+
+## The watching calendar
+
+Every time a brief is prepared, every date its sources mention is filed on the
+calendar under **Brief → Calendar**: elections, rulings, anniversaries,
+deadlines — past, present and to come. A day the source fixed is filed as a day.
+Anything vaguer is piled under **Sometime in** the week, the month or the year
+the wording allows, and never more precisely than that: "last week" against a
+piece published on the 9th is the week of the 4th. Each line opens the entity
+and the passage; dismiss the ones that are somebody else's to watch. The daily
+brief shows the dates it noticed under its own text, and the calendar page can
+file the last thirty days from a library the brief never ran over.
+
+## Two laptops, one library
+
+**Settings → The other laptop** syncs Corpus between two machines over the LAN
+or Tailscale. It is a copy, not a merge — the point is continuity, not
+collaboration: work on either, and before you switch, sync towards the machine
+you are about to use.
+
+- **Pull** makes this library a copy of the other one. This one is backed up
+  first, whole, under `data/backups` (the last three are kept).
+- **Push** makes the other one a copy of this. Implemented as "ask it to pull
+  from me", so there is one code path.
+
+Both machines need **LAN mode** on (the card above it in Settings, which shows
+the addresses and the token to paste into the other side). The database goes
+across as a consistent snapshot while the other side keeps running; source
+files, covers and portraits follow. `config.json` — keys, routing, the LAN
+token — stays per machine. If the library on the receiving side has changed
+since the last sync, the page says so and asks before replacing it.
 
 ## Using more than one service
 
@@ -81,6 +129,12 @@ Two rules the router enforces whatever you configure:
 - **Nothing stops for one service being spent.** Keys rotate within a provider, then
   the call falls through to Gemini, and only when nothing can answer does the run
   park — until the first key *anywhere* returns.
+- **A refusal is charged to the model that answered.** Gemini's free allowance is
+  per model and shared by every key you own, so "out of quota for the day" means
+  the model is spent, not the key: the ring sets that model aside for an hour and
+  the same key asks the next one down. A key is set aside only when there is
+  nothing left to ask it. Embeddings have no substitute, so a spent embedding
+  model parks that task alone and leaves every key as it was.
 
 Extra keys multiply your quota on Gemini, whose limits are per project. Anthropic
 bills the account, so a second key there is a second label on one bill, and Ollama

@@ -1,5 +1,6 @@
 import { citationsFor, getBrief, latestBrief, listBriefs, todayKey } from "@/lib/brief";
 import { listWatchlist } from "@/lib/watchlist";
+import { calendarFor } from "@/lib/calendar";
 import { BriefView } from "./BriefView";
 
 export const dynamic = "force-dynamic";
@@ -52,6 +53,7 @@ export default async function BriefPage({
         recent: w.recent,
       }))}
       stats={stats}
+      calendar={brief ? calendarFor(brief.day) : []}
     />
   );
 }

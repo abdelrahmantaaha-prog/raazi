@@ -1,6 +1,7 @@
 "use client";
 
 import { useEffect, useLayoutEffect, useRef, useState } from "react";
+import { createPortal } from "react-dom";
 import Link from "next/link";
 import { dirOf } from "@/lib/dir";
 import type { Citation } from "./EntryBody";
@@ -20,6 +21,14 @@ const NEEDED = 200;
  *
  * Position is recomputed on scroll and resize rather than frozen, so the quote
  * stays pinned to its marker while you read around it.
+ *
+ * Portalled to the body. It is `position: fixed`, and fixed means "against
+ * the viewport" only while no ancestor carries a transform — and the page
+ * sections arrive with a `translateY` entrance animation whose fill mode left
+ * an identity matrix on them for good. Against that box the popover landed
+ * two or three hundred pixels below and to the right of its marker, which on
+ * a desktop was usually off the screen. Rendering it under `<body>` takes it
+ * out from under every ancestor the page could ever animate.
  */
 export function CitationPopover({
   citation,
@@ -51,6 +60,10 @@ export function CitationPopover({
     }
 
     const place = () => {
+      // A marker that has been re-rendered out of the document has no place
+      // to be measured; the popover it anchored closes rather than pin itself
+      // to the top-left corner where a detached element reports itself.
+      if (!anchor.isConnected) return closer.current();
       const r = anchor.getBoundingClientRect();
       // The marker can scroll out from under a tall quote; when it does the
       // popover has nothing to point at, so it closes rather than float free.
@@ -60,7 +73,8 @@ export function CitationPopover({
       const above = r.bottom + NEEDED > window.innerHeight && r.top > NEEDED;
       const width = Math.min(WIDTH, window.innerWidth - MARGIN * 2);
       const next = {
-        top: above ? r.top - height - 8 : r.bottom + 8,
+        // Never above the top edge, whichever way it opens.
+        top: Math.max(MARGIN, above ? r.top - height - 8 : r.bottom + 8),
         // Centred on the marker, then pushed back inside the window.
         left: Math.min(
           Math.max(r.left + r.width / 2 - width / 2, MARGIN),
@@ -110,9 +124,9 @@ export function CitationPopover({
     };
   }, [id, anchor]);
 
-  if (!citation) return null;
+  if (!citation || typeof document === "undefined") return null;
 
-  return (
+  return createPortal(
     <div
       ref={box}
       role="dialog"
@@ -163,6 +177,7 @@ export function CitationPopover({
           {citation.locator ? ` — ${citation.locator}` : ""}
         </Link>
       </div>
-    </div>
+    </div>,
+    document.body
   );
 }
