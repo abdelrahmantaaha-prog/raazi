@@ -93,6 +93,46 @@ export class NoUsableKeysError extends Error {
   }
 }
 
+/**
+ * Every provider that could answer this call is unavailable *right now* — the
+ * cloud is answering 503 for everyone, or a local model's endpoint is not
+ * listening, or both. The keys are fine and the work is fine; the services are
+ * momentarily out.
+ *
+ * This is deliberately distinct from AllKeysExhausted (quota spent) and
+ * NoUsableKeys (misconfigured), because the right response is different: wait a
+ * short while and try again, without failing the task and without parking the
+ * run for hours. It exists because when Gemini went busy for a stretch and a
+ * local Ollama key was on the ring with nothing listening behind it, every task
+ * spun through gemini-503 → ollama-refused → retry as fast as the queue would
+ * turn — thousands of failed requests a minute. That storm, not the outage,
+ * was what took the process down.
+ */
+export class ProvidersBusyError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = "ProvidersBusyError";
+  }
+}
+
+/**
+ * A connection that could never be established, as opposed to a server that
+ * answered with an error. The local model's port with nothing behind it is the
+ * case that matters: it means "this provider is not here", so its key should
+ * come off the ring for a while rather than be dialed again on the next task.
+ */
+export function isConnRefused(err: unknown): boolean {
+  const e = err as { cause?: { code?: string }; code?: string };
+  const code = String(e?.cause?.code ?? e?.code ?? "");
+  const raw = (err instanceof Error ? err.message : String(err)).toLowerCase();
+  return (
+    code === "ECONNREFUSED" ||
+    code === "ENOTFOUND" ||
+    code === "EAI_AGAIN" ||
+    /econnrefused|enotfound|eai_again|fetch failed|other side closed|connection refused/.test(raw)
+  );
+}
+
 export class TruncatedOutputError extends Error {
   constructor() {
     super("Model hit its output limit before finishing.");
@@ -312,9 +352,21 @@ export function keyFailure(err: unknown): KeyFailure {
 
 const MAX_ATTEMPTS = 5;
 
+/** How long a task waits when every service is momentarily out. Long enough
+ *  that an outage is a trickle of checks, not a storm; short enough that work
+ *  resumes promptly once a provider is back. */
+const PROVIDERS_BUSY_DELAY_MS = 120_000;
+
 export function classify(err: unknown, attempts: number): Disposition {
   if (err instanceof MissingKeyError) {
     return { kind: "pause_key", reason: "No API key configured." };
+  }
+  // The services are momentarily out, not the keys. Wait a couple of minutes
+  // and try the same task again — never failing it, so a long outage does not
+  // burn through its attempts, and never spinning, so an outage cannot become
+  // the request storm that used to crash the worker.
+  if (err instanceof ProvidersBusyError) {
+    return { kind: "retry", delayMs: PROVIDERS_BUSY_DELAY_MS, reason: err.message };
   }
   if (err instanceof NoUsableKeysError) {
     return { kind: "pause_key", reason: err.message };

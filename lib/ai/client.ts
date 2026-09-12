@@ -24,15 +24,22 @@ import { anthropicJson, anthropicText, validateAnthropicKey, EFFORT } from "./an
 import {
   AllKeysExhaustedError,
   SchemaUnsupportedError,
+  isConnRefused,
   isProviderUnavailable,
   MissingKeyError,
   ModelExhaustedError,
   NoUsableKeysError,
+  ProvidersBusyError,
   SafetyBlockError,
   TruncatedOutputError,
   keyFailure,
   noFreeTierQuota,
 } from "./errors";
+
+/** How long a local endpoint that refused a connection is set aside. It is not
+ *  a quota or a rate limit — the service simply is not there — so this only has
+ *  to be long enough that the ring stops dialing a dead port on every task. */
+const LOCAL_DOWN_COOLDOWN_MS = 5 * 60_000;
 
 export interface Usage {
   tokensIn: number;
@@ -295,6 +302,11 @@ async function withRotation<T>(
   const tried = new Set<string>();
   let lastError: unknown;
   let invalidInARow = 0;
+  // Set when a provider answered "unavailable" (a busy 503) or could not be
+  // reached at all (a refused connection). It changes what "nothing answered"
+  // means at the end: the services are out, not the keys, so the task waits
+  // rather than failing or — the bug this fixes — spinning.
+  let sawUnavailable = false;
 
   for (const provider of candidates) {
     for (;;) {
@@ -321,16 +333,25 @@ async function withRotation<T>(
           break;
         }
 
-        // Busy, not broken, and busy for every key at once. Step past the
-        // provider — but only when there is something behind it to step to,
-        // because with nothing there the old behaviour is the right one: throw,
-        // and let the worker back off and try again in a minute.
-        if (isProviderUnavailable(err) && candidates.indexOf(provider) < candidates.length - 1) {
-          console.warn(
-            `[corpus] ${spec(provider).label} is busy; handing this one to ${spec(
-              candidates[candidates.indexOf(provider) + 1]
-            ).label}`
-          );
+        // Up but busy (a 503 for everyone), or not there at all (a refused
+        // connection). Either way this provider cannot serve the call right
+        // now, and — this is the point — every key on it meets the same wall,
+        // so there is nothing to gain by trying its other keys. Step to the
+        // next provider; if there is none, fall through to the tail, which now
+        // parks the task instead of letting it spin.
+        if (isProviderUnavailable(err) || isConnRefused(err)) {
+          sawUnavailable = true;
+          // A refused connection means the endpoint is not listening — the
+          // local model with nothing behind it. Take its key off the ring for
+          // a while so the next task does not dial the dead port again. A busy
+          // 503 is left alone: the key is fine and the model is shared.
+          if (isConnRefused(err)) {
+            markCooldown(key.id, LOCAL_DOWN_COOLDOWN_MS, "The endpoint did not answer.");
+          }
+          const next = candidates.indexOf(provider) + 1;
+          if (next < candidates.length) {
+            console.warn(`[corpus] ${spec(provider).label} is unavailable; trying ${spec(candidates[next]).label}`);
+          }
           break;
         }
 
@@ -408,6 +429,17 @@ async function withRotation<T>(
   if (live.length === 0) {
     throw new NoUsableKeysError(
       `No usable key for ${candidates.map((p) => spec(p).label).join(" or ")}. Check Settings.`
+    );
+  }
+
+  // A provider was up-but-busy or unreachable this time. The keys are fine, so
+  // this is neither a quota park nor a config error: the task waits a couple of
+  // minutes and comes back. Checked before the quota reset below on purpose —
+  // a local key just set aside for being down must not be read as "out of
+  // quota until five minutes from now" and park the run under a false reason.
+  if (sawUnavailable) {
+    throw new ProvidersBusyError(
+      `Every service is unavailable right now (${candidates.map((p) => spec(p).label).join(", ")}); waiting before trying again.`
     );
   }
 
