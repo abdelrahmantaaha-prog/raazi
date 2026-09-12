@@ -16,11 +16,20 @@ const nextConfig: NextConfig = {
    */
   distDir: process.env.NODE_ENV === "development" ? ".next-dev" : ".next",
 
-  // Additive: `next build` still produces the ordinary output this machine runs
-  // from, and ALSO a self-contained server under .next/standalone that carries
-  // the node_modules it actually needs. That is what `npm run dist` packages, so
-  // a copy can be handed over without a checkout or an `npm install`.
-  output: "standalone",
+  // A self-contained server under .next/standalone, carrying the node_modules it
+  // actually needs, is what `npm run dist` packages so a copy can be handed over
+  // without a checkout or an `npm install`.
+  //
+  // But it is produced ONLY for a dist build, never for the everyday one, and
+  // that is not a size optimisation — it is what keeps this machine running.
+  // `next start` is the entrypoint the launcher uses from a checkout, and Next
+  // 15 treats `next start` with `output: "standalone"` as unsupported: it prints
+  // a warning and the server process exits on its own a moment after "Ready",
+  // before it has served anything. That is the "Corpus stopped unexpectedly"
+  // crash. A plain build has no standalone output, so `next start` is supported
+  // and stays up; `npm run dist` sets CORPUS_DIST=1 to get the standalone bundle
+  // it needs, and its copies run through server.js, not `next start`.
+  output: process.env.CORPUS_DIST === "1" ? "standalone" : undefined,
 
   // Native module + libraries that must not be bundled by webpack/turbopack.
   serverExternalPackages: ["better-sqlite3", "jsdom", "pdfjs-dist"],

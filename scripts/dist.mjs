@@ -71,13 +71,20 @@ function assertClean(out, flavour) {
   }
 }
 
-/** Next's standalone output is only produced by a production build. */
+/**
+ * Next's standalone output is only produced by a production build, and only
+ * when CORPUS_DIST=1 — see next.config.ts. The everyday build deliberately
+ * omits it, because `next start` (which the launcher uses) exits on its own
+ * when standalone output is present. Dist runs through server.js instead, so
+ * it is the one build that asks for it.
+ */
 function build() {
   say("building…");
   execFileSync("npm", ["run", "build"], {
     cwd: root,
     stdio: ["ignore", "ignore", "inherit"],
     shell: process.platform === "win32",
+    env: { ...process.env, CORPUS_DIST: "1" },
   });
 }
 
