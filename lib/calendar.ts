@@ -20,7 +20,16 @@ import { dayKey, weekStart } from "./week";
  * against fixed inputs and the same on both laptops.
  */
 
-export type BucketKind = "day" | "week" | "month" | "year";
+/**
+ * `annual` is a day the source named without a year, for something that has
+ * already happened: "the October 7 attack" in a piece published in September.
+ * The calendar cannot know the year the source left out, and guessing the
+ * publication year filed the attack as an event five weeks *ahead* — the one
+ * mistake a watching calendar must never make. What it can know is the day,
+ * and to a reporter that day is an anniversary, which is exactly a calendar's
+ * business. So it recurs: keyed MM-DD, shown on its next occurrence.
+ */
+export type BucketKind = "day" | "week" | "month" | "year" | "annual";
 
 export interface Bucket {
   kind: BucketKind;
@@ -56,6 +65,78 @@ export function monthBucket(d: Date): Bucket {
 export function yearBucket(y: number, decade = false): Bucket {
   return { kind: "year", key: String(y), label: decade ? `Sometime in the ${y}s` : `Sometime in ${y}` };
 }
+export function annualBucket(month: number, day: number): Bucket {
+  const name = new Date(2000, month - 1, 1).toLocaleDateString("en-GB", { month: "long" });
+  return { kind: "annual", key: `${pad(month)}-${pad(day)}`, label: `Every ${day} ${name}` };
+}
+
+/** The next YYYY-MM-DD on which an annual bucket falls, today included. */
+export function nextOccurrence(key: string, now = new Date()): string {
+  const [m, d] = key.split("-").map(Number);
+  const thisYear = new Date(now.getFullYear(), m - 1, d);
+  const today = new Date(now.getFullYear(), now.getMonth(), now.getDate());
+  return dayKey(thisYear >= today ? thisYear : new Date(now.getFullYear() + 1, m - 1, d));
+}
+
+/** Whether the source's wording carries a four-digit year at all. */
+const hasYear = (text: string | null | undefined) => /\b(1[89]\d{2}|20\d{2})\b/.test(text ?? "");
+
+/**
+ * The words that say a happening is still to come. Checked before anything
+ * else, because news copy about the future is almost always explicit about it
+ * — "scheduled", "will", "is due to", "prepares to travel on" — and a day
+ * named that way, without a year, is this year's.
+ */
+const FUTURE_RE =
+  /\b(will|would|shall|is (?:due|set|expected|scheduled|slated|poised|likely) to|are (?:due|set|expected|scheduled|slated|poised|likely) to|due to|set to|scheduled|slated|expected|upcoming|to be held|takes? place|plans? to|planning to|prepares? to|preparing to|to vote|vote on|deadline|expires?|until|reconvenes?|returns? to|opens?|begins?|starts?|kicks? off|ahead of|next)\b/i;
+
+/** The words that say it already happened. */
+const PAST_RE =
+  /\b(was|were|had|has|have|did|killed|died|launched|attacked|struck|happened|occurred|took place|began|ended|won|lost|signed|announced|said|told|resulted|invaded|seized|declared|founded|born|toppled|overthrew|assassinat\w*|bomb\w*|massacre\w*)\b|\b[a-z]{3,}ed\b/i;
+
+/** Wording that names the day *as* an anniversary, whichever way it falls. */
+const ANNIVERSARY_RE =
+  /\b(anniversary|anniversaries|years? (?:since|after|ago|on from|to the day)|commemorat\w*|remembrance|marks? (?:the )?\d+ years|decades? (?:since|after|ago))\b/i;
+
+/**
+ * Whether a summary describes something that has already happened. Future
+ * wording wins outright — "is scheduled to vote" contains "vote", and a
+ * reader would not call that past.
+ */
+export function readsAsPast(summary: string | null | undefined): boolean {
+  const s = (summary ?? "").trim();
+  if (!s) return false;
+  if (FUTURE_RE.test(s)) return false;
+  return PAST_RE.test(s);
+}
+
+/** How far past publication a yearless day may fall before "it already
+ *  happened" stops being plausible for this year: a few days covers copy
+ *  written over a weekend and published on the Monday. */
+const GRACE_DAYS = 3;
+
+/**
+ * A day the source named without a year: this year's, or an anniversary?
+ *
+ * The year the source left out was being filled in with the publication
+ * year, always. That is right for "the vote on Oct. 19" and wrong for "the
+ * Oct. 7 attack", and the two are told apart by the one thing this function
+ * looks at: whether the summary describes something still to come or
+ * something already done. A done thing that falls *after* publication cannot
+ * be this year's, so it is filed as the anniversary it is. Wording that
+ * itself says "anniversary" or "years since" is an anniversary wherever it
+ * falls. Everything else — a scheduled vote ahead, a strike earlier this
+ * month — keeps the publication year, as before.
+ */
+function yearlessDay(d: Date, pub: Date | null, summary: string | null | undefined, text: string): Bucket {
+  const words = `${summary ?? ""} ${text}`;
+  if (ANNIVERSARY_RE.test(words)) return annualBucket(d.getMonth() + 1, d.getDate());
+  if (pub) {
+    const horizon = shift(pub, { days: GRACE_DAYS });
+    if (d > horizon && readsAsPast(summary)) return annualBucket(d.getMonth() + 1, d.getDate());
+  }
+  return dayBucket(d);
+}
 
 function shift(d: Date, opts: { days?: number; months?: number; years?: number }): Date {
   const out = new Date(d.getTime());
@@ -83,15 +164,30 @@ function monthIndex(word: string): number {
  * rather than guessed.
  */
 export function bucketFor(
-  ev: { date_iso: string | null; precision: string | null; date_text: string | null },
+  ev: { date_iso: string | null; precision: string | null; date_text: string | null; summary?: string | null },
   publishedAt: string | null
 ): Bucket | null {
   const iso = (ev.date_iso ?? "").trim();
+  const pubDate = parseDate(publishedAt);
+  const textRaw = (ev.date_text ?? "").trim();
+
+  // A yearless recurring form — "--10-07" is ISO 8601 for the day itself.
+  const recurring = /^(?:--)?(\d{2})-(\d{2})$/.exec(iso);
+  if (recurring) {
+    const [, m, d] = recurring.map(Number);
+    if (m >= 1 && m <= 12 && d >= 1 && d <= 31) return annualBucket(m, d);
+  }
+
   if (/^\d{4}-\d{2}-\d{2}$/.test(iso)) {
     const d = parseDate(iso);
     if (d) {
       if (ev.precision === "month") return monthBucket(d);
       if (ev.precision === "year" || ev.precision === "decade") return yearBucket(d.getFullYear(), ev.precision === "decade");
+      // The extractor may itself have supplied the publication year to a day
+      // the source gave without one. Same question, same answer.
+      if (pubDate && !hasYear(textRaw) && textRaw && d.getFullYear() === pubDate.getFullYear()) {
+        return yearlessDay(d, pubDate, ev.summary, textRaw);
+      }
       return dayBucket(d);
     }
   }
@@ -117,14 +213,20 @@ export function bucketFor(
     const m = monthIndex(dayMonth[2]);
     const day = Number(dayMonth[1]);
     const year = dayMonth[3] ? Number(dayMonth[3]) : pub?.getFullYear();
-    if (m >= 0 && day >= 1 && day <= 31 && year) return dayBucket(new Date(year, m, day));
+    if (m >= 0 && day >= 1 && day <= 31 && year) {
+      const d = new Date(year, m, day);
+      return dayMonth[3] ? dayBucket(d) : yearlessDay(d, pub, ev.summary, text);
+    }
   }
   const monthDay = new RegExp(`${MONTH_RE.source}\\s+(\\d{1,2})(?:st|nd|rd|th)?\\b(?:,?\\s+(\\d{4}))?`, "i").exec(text);
   if (monthDay) {
     const m = monthIndex(monthDay[1]);
     const day = Number(monthDay[2]);
     const year = monthDay[3] ? Number(monthDay[3]) : pub?.getFullYear();
-    if (m >= 0 && day >= 1 && day <= 31 && year) return dayBucket(new Date(year, m, day));
+    if (m >= 0 && day >= 1 && day <= 31 && year) {
+      const d = new Date(year, m, day);
+      return monthDay[3] ? dayBucket(d) : yearlessDay(d, pub, ev.summary, text);
+    }
   }
   const monthYear = new RegExp(`${MONTH_RE.source}\\s+(\\d{4})`, "i").exec(text);
   if (monthYear) {
@@ -203,6 +305,9 @@ export function tenseOf(
   switch (b.kind) {
     case "day":
       return b.key < today ? "past" : b.key > today ? "upcoming" : "current";
+    // An anniversary is never past: it is today, or it is coming round.
+    case "annual":
+      return nextOccurrence(b.key, now) === today ? "current" : "upcoming";
     case "week": {
       const end = dayKey(shift(parseDate(b.key) ?? now, { days: 7 }));
       return end <= today ? "past" : b.key > today ? "upcoming" : "current";
@@ -265,6 +370,11 @@ export function logCalendar(from: Date, to: Date, loggedFrom: string): number {
   );
 
   return tx(() => {
+    // Earlier filings are re-read under the current rules first, so a day
+    // that was stamped with the wrong year before the anniversary rule
+    // existed moves to where it belongs the next time any brief is prepared.
+    refileCalendar();
+
     let added = 0;
     for (const r of rows) {
       const b = bucketFor(r, r.published_at ?? r.added_at);
@@ -287,6 +397,52 @@ export function logCalendar(from: Date, to: Date, loggedFrom: string): number {
     }
     return added;
   });
+}
+
+/**
+ * Re-buckets every line on the calendar under the current rules and moves the
+ * ones that land somewhere else. Returns how many moved.
+ *
+ * Exists because the rules have changed under the rows once already: before
+ * the anniversary rule, "the Oct. 7 attack" in a September piece was filed as
+ * a day five weeks ahead. Filing is otherwise idempotent and never revisits
+ * an event, so without this a correction would have applied only to dates
+ * noticed after it. Cheap — a few hundred rows, no model — so it runs at the
+ * start of every filing and on the page's own refresh.
+ */
+export function refileCalendar(): number {
+  const rows = db()
+    .prepare(
+      `SELECT c.id, c.kind, c.bucket, c.label,
+              e.date_text, e.date_iso, e.precision, e.summary,
+              s.published_at, s.added_at
+         FROM calendar c
+         JOIN events e ON e.id = c.event_id
+    LEFT JOIN sources s ON s.id = e.source_id`
+    )
+    .all() as {
+    id: number;
+    kind: BucketKind;
+    bucket: string;
+    label: string;
+    date_text: string | null;
+    date_iso: string | null;
+    precision: string | null;
+    summary: string | null;
+    published_at: string | null;
+    added_at: string | null;
+  }[];
+  const update = db().prepare("UPDATE calendar SET kind=?, bucket=?, label=? WHERE id=?");
+  let moved = 0;
+  for (const r of rows) {
+    const b = bucketFor(r, r.published_at ?? r.added_at);
+    if (!b) continue;
+    if (b.kind !== r.kind || b.key !== r.bucket || b.label !== r.label) {
+      update.run(b.kind, b.key, b.label, r.id);
+      moved++;
+    }
+  }
+  return moved;
 }
 
 export interface CalendarRow {
@@ -357,6 +513,9 @@ export interface CalendarSections {
   sometime: CalendarGroup[];
   /** Days that have passed, most recent first. */
   past: CalendarRow[];
+  /** Days named without a year for things already done — anniversaries.
+   *  Each recurs; sorted by its next occurrence. */
+  annual: CalendarRow[];
   counts: { total: number; dismissed: number };
 }
 
@@ -386,9 +545,13 @@ export function listCalendar(opts: { pastDays?: number; now?: Date } = {}): Cale
     .filter((r) => r.kind === "day" && r.tense === "past" && r.bucket >= pastFloor)
     .sort((a, b) => b.bucket.localeCompare(a.bucket) || a.id - b.id);
 
+  const annual = rows
+    .filter((r) => r.kind === "annual")
+    .sort((a, b) => nextOccurrence(a.bucket, now).localeCompare(nextOccurrence(b.bucket, now)) || a.id - b.id);
+
   const groups = new Map<string, CalendarGroup>();
   for (const r of rows) {
-    if (r.kind === "day") continue;
+    if (r.kind === "day" || r.kind === "annual") continue;
     const key = `${r.kind}:${r.bucket}`;
     const g = groups.get(key) ?? { label: r.label, kind: r.kind, bucket: r.bucket, tense: r.tense, items: [] };
     g.items.push(r);
@@ -407,7 +570,7 @@ export function listCalendar(opts: { pastDays?: number; now?: Date } = {}): Cale
   const counts = db()
     .prepare("SELECT COUNT(*) AS total, COALESCE(SUM(dismissed), 0) AS dismissed FROM calendar")
     .get() as { total: number; dismissed: number };
-  return { upcoming, sometime, past, counts };
+  return { upcoming, sometime, past, annual, counts };
 }
 
 export function dismissCalendar(id: number, dismissed = true): boolean {

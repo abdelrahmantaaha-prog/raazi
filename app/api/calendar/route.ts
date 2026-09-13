@@ -1,6 +1,6 @@
 import { NextResponse } from "next/server";
 import { asId, badRequest, notFound, readBody } from "@/lib/http";
-import { dismissCalendar, listCalendar, logCalendar } from "@/lib/calendar";
+import { dismissCalendar, listCalendar, logCalendar, refileCalendar } from "@/lib/calendar";
 
 export const dynamic = "force-dynamic";
 
@@ -26,8 +26,11 @@ export async function POST(req: Request) {
     const days = Number.isInteger(body.days) && body.days! > 0 && body.days! <= 366 ? body.days! : 30;
     const to = new Date();
     const from = new Date(to.getTime() - days * 86_400_000);
+    // Filing re-reads what is already there under the current rules before it
+    // adds anything, so a refresh is also how a mis-filed year gets corrected.
+    const moved = refileCalendar();
     const added = logCalendar(from, to, "refresh");
-    return NextResponse.json({ added, days, ...listCalendar() });
+    return NextResponse.json({ added, moved, days, ...listCalendar() });
   }
 
   if (body.action === "dismiss" || body.action === "restore") {

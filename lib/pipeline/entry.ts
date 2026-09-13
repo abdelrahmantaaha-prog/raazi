@@ -763,7 +763,10 @@ function timelineBlock(entityId: number): string {
     .all(entityId) as { date_iso: string | null; date_text: string | null; summary: string; mention_id: number | null }[];
   if (rows.length === 0) return "";
   return `DATED EVENTS (as recorded from the passages; cite the passage, not this list):\n${rows
-    .map((r) => `- ${r.date_iso ?? r.date_text ?? "undated"}: ${r.summary}${r.mention_id ? ` [[m:${r.mention_id}]]` : ""}`)
+    // A recurring "--MM-DD" is the source's wording with the year unknown;
+    // the writer should see the wording, not be handed a form that reads as
+    // a year of nothing.
+    .map((r) => `- ${r.date_iso && !r.date_iso.startsWith("--") ? r.date_iso : (r.date_text ?? r.date_iso ?? "undated")}: ${r.summary}${r.mention_id ? ` [[m:${r.mention_id}]]` : ""}`)
     .join("\n")}`;
 }
 

@@ -180,6 +180,15 @@ in "dateIso" and keep the source's own wording in "dateText". When the text
 plus the published date cannot fix a date, leave "dateIso" empty with
 precision "unknown". Never invent one.
 
+A day and month given WITHOUT a year is this year's only when the text treats
+it as still to come ("the vote on Oct. 19"). For something that has already
+happened, the year is whatever it truly was: if the event is well known and
+you know it — "the October 7 attack" is 2023-10-07, "9/11" is 2001-09-11 —
+give the full date; if you do not know the year, write "dateIso" as
+"--MM-DD" (for example "--10-07") with precision "day", never the published
+year. A past event dated in the future is the one mistake the calendar built
+from these cannot forgive.
+
 BACK-REFERENCES. This is the part that is usually done badly, so read it twice.
 
 Sources refer to things they have already introduced without naming them again:
@@ -556,6 +565,19 @@ export function normaliseEventDate(ev: Pick<ExtractedEvent, "dateIso" | "precisi
   dateIso: string | null;
   precision: string;
 } {
+  // A day and month with the year unknown — ISO 8601's "--MM-DD". Kept as it
+  // is, precision "day": the calendar reads it as an anniversary, and the
+  // alternative (the model guessing the publication year) filed a past attack
+  // as an event five weeks ahead.
+  const recurring = /^\s*--?(\d{1,2})[-/.](\d{1,2})\s*$/.exec(ev.dateIso ?? "");
+  if (recurring) {
+    const month = Number(recurring[1]);
+    const day = Number(recurring[2]);
+    if (month >= 1 && month <= 12 && day >= 1 && day <= 31) {
+      return { dateIso: `--${String(month).padStart(2, "0")}-${String(day).padStart(2, "0")}`, precision: "day" };
+    }
+  }
+
   const m = /^\s*(?:c\.|ca\.|circa)?\s*(\d{4})(?:[-/.](\d{1,2})(?:[-/.](\d{1,2}))?)?\s*$/i.exec(ev.dateIso ?? "");
   let iso: string | null = null;
   if (m) {

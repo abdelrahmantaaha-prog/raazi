@@ -81,6 +81,39 @@ section("Absolute wording needs no anchor");
   check("the 1990s → decade", b("in the 1990s")?.label === "Sometime in the 1990s");
 }
 
+section("A day named without a year is this year's only if it is still to come");
+// The Oct. 7 case, from the live library: the extractor rightly left the year
+// unknown, and the calendar then stamped the publication year on it — filing
+// the attack five weeks ahead. What tells "the Oct. 7 attack" from "the vote
+// on Oct. 19" is the summary's tense.
+{
+  const b = (text, summary, iso = null) =>
+    cal.bucketFor({ date_iso: iso, precision: iso ? "day" : "unknown", date_text: text, summary }, PUB);
+  const attack = "Hamas launched an attack resulting in 1,200 Israelis killed and hundreds taken hostage.";
+  check("a past event on a day after publication is an anniversary", b("Oct. 7", attack)?.kind === "annual");
+  check("keyed by month and day only", b("Oct. 7", attack)?.key === "10-07", b("Oct. 7", attack)?.key);
+  check("and labelled as recurring", b("Oct. 7", attack)?.label === "Every 7 October", b("Oct. 7", attack)?.label);
+  check("a scheduled thing on a day ahead is this year's", b("Oct. 19", "Alberta is scheduled to hold a referendum")?.key === "2026-10-19");
+  check("'prepares to travel on' is future wording", b("September 24", "Xi Jinping prepares to travel to Washington on September 24.")?.key === "2026-09-24");
+  check("'is set to' is future wording even with a past-looking verb", b("Nov. 3", "Midterm election day scheduled.")?.key === "2026-11-03");
+  check("a past event a few days before publication is this year's", b("Sept. 3", "The strike ended after talks.")?.key === "2026-09-03");
+  check("no summary at all keeps the old rule", b("Oct. 20", null)?.key === "2026-10-20");
+  check("an explicit year is never second-guessed", b("7 October 2023", attack)?.key === "2023-10-07");
+  check("the extractor's own publication-year slip is caught too", b("Oct. 7", attack, "2026-10-07")?.kind === "annual");
+  check("but a dated iso with a year in the wording stands", b("7 October 2026", "The attack happened.", "2026-10-07")?.key === "2026-10-07");
+  check("'anniversary' wording is annual wherever it falls", b("September 11", "The city marked the anniversary of the attacks.")?.kind === "annual");
+  check("'years since' too", b("September 11", "Twenty-five years since the towers fell.")?.key === "09-11");
+  check("an ISO recurring form is understood", b("Oct. 7", attack, "--10-07")?.key === "10-07");
+  check("readsAsPast: launched/killed", cal.readsAsPast(attack));
+  check("readsAsPast: not when scheduled", !cal.readsAsPast("The House is scheduled to reconvene."));
+  check("readsAsPast: empty is not past", !cal.readsAsPast(""));
+  const now = new Date(2026, 8, 12);
+  check("an anniversary is never past", cal.tenseOf({ kind: "annual", key: "10-07" }, now) === "upcoming");
+  check("it is current on the day", cal.tenseOf({ kind: "annual", key: "09-12" }, now) === "current");
+  check("next occurrence rolls into next year once passed", cal.nextOccurrence("01-15", now) === "2027-01-15");
+  check("next occurrence this year when ahead", cal.nextOccurrence("10-07", now) === "2026-10-07");
+}
+
 section("Tense is judged as of a day");
 {
   const now = new Date(2026, 8, 11); // 11 Sep 2026
@@ -138,6 +171,29 @@ section("Filing from a window is idempotent and grouped");
 
   const outside = cal.logCalendar(new Date("2026-01-01T00:00:00Z"), new Date("2026-02-01T00:00:00Z"), "x");
   check("a window with no sources files nothing", outside === 0);
+
+  // A line filed under the old rule — the attack as a day five weeks ahead —
+  // is moved to its anniversary by the refile, which every filing runs first.
+  const attackEvent = Number(
+    ins.run(entityId, "Oct. 7", null, "unknown", "Hamas launched an attack that killed 1,200 people.", sourceId).lastInsertRowid
+  );
+  db()
+    .prepare(
+      `INSERT INTO calendar (event_id, entity_id, source_id, kind, bucket, label, date_text, summary, logged_from)
+       VALUES (?, ?, ?, 'day', '2026-10-07', '7 Oct 2026', 'Oct. 7', 'Hamas launched an attack that killed 1,200 people.', 'old')`
+    )
+    .run(attackEvent, entityId, sourceId);
+  const before = cal.listCalendar({ now: new Date(2026, 8, 11) });
+  check("mis-filed, the attack shows as coming up", before.upcoming.some((r) => r.event_id === attackEvent));
+  const moved = cal.refileCalendar();
+  check("the refile moves it", moved === 1, String(moved));
+  const after = cal.listCalendar({ now: new Date(2026, 8, 11) });
+  check("it is no longer an upcoming day", !after.upcoming.some((r) => r.event_id === attackEvent));
+  const ann = after.annual.find((r) => r.event_id === attackEvent);
+  check("it is an anniversary", ann?.kind === "annual" && ann.bucket === "10-07");
+  check("and it is not in the sometime groups", !after.sometime.some((g) => g.items.some((r) => r.event_id === attackEvent)));
+  check("a second refile moves nothing", cal.refileCalendar() === 0);
+  check("filing again still adds nothing and keeps the fix", cal.logCalendar(from, to, "2026-09-10") === 0 && cal.listCalendar().annual.length === 1);
 }
 
 console.log(`\n${passed} passed, ${failed} failed`);

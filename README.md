@@ -84,13 +84,27 @@ is exactly what pasting does. See `extension/README.md`.
 
 Every time a brief is prepared, every date its sources mention is filed on the
 calendar under **Brief → Calendar**: elections, rulings, anniversaries,
-deadlines — past, present and to come. A day the source fixed is filed as a day.
-Anything vaguer is piled under **Sometime in** the week, the month or the year
-the wording allows, and never more precisely than that: "last week" against a
-piece published on the 9th is the week of the 4th. Each line opens the entity
-and the passage; dismiss the ones that are somebody else's to watch. The daily
-brief shows the dates it noticed under its own text, and the calendar page can
-file the last thirty days from a library the brief never ran over.
+deadlines — past, present and to come. The page is a month grid: each day
+carries what the sources placed on it, today is marked, and a day opens to its
+lines; a **Next up** list beside it runs through what is ahead. A day the source
+fixed is filed as a day. Anything vaguer is piled under **Sometime in** the
+week, the month or the year the wording allows, and never more precisely than
+that: "last week" against a piece published on the 9th is the week of the 4th.
+Each line opens the entity and the passage; dismiss the ones that are somebody
+else's to watch. The daily brief shows the dates it noticed under its own text,
+and the calendar page can file the last thirty days from a library the brief
+never ran over.
+
+**A day named without a year.** News copy says "the vote on Oct. 19" and "the
+Oct. 7 attack" in the same breath, and only the first is this year's. A day
+given without a year is filed as this year's when the sentence treats it as
+still to come; when it describes something already done and falls after the
+piece was published, it cannot be this year's, and it is filed as what it is —
+an **anniversary**, recurring on the grid each year and never "coming up" under
+a year it never had. Wording that says "anniversary" or "years since" is an
+anniversary wherever it falls. Earlier filings are re-read under the current
+rule every time the calendar is filed, so a correction reaches the whole
+calendar, not only dates noticed afterwards.
 
 ## Two laptops, one library
 
