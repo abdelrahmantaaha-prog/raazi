@@ -1,9 +1,14 @@
 import { Readability } from "@mozilla/readability";
-import { JSDOM } from "jsdom";
+import { JSDOM, VirtualConsole } from "jsdom";
+
 import type { Piece } from "../chunk";
 import { safeFetch } from "../net";
 import { parseText } from "./text";
 import { canonicalUrl, normaliseLang, outletFromUrl, toPublishedAt } from "./meta";
+/** jsdom shouts every stylesheet it cannot parse to the console — modern CSS it
+ *  does not know, whole sheets of it, into the server log on every article
+ *  fetched. Nothing here needs the styles. A console with no listeners is quiet. */
+const quiet = () => new VirtualConsole();
 
 export { canonicalUrl, normaliseLang, outletFromUrl, toPublishedAt } from "./meta";
 
@@ -44,7 +49,7 @@ export async function parseUrl(url: string): Promise<WebParse> {
   // Relative links and rel=canonical resolve against where the page actually
   // came from, which after a redirect is not the address that was pasted.
   const finalUrl = res.url || url;
-  const dom = new JSDOM(html, { url: finalUrl });
+  const dom = new JSDOM(html, { url: finalUrl, virtualConsole: quiet() });
   const doc = dom.window.document;
   const meta = readMeta(doc, finalUrl);
 

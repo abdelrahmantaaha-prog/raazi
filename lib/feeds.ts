@@ -1,7 +1,12 @@
-import { JSDOM } from "jsdom";
+import { JSDOM, VirtualConsole } from "jsdom";
+
 import { db, tx } from "./db";
 import { safeFetch } from "./net";
 import { canonicalUrl, outletFromUrl, toPublishedAt } from "./ingest/meta";
+/** jsdom shouts every stylesheet it cannot parse to the console — modern CSS it
+ *  does not know, whole sheets of it, into the server log on every article
+ *  fetched. Nothing here needs the styles. A console with no listeners is quiet. */
+const quiet = () => new VirtualConsole();
 
 /**
  * Feeds: what a beat actually looks like from the outside.
@@ -73,7 +78,7 @@ export interface ParsedFeed {
  * folded by address and the longest wording kept as the title.
  */
 export function parsePage(html: string, pageUrl: string, pattern?: string | null): ParsedFeed {
-  const doc = new JSDOM(html, { url: pageUrl }).window.document;
+  const doc = new JSDOM(html, { url: pageUrl, virtualConsole: quiet() }).window.document;
   const page = new URL(pageUrl);
   const host = page.hostname.replace(/^www\./, "");
   const pageKey = page.origin + page.pathname.replace(/\/+$/, "") + page.search;
@@ -161,7 +166,7 @@ function safeDecode(s: string): string {
 
 /** The feed a page advertises in its head, when it advertises one. */
 export function discoverFeedUrl(html: string, pageUrl: string): string | null {
-  const doc = new JSDOM(html, { url: pageUrl }).window.document;
+  const doc = new JSDOM(html, { url: pageUrl, virtualConsole: quiet() }).window.document;
   for (const link of doc.querySelectorAll<HTMLLinkElement>('link[rel~="alternate"][href]')) {
     const type = (link.getAttribute("type") ?? "").toLowerCase();
     if (!/rss|atom|xml/.test(type)) continue;
