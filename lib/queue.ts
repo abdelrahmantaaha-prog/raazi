@@ -216,6 +216,69 @@ export function resumeRun(runId: number, opts: { force?: boolean } = {}): boolea
   });
 }
 
+/** The kinds a failure is worth retrying unasked: model work, where the
+ *  failure was almost always the provider's moment rather than the task's. */
+const RETRIABLE = ["entry", "verify", "extract", "resolve", "tag", "enhance", "identity", "context", "coherence", "sweep"];
+/** How long a failure rests before it is tried again, and how many times. */
+export const AUTO_RETRY_AFTER_MINUTES = 30;
+export const AUTO_RETRY_LIMIT = 3;
+
+/**
+ * Puts failed model tasks back on their own, a while after they failed.
+ *
+ * "Network kept failing" and "the provider kept returning 503" are verdicts
+ * on an afternoon, not on a passage — and an entry that failed to write at
+ * three used to stay failed until someone found the run and pressed Retry.
+ * Now the worker does that itself: a task that has rested half an hour goes
+ * back to pending, a few times, counted on the row so a genuinely broken
+ * task cannot be retried forever. Returns how many went back.
+ */
+export function retryFailedAutomatically(
+  opts: { olderThanMinutes?: number; limit?: number } = {}
+): number {
+  const minutes = opts.olderThanMinutes ?? AUTO_RETRY_AFTER_MINUTES;
+  const limit = opts.limit ?? AUTO_RETRY_LIMIT;
+  return tx(() => {
+    const rows = db()
+      .prepare(
+        `UPDATE tasks
+            SET state='pending', attempts=0, not_before=NULL, retries=retries+1,
+                last_error='Retried on its own after: ' || COALESCE(last_error, ''),
+                updated_at=datetime('now')
+          WHERE state='failed'
+            AND kind IN (${RETRIABLE.map((k) => `'${k}'`).join(",")})
+            AND retries < ?
+            AND datetime(updated_at) < datetime('now', ?)
+        RETURNING run_id`
+      )
+      .all(limit, `-${minutes} minutes`) as { run_id: number }[];
+    const runs = [...new Set(rows.map((r) => r.run_id))];
+    for (const runId of runs) {
+      db()
+        .prepare(
+          `UPDATE runs SET state='queued', updated_at=datetime('now')
+            WHERE id=? AND state IN ('failed', 'done')`
+        )
+        .run(runId);
+    }
+    return rows.length;
+  });
+}
+
+/** Whether any failed task is still owed a retry, so the worker keeps a clock for it. */
+export function hasRetryableFailures(limit = AUTO_RETRY_LIMIT): boolean {
+  return (
+    (
+      db()
+        .prepare(
+          `SELECT COUNT(*) AS n FROM tasks WHERE state='failed' AND retries < ?
+              AND kind IN (${RETRIABLE.map((k) => `'${k}'`).join(",")})`
+        )
+        .get(limit) as { n: number }
+    ).n > 0
+  );
+}
+
 /**
  * Retry every task that failed outright, without redoing completed work.
  * The tasks go back to pending either way; the run itself only leaves a

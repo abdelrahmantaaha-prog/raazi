@@ -119,6 +119,11 @@ const PLAN_SCHEMA: Schema = {
       enum: ["chronological", "thematic"],
       description: "How the entry is organised overall.",
     },
+    leadMentionIds: {
+      type: Type.ARRAY,
+      description: "The passages the lead rests on: the most consequential things about the subject.",
+      items: { type: Type.INTEGER },
+    },
     sections: {
       type: Type.ARRAY,
       items: {
@@ -126,6 +131,7 @@ const PLAN_SCHEMA: Schema = {
         properties: {
           heading: { type: Type.STRING },
           about: { type: Type.STRING, description: "One sentence: what this section establishes." },
+          period: { type: Type.STRING, description: "The years or moment this section covers, when it has one." },
           mentionIds: { type: Type.ARRAY, items: { type: Type.INTEGER } },
         },
         required: ["heading", "mentionIds"],
@@ -220,6 +226,30 @@ Plan before you write. Choose a spine: time, for people and events; theme, for
 institutions, places and concepts — and within a thematic section, time order.
 Then write so that a reader who knows nothing follows the account:
 
+- THE LEAD COMES FIRST, AND IT IS AN INVERTED PYRAMID. The paragraph or two
+  above the first heading carry the most consequential things the evidence
+  establishes about the subject — what it is, why it matters, the facts a
+  reader would most need — so that someone who reads nothing else leaves
+  with the essentials. Detail, sequence and the contested come after, under
+  the headings. Within each section, the same: its most important point in
+  its first sentence, the supporting detail behind it. Never open the entry,
+  or a section, with the earliest or the most minor fact simply because it
+  is first in time.
+- KEEP THE CHRONOLOGY EVEN. Do not let the account cluster where the
+  passages cluster. When one period has thirty passages and another three,
+  the entry still gives each period the weight it has in the subject's
+  story: summarise the dense period in a paragraph rather than narrating
+  every passage, and keep the sparse period rather than dropping it. A gap
+  stated plainly ("the sources say nothing of the years between …") is
+  better than a silent jump from one decade to the next.
+- EVERYTHING IN THE ENTRY IS ABOUT THE SUBJECT. A passage in which the
+  subject is incidental — named in passing in an account of someone or
+  something else — is left out, or reduced to the one clause that concerns
+  the subject. The test for every sentence: would someone who looked this
+  subject up need it? Detail about the other people, places and
+  institutions in a passage belongs in their own entries, which exist; here
+  it is noise that buries what the reader came for.
+
 - One subject per paragraph. Facts that share a paragraph must share a subject,
   a period, or a stated connection — never merely a source.
 - Each paragraph may open with ONE framing sentence that says what the
@@ -272,13 +302,22 @@ with its id, date, and a one-line gist. Decide the shape of the entry.
 
 - Choose the spine: chronological for people and events, thematic for
   institutions, places and concepts. Within a thematic section, time order.
+- Choose the lead: the few passages that establish the most consequential
+  things about the subject — what it is, why it matters, the facts a reader
+  most needs. Their ids go in leadMentionIds. The entry opens on these, in
+  an inverted pyramid, before any section.
 - Group passages into sections by SUBJECT, never by which book they came from.
   A section is a subject the reader would want to follow: an office held, an
-  episode, a relationship, a dispute.
+  episode, a relationship, a dispute. Give each section its period, and keep
+  the chronology even: a period with three passages is a section as much as
+  one with thirty, and the thirty are one section to be summarised, not five
+  sections that make the entry all about that year.
 - Order the sections so the account builds: identity first, then the sequence
   of things, then what is contested.
-- Passages that repeat another, or that say nothing usable about the subject,
-  go in leaveOut with a clear conscience.
+- Passages that repeat another, that say nothing usable about the subject,
+  or in which the subject is only incidental — named in passing in an account
+  of something else — go in leaveOut with a clear conscience. Peripheral
+  detail belongs in the entries of the people and places it is about.
 - Do not write the entry, and do not add anything you know from outside the
   passages.`;
 
@@ -565,7 +604,8 @@ async function planEntry(
 
   const { data, usage } = await generateJson<{
     spine: string;
-    sections: { heading: string; about?: string; mentionIds: number[] }[];
+    leadMentionIds?: number[];
+    sections: { heading: string; about?: string; period?: string; mentionIds: number[] }[];
     leaveOut?: number[];
   }>({
     stage: "entry",
@@ -582,15 +622,17 @@ async function planEntry(
   const sections = (data.sections ?? [])
     .map((s) => ({ ...s, mentionIds: (s.mentionIds ?? []).filter((id) => valid.has(id)) }))
     .filter((s) => s.heading?.trim());
+  const lead = (data.leadMentionIds ?? []).filter((id) => valid.has(id));
 
   const text =
     sections.length === 0
       ? ""
       : `PLAN (made from all the passages; follow it, merging sections where that reads better):\nSpine: ${data.spine ?? "chronological"}\n` +
+        (lead.length ? `Lead (the inverted pyramid above the first heading rests on these): ${lead.map((id) => `[[m:${id}]]`).join(" ")}\n` : "") +
         sections
           .map(
             (s, i) =>
-              `${i + 1}. ${s.heading.trim()}${s.about ? ` — ${s.about.trim()}` : ""}\n   passages: ${s.mentionIds.map((id) => `[[m:${id}]]`).join(" ") || "(none)"}`
+              `${i + 1}. ${s.heading.trim()}${s.period ? ` (${s.period.trim()})` : ""}${s.about ? ` — ${s.about.trim()}` : ""}\n   passages: ${s.mentionIds.map((id) => `[[m:${id}]]`).join(" ") || "(none)"}`
           )
           .join("\n") +
         ((data.leaveOut ?? []).length ? `\nLeave out: ${(data.leaveOut ?? []).filter((id) => valid.has(id)).map((id) => `[[m:${id}]]`).join(" ")}` : "");

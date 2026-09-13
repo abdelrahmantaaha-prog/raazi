@@ -127,7 +127,10 @@ section("The document is a Word document");
       `<ol><li>One</li></ol>` +
       `<p>Cited again<span data-note="0" contenteditable="false">[1]</span>, and elsewhere` +
       `<span data-note="1" contenteditable="false">[2]</span>.</p>`,
-    [{ text: "Wald, Saudi, Inc., 2018, p. 42." }, { text: "Yergin, The Prize, 1991." }]
+    [
+      { text: "Wald, Saudi, Inc., 2018, p. 42." },
+      { text: "Yergin, The Prize, 1991.", url: "https://example.org/prize?a=1&b=2" },
+    ]
   );
 
   check("headings survive", blocks[0].kind === "heading" && blocks[0].level === 1);
@@ -173,6 +176,19 @@ section("The document is a Word document");
     foot.includes('w:type="separator"') && foot.includes('w:type="continuationSeparator"'));
   check("real notes start at id 2, as the format demands", foot.includes('w:footnote w:id="2"'));
   check("both references are there", foot.includes("Saudi, Inc.") && foot.includes("The Prize"));
+
+  // A note with an address ends in a live link, kept in the part's own
+  // relationships as Word requires; a note without one has no link.
+  check("a note with an address carries a hyperlink", foot.includes('<w:hyperlink r:id="rIdLink1">'));
+  check("the link's text is the address, escaped", foot.includes("https://example.org/prize?a=1&amp;b=2"));
+  check("a note without an address has none", (foot.match(/<w:hyperlink /g) ?? []).length === 1);
+  check("the footnotes part has its own relationships", parts.has("word/_rels/footnotes.xml.rels"));
+  const frels = parts.get("word/_rels/footnotes.xml.rels").data.toString("utf8");
+  check(
+    "which point the link at the address, externally",
+    frels.includes('Id="rIdLink1"') && frels.includes('Target="https://example.org/prize?a=1&amp;b=2"') && frels.includes('TargetMode="External"')
+  );
+  check("and the link style is defined", parts.get("word/styles.xml").data.toString("utf8").includes('w:styleId="Hyperlink"'));
 
   check("every part is well-formed enough to declare itself XML",
     [...parts.values()].every((p) => p.data.toString("utf8", 0, 5) === "<?xml"));

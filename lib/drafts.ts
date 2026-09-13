@@ -438,7 +438,17 @@ export function addCitation(
         .get(draftId) as { m: number }
     ).m ?? -1) + 1;
 
-  const text = c.text?.trim() || renderCitation(c);
+  // A citation of a source from the library carries the source's own address
+  // when it has one, whether or not the caller passed it: the exported
+  // footnote becomes a link a reader can follow, which for an article is the
+  // whole difference between a citation and a claim.
+  let url = c.url?.trim() || null;
+  if (!url && c.source_id) {
+    const s = db().prepare("SELECT url FROM sources WHERE id=?").get(c.source_id) as { url: string | null } | undefined;
+    if (s?.url && /^https?:\/\//i.test(s.url)) url = s.url;
+  }
+
+  const text = c.text?.trim() || renderCitation({ ...c, url });
   if (!text) return citationsFor(draftId);
 
   db()
@@ -455,7 +465,7 @@ export function addCitation(
       c.title ?? null,
       c.year ?? null,
       c.locator ?? null,
-      c.url ?? null,
+      url,
       c.quote ?? null,
       c.source_id ?? null,
       c.mention_id ?? null,

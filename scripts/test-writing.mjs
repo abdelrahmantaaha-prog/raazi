@@ -166,6 +166,30 @@ section("Gathered material is copied, not borrowed");
 }
 
 // ---------------------------------------------------------------------------
+section("A citation of a library source carries the source's address");
+// So the exported footnote is a link a reader can follow.
+{
+  const { addCitation, citationsFor: cites } = await import("../lib/drafts.ts");
+  const draftId = createDraft("Linked");
+  const withUrl = Number(
+    db()
+      .prepare("INSERT INTO sources (title, kind, status, url) VALUES ('A wire story', 'url', 'ready', 'https://example.org/story/1')")
+      .run().lastInsertRowid
+  );
+  const noUrl = Number(
+    db().prepare("INSERT INTO sources (title, kind, status) VALUES ('A book', 'text', 'ready')").run().lastInsertRowid
+  );
+  addCitation(draftId, { origin: "library", text: "A wire story, 2026", source_id: withUrl });
+  addCitation(draftId, { origin: "library", text: "A book, p. 4", source_id: noUrl });
+  addCitation(draftId, { origin: "outside", text: "Something read elsewhere" });
+  const list = cites(draftId);
+  check("the source's address is filled in", list[0].url === "https://example.org/story/1", list[0].url);
+  check("the text as given is kept", list[0].text === "A wire story, 2026");
+  check("a source with no address gets none", list[1].url === null);
+  check("an outside reference is untouched", list[2].url === null);
+  deleteDraft(draftId);
+}
+
 section("A draft body cannot carry anything that runs");
 // ---------------------------------------------------------------------------
 {

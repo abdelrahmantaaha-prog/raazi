@@ -305,6 +305,55 @@ section("A failure while handling a failure does not kill the loop");
   void after;
 }
 
+section("A failed model task is retried on its own, a few times, after a rest");
+// "Network kept failing" is a verdict on an afternoon, not on a passage. An
+// entry that failed to write used to stay failed until someone pressed Retry.
+{
+  const q = await import("../lib/queue.ts");
+  const runId = q.createRun({ kind: "entry", label: "auto-retry test" });
+  q.enqueue(runId, [
+    { kind: "entry", payload: { entityId: 1 } },
+    { kind: "fetch_item", payload: { itemId: 1 } },
+  ]);
+  const ids = db().prepare("SELECT id, kind FROM tasks WHERE run_id=? ORDER BY id").all(runId);
+  const entryId = ids.find((t) => t.kind === "entry").id;
+  const fetchId = ids.find((t) => t.kind === "fetch_item").id;
+
+  // Both fail. Only the model task is retriable; the fetch is not a model's moment.
+  db().prepare("UPDATE tasks SET state='failed', last_error='Network kept failing.' WHERE run_id=?").run(runId);
+  db().prepare("UPDATE runs SET state='failed' WHERE id=?").run(runId);
+  check("a fresh failure is left to rest", q.retryFailedAutomatically() === 0);
+  check("but the worker knows one is owed", q.hasRetryableFailures());
+
+  const age = (id, minutes) =>
+    db().prepare("UPDATE tasks SET updated_at=datetime('now', ?) WHERE id=?").run(`-${minutes} minutes`, id);
+  age(entryId, 40);
+  age(fetchId, 40);
+  check("after half an hour the model task goes back", q.retryFailedAutomatically() === 1);
+  const entry = db().prepare("SELECT state, retries, attempts, last_error FROM tasks WHERE id=?").get(entryId);
+  check("it is pending again with its attempts reset", entry.state === "pending" && entry.attempts === 0);
+  check("and the retry is counted on the row", entry.retries === 1);
+  check("the reason is kept, marked as a retry", /Retried on its own after: Network kept failing/.test(entry.last_error));
+  check("the fetch stays failed", db().prepare("SELECT state FROM tasks WHERE id=?").get(fetchId).state === "failed");
+  check("the run is queued again", q.getRun(runId).state === "queued");
+
+  // Three strikes and it stays failed for a person to look at.
+  for (let i = 0; i < 2; i++) {
+    db().prepare("UPDATE tasks SET state='failed' WHERE id=?").run(entryId);
+    age(entryId, 40);
+    q.retryFailedAutomatically();
+  }
+  db().prepare("UPDATE tasks SET state='failed' WHERE id=?").run(entryId);
+  age(entryId, 40);
+  check("the limit is three", db().prepare("SELECT retries FROM tasks WHERE id=?").get(entryId).retries === 3);
+  check("a fourth failure is not retried", q.retryFailedAutomatically() === 0);
+  check(
+    "and this run owes nothing more",
+    db().prepare("SELECT COUNT(*) AS n FROM tasks WHERE run_id=? AND kind='entry' AND state='failed' AND retries < 3").get(runId).n === 0
+  );
+  check("a person's Retry still works", q.retryFailedTasks(runId) === 2);
+}
+
 section("Runs you paused stay paused");
 {
   const q = await import("../lib/queue.ts");

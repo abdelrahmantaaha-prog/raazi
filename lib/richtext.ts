@@ -19,6 +19,9 @@ import type { DocxBlock, DocxNote, DocxRun } from "./docx";
 export interface Citation {
   /** The rendered note, e.g. "Wald, Saudi, Inc., 2018, p. 142." */
   text: string;
+  /** The source's own address, when it has one: the exported footnote ends
+   *  in a link to it. */
+  url?: string | null;
 }
 
 const BLOCK_TAGS = /^(p|h1|h2|h3|blockquote|li|div)$/i;
@@ -157,7 +160,7 @@ export function htmlToDocx(
             let note = noteOf.get(index);
             if (note === undefined) {
               note = notes.length;
-              notes.push({ text: citation.text });
+              notes.push({ text: citation.text, url: citation.url ?? null });
               noteOf.set(index, note);
             }
             runs.push({ note });

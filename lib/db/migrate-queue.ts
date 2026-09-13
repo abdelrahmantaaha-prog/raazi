@@ -36,6 +36,12 @@ export function migrateQueue(db: Database.Database) {
   // can show it.
   addColumn(db, "tasks", "model", "TEXT");
 
+  // How many times a failed task has been put back on its own (2026-09-13).
+  // A network that kept failing, a provider that was out: the failure was
+  // the moment's, not the task's, and the worker now tries again later by
+  // itself — a few times, counted here so it cannot go on forever.
+  addColumn(db, "tasks", "retries", "INTEGER NOT NULL DEFAULT 0");
+
   // The same on what the model wrote. A revision outlives the task that made
   // it and the run the task sat in, and "which version of which model wrote
   // this draft" is a question that comes up long after either is listed.

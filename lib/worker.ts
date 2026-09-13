@@ -14,7 +14,9 @@ import {
   failTask,
   hasDeferredTasks,
   hasParkedRuns,
+  hasRetryableFailures,
   nextDueAt,
+  retryFailedAutomatically,
   noteTaskModel,
   overBudget,
   pauseRun,
@@ -41,6 +43,7 @@ declare global {
         sweptAt?: number;
         polledAt?: number;
         briefedAt?: number;
+        retriedAt?: number;
       }
     | undefined;
 }
@@ -337,6 +340,12 @@ export async function startWorker(override?: Record<string, Handler>): Promise<v
       const task = claimNext();
 
       if (!task) {
+        // Failures that have rested long enough go back on their own — an
+        // entry that would not write at three because the provider was out is
+        // not an entry that cannot be written. Before anything new is queued,
+        // so the retry is what fills the quiet rather than a re-sweep.
+        if (sweepFailed()) continue;
+
         // The queue is empty. Before standing down, catch any entries left out
         // of date by something other than an ingest — a merge you made by hand,
         // a source you removed, or a run that was interrupted before its
@@ -450,7 +459,9 @@ export function scheduleWake(): void {
   // loop swept them once and stood down, and an "hourly" feed was checked at
   // the morning hour or whenever a page you opened happened to kick the
   // worker. That was the morning with no scan.
-  const waiting = hasParkedRuns() || hasDeferredTasks();
+  // A failed task owed a retry is something to wake for too: the ten-minute
+  // ceiling below is what brings the worker back to put it on.
+  const waiting = hasParkedRuns() || hasDeferredTasks() || hasRetryableFailures();
   const feedDue = getConfig().feedPolling ? nextFeedDueAt() : undefined;
   if (!waiting && !feedDue) return;
 
@@ -506,6 +517,22 @@ function sweepStaleEntries(): boolean {
 
   s.idleSince = Date.now();
   console.log(`[corpus] refreshing ${queued.queued} out-of-date entr${queued.queued === 1 ? "y" : "ies"}`);
+  return true;
+}
+
+/**
+ * Puts failed model tasks back after they have rested. Once per quiet
+ * spell, and only ever a handful of times per task — see
+ * retryFailedAutomatically for the rule.
+ */
+function sweepFailed(): boolean {
+  const s = state();
+  if (s.retriedAt && Date.now() - s.retriedAt < 5 * 60_000) return false;
+  s.retriedAt = Date.now();
+  const n = retryFailedAutomatically();
+  if (!n) return false;
+  s.idleSince = Date.now();
+  console.log(`[corpus] retrying ${n} failed task${n === 1 ? "" : "s"} on its own`);
   return true;
 }
 
