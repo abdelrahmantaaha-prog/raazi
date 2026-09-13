@@ -868,9 +868,7 @@ export function WritingDesk({
                     <ul className="space-y-2">
                       {notes.map((n) => (
                         <li key={n.id} className="rounded border border-[var(--color-rule)] p-2 text-sm">
-                          <p className="italic" dir={dirOf(n.text)}>
-                            “{truncate(n.text, 180)}”
-                          </p>
+                          <Quote text={n.text} limit={180} />
                           {n.citation && (
                             <p className="mt-1 text-xs text-[var(--color-muted)]">{n.citation}</p>
                           )}
@@ -943,9 +941,7 @@ export function WritingDesk({
                         key={h.id}
                         className="rounded-lg border border-[var(--color-rule)] bg-white p-3 text-sm"
                       >
-                        <p className="italic" dir={dirOf(h.quote)}>
-                          “{truncate(h.quote, 240)}”
-                        </p>
+                        <Quote text={h.quote} limit={240} />
                         {h.context && (
                           <p className="mt-1 text-xs text-[var(--color-muted)]">
                             <span className="font-medium">Refers to:</span> {h.context}
@@ -1083,6 +1079,32 @@ function rank(v: Verdict["verdict"]): number {
 
 function escapeHtml(s: string): string {
   return s.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
+}
+
+/**
+ * A quote on the shelf, shortened to a few lines with the rest one click
+ * away. It used to be cut at the limit with no way back to the whole — and
+ * the whole is what you gathered it for.
+ */
+function Quote({ text, limit }: { text: string; limit: number }) {
+  const [open, setOpen] = useState(false);
+  const long = text.length > limit;
+  return (
+    <div>
+      <p className="whitespace-pre-wrap italic" dir={dirOf(text)}>
+        “{open || !long ? text : truncate(text, limit)}”
+      </p>
+      {long && (
+        <button
+          type="button"
+          onClick={() => setOpen((v) => !v)}
+          className="mt-0.5 text-xs text-[var(--color-muted)] hover:text-[var(--color-accent)] hover:underline"
+        >
+          {open ? "Show less" : `Show all (${text.split(/\s+/).filter(Boolean).length} words)`}
+        </button>
+      )}
+    </div>
+  );
 }
 
 /** The editor stores HTML; direction and word counts want the words. */
