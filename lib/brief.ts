@@ -280,6 +280,51 @@ export function getBrief(day: string): BriefRow | undefined {
   return db().prepare("SELECT * FROM briefs WHERE day=?").get(day) as BriefRow | undefined;
 }
 
+/**
+ * Where the last daily brief stopped reading, if there was one.
+ *
+ * A brief covers the hours since the one before it rather than a fixed day,
+ * because a Friday off must not cost you Friday's reading: Monday's brief
+ * opens where Thursday's closed, and everything kept in between is in it.
+ *
+ * Only finished daily briefs count, and only ones dated before the day being
+ * written — so rewriting today's brief still looks back past today's own row
+ * rather than starting where it already ended, which would brief on nothing.
+ */
+export function coveredThrough(beforeDay: string): Date | undefined {
+  const row = db()
+    .prepare(
+      `SELECT window_to FROM briefs
+        WHERE kind='day' AND state='done' AND window_to IS NOT NULL AND day < ?
+        ORDER BY day DESC LIMIT 1`
+    )
+    .get(beforeDay) as { window_to: string } | undefined;
+  if (!row) return undefined;
+  const d = new Date(row.window_to);
+  return Number.isNaN(d.getTime()) ? undefined : d;
+}
+
+/** The furthest back a brief will reach when days have been missed. A
+ *  fortnight away should not produce one brief covering a fortnight. */
+export const MAX_BRIEF_LOOKBACK_DAYS = 14;
+
+/**
+ * When a day's brief starts reading.
+ *
+ * The configured window is a minimum rather than the rule: whatever the last
+ * brief did not reach is this one's to cover. Take Friday off and Monday's
+ * brief opens where Thursday's closed, so nothing you kept goes unbriefed.
+ * The minimum still holds the other way, so a brief rewritten twice in one
+ * morning looks back the configured hours rather than at the twenty minutes
+ * since the last attempt.
+ */
+export function dayWindowFrom(to: Date, hours: number, coveredTo?: Date): Date {
+  const configured = new Date(to.getTime() - Math.max(1, hours) * 3600_000);
+  const floor = new Date(to.getTime() - MAX_BRIEF_LOOKBACK_DAYS * 24 * 3600_000);
+  const start = coveredTo && coveredTo.getTime() < configured.getTime() ? coveredTo : configured;
+  return start.getTime() < floor.getTime() ? floor : start;
+}
+
 export function latestBrief(): BriefRow | undefined {
   return db().prepare("SELECT * FROM briefs WHERE kind='day' ORDER BY day DESC LIMIT 1").get() as
     | BriefRow

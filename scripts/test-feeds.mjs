@@ -419,6 +419,59 @@ section("The brief is a query, not a summary");
   check("today's key is a local calendar day", /^\d{4}-\d{2}-\d{2}$/.test(brief.todayKey()));
 }
 
+/* ------------------------------------------------- a day off costs nothing */
+
+section("A brief starts where the last one stopped");
+// Take Friday off and Monday's brief must still carry Friday's reading. The
+// configured window is a minimum, not the rule.
+{
+  const at = new Date("2026-09-14T09:00:00.000Z"); // a Monday
+  const back = (h) => new Date(at.getTime() - h * 3600_000);
+  const H = 24;
+
+  check(
+    "with no brief before it, the configured window stands",
+    brief.dayWindowFrom(at, H).getTime() === back(24).getTime()
+  );
+  check(
+    "a brief that stopped three days ago is where this one starts",
+    brief.dayWindowFrom(at, H, back(72)).getTime() === back(72).getTime()
+  );
+  check(
+    "the configured window is a floor, so a rewrite still looks back a day",
+    brief.dayWindowFrom(at, H, back(0.5)).getTime() === back(24).getTime()
+  );
+  check(
+    "and it never reaches back further than a fortnight",
+    brief.dayWindowFrom(at, H, back(40 * 24)).getTime() === back(14 * 24).getTime()
+  );
+
+  const mk = (day, kind, state, to) =>
+    db()
+      .prepare("INSERT INTO briefs (day, kind, state, window_from, window_to) VALUES (?, ?, ?, ?, ?)")
+      .run(day, kind, state, "2026-09-01T09:00:00.000Z", to);
+  mk("2026-09-10", "day", "done", "2026-09-10T09:00:00.000Z");
+  mk("2026-09-11", "day", "pending", "2026-09-11T09:00:00.000Z");
+  mk("2026-W37", "week", "done", "2026-09-12T09:00:00.000Z");
+
+  check(
+    "the last finished daily brief is the one it follows",
+    brief.coveredThrough("2026-09-14")?.toISOString() === "2026-09-10T09:00:00.000Z",
+    String(brief.coveredThrough("2026-09-14"))
+  );
+  check(
+    "an unfinished brief covered nothing, so it is not followed",
+    brief.coveredThrough("2026-09-12")?.toISOString() === "2026-09-10T09:00:00.000Z"
+  );
+  check("a brief never starts where it itself ended", brief.coveredThrough("2026-09-10") === undefined);
+  check(
+    "and a weekly brief is not what a daily one follows",
+    brief.coveredThrough("2026-09-13")?.toISOString() === "2026-09-10T09:00:00.000Z"
+  );
+
+  db().prepare("DELETE FROM briefs WHERE day IN ('2026-09-10','2026-09-11','2026-W37')").run();
+}
+
 /* ------------------------------------------------------- the queue */
 
 section("Checking the feeds comes before chunking and parsing articles");

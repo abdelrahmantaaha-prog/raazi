@@ -9,7 +9,7 @@ each, with every sentence traceable to a quote at a page number. Add another
 source next month and the existing entries revise themselves, and tell you what
 changed.
 
-Every morning it hands you a brief: what came in overnight about the subjects you
+Every morning it hands you a brief: what came in since the last one about the subjects you
 watch, which outlets carried it, where they disagree, and which entries changed.
 Every line in it opens the passage it rests on.
 

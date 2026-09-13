@@ -3,7 +3,16 @@ import { db, tx } from "../db";
 import { generateJson } from "../ai/client";
 import { getConfig } from "../config";
 import { createRun, enqueue, finishTask } from "../queue";
-import { gather, getBrief, hasMaterial, todayKey, type BriefMaterial, type BriefPassage } from "../brief";
+import {
+  coveredThrough,
+  dayWindowFrom,
+  gather,
+  getBrief,
+  hasMaterial,
+  todayKey,
+  type BriefMaterial,
+  type BriefPassage,
+} from "../brief";
 import { describeWeek, isWeekKey, weekKey, weekRange } from "../week";
 import { normaliseMarkers } from "../markers";
 import { logCalendar } from "../calendar";
@@ -246,12 +255,14 @@ export async function handleBrief(task: Task): Promise<void> {
   const key = day ?? todayKey();
   const free = { tokensIn: 0, tokensOut: 0 };
 
-  // A week's key carries its own window; a day's is the last N hours, because
-  // "today" for someone who opens the app at nine means since yesterday.
+  // A week's key carries its own window. A day's runs from wherever the last
+  // brief stopped reading, with the configured hours as its minimum: "today"
+  // for someone who opens the app at nine means since yesterday, and for
+  // someone who took Friday off it means since Thursday. See dayWindowFrom.
   const week = isWeekKey(key);
   const range = week ? weekRange(key) : null;
   const to = range ? new Date(Math.min(Date.now(), range.to.getTime())) : new Date();
-  const from = range ? range.from : new Date(to.getTime() - (hours ?? 24) * 3600_000);
+  const from = range ? range.from : dayWindowFrom(to, hours ?? 24, coveredThrough(key));
   const m = gather(from, to, week ? { perWatch: 30, maxOther: 150 } : {});
 
   // Every date these sources mention goes on the watching calendar before a
