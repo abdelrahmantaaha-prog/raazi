@@ -53,20 +53,25 @@ const DATA_DIR = process.env.CORPUS_DATA_DIR
 const CONFIG_PATH = path.join(DATA_DIR, "config.json");
 
 /** Cached by the file's mtime, so a request costs one stat rather than a parse. */
-let cache: { mtimeMs: number; store: LanStore } | null = null;
+// Keyed on size as well as mtime: NTFS stamps files at a coarse resolution,
+// so two writes a few milliseconds apart can carry the same mtime, and the
+// second was being read as the first. Writes from this module also drop the
+// cache outright, since they know the file changed.
+let cache: { stamp: string; store: LanStore } | null = null;
 
 function store(): LanStore {
-  let mtimeMs: number;
+  let stamp: string;
   try {
-    mtimeMs = fs.statSync(CONFIG_PATH).mtimeMs;
+    const st = fs.statSync(CONFIG_PATH);
+    stamp = `${st.mtimeMs}:${st.size}`;
   } catch {
     cache = null;
     return {};
   }
-  if (cache && cache.mtimeMs === mtimeMs) return cache.store;
+  if (cache && cache.stamp === stamp) return cache.store;
   try {
     const parsed = JSON.parse(fs.readFileSync(CONFIG_PATH, "utf8")) as LanStore;
-    cache = { mtimeMs, store: parsed };
+    cache = { stamp, store: parsed };
     return parsed;
   } catch {
     // Unreadable. lib/config-file quarantines it on its next read; here the
@@ -104,6 +109,7 @@ export async function ensureLanToken(): Promise<string> {
   if (typeof s.lan?.token === "string" && s.lan.token.length >= 32) return s.lan.token;
   const token = crypto.randomBytes(32).toString("hex");
   writeStore({ ...s, lan: { ...(s.lan ?? {}), token } });
+  cache = null;
   return token;
 }
 
@@ -112,6 +118,7 @@ export async function setLanEnabled(enabled: boolean): Promise<LanSettings> {
   const { readStore, writeStore } = await import("./config-file");
   const s = readStore<LanStore>();
   writeStore({ ...s, lan: { ...(s.lan ?? {}), enabled } });
+  cache = null;
   if (enabled) await ensureLanToken();
   return lanSettings();
 }

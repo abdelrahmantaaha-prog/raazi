@@ -124,6 +124,20 @@ export function WritingDesk({
   const [checkError, setCheckError] = useState<string | null>(null);
   const [pane, setPane] = useState<"sources" | "check">("sources");
 
+  // ---- logging a quote by hand -------------------------------------------
+  //
+  // The shelf used to fill only from the pane's search. A quote you have in
+  // front of you — copied from a PDF, a printout, a page open in the browser —
+  // had no way on except through the editor. Now it is pasted here and tied to
+  // a citation: a source from the library, chosen by name, or a reference
+  // typed for something read elsewhere.
+  const [logOpen, setLogOpen] = useState(false);
+  const [logText, setLogText] = useState("");
+  const [logCite, setLogCite] = useState("");
+  const [logSource, setLogSource] = useState<{ id: number; title: string } | null>(null);
+  const [sourceQ, setSourceQ] = useState("");
+  const [library, setLibrary] = useState<{ id: number; title: string; author: string | null; year: string | null; outlet: string | null }[] | null>(null);
+
   const saveTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
   /** The title and body as last written to disk, so a no-op is never saved. */
   const lastSaved = useRef<{ id: number | null; title: string; body: string }>({
@@ -185,6 +199,29 @@ export function WritingDesk({
   useEffect(() => {
     if (openDraft && openDraft !== idRef.current) void open(openDraft);
   }, [openDraft, open]);
+
+  // A passage sent from the reader in another tab lands on the shelf while
+  // this page is open. Coming back to the tab re-reads the shelf — only the
+  // shelf, never the body, which may hold what you were typing.
+  useEffect(() => {
+    const refresh = async () => {
+      const draftId = idRef.current;
+      if (draftId === null || document.visibilityState !== "visible") return;
+      try {
+        const res = await fetch(`/api/drafts/${draftId}`, { cache: "no-store" });
+        const data = res.ok ? await res.json() : null;
+        if (data?.notes && idRef.current === draftId) setNotes(data.notes);
+      } catch {
+        /* the shelf as it was is still the shelf */
+      }
+    };
+    window.addEventListener("focus", refresh);
+    document.addEventListener("visibilitychange", refresh);
+    return () => {
+      window.removeEventListener("focus", refresh);
+      document.removeEventListener("visibilitychange", refresh);
+    };
+  }, []);
 
   // ---- saving ------------------------------------------------------------
 
@@ -332,6 +369,58 @@ export function WritingDesk({
         }),
       });
       setNotes(await listFrom<Note>(res, "notes"));
+    } catch (err) {
+      setPaneError((err as Error).message);
+    }
+  };
+
+  /** The library, for the source picker; fetched once, the first time the form opens. */
+  const openLog = async () => {
+    setLogOpen(true);
+    if (library) return;
+    try {
+      const res = await fetch("/api/sources", { cache: "no-store" });
+      const data = res.ok ? await res.json() : { sources: [] };
+      setLibrary(
+        (data.sources ?? []).map((s: { id: number; title: string; author: string | null; year: string | null; outlet: string | null }) => ({
+          id: s.id,
+          title: s.title,
+          author: s.author,
+          year: s.year,
+          outlet: s.outlet,
+        }))
+      );
+    } catch {
+      setLibrary([]);
+    }
+  };
+
+  const pickSource = (s: { id: number; title: string; author: string | null; year: string | null; outlet: string | null }) => {
+    setLogSource({ id: s.id, title: s.title });
+    // A citation the way the shelf's other lines read; editable before it is kept.
+    setLogCite([s.author, s.title, s.outlet && s.outlet !== s.author ? s.outlet : null, s.year].filter(Boolean).join(", "));
+    setSourceQ("");
+  };
+
+  const logQuote = async () => {
+    if (id === null || !logText.trim()) return;
+    setPaneError(null);
+    try {
+      const res = await fetch(`/api/drafts/${id}/notes`, {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({
+          text: logText.trim(),
+          kind: "quote",
+          citation: logCite.trim() || undefined,
+          sourceId: logSource?.id,
+        }),
+      });
+      setNotes(await listFrom<Note>(res, "notes"));
+      setLogText("");
+      setLogCite("");
+      setLogSource(null);
+      setLogOpen(false);
     } catch (err) {
       setPaneError((err as Error).message);
     }
@@ -657,6 +746,120 @@ export function WritingDesk({
                   Word matching over every passage and entry. No model involved.
                 </p>
 
+                {/* ---- a quote you have in front of you ---- */}
+                {!logOpen ? (
+                  <button
+                    type="button"
+                    onClick={() => void openLog()}
+                    disabled={id === null}
+                    className="w-full rounded-lg border border-dashed border-[var(--color-rule)] px-3 py-2 text-left text-sm text-[var(--color-muted)] transition hover:border-[var(--color-accent)] hover:text-[var(--color-ink)] disabled:opacity-40"
+                    title="Paste a quote and tie it to a citation"
+                  >
+                    + Log a quote or a source
+                  </button>
+                ) : (
+                  <div className="space-y-2 rounded-lg border border-[var(--color-accent)]/50 bg-white p-3">
+                    <h3 className="text-xs font-medium uppercase tracking-[0.12em] text-[var(--color-muted)]">
+                      Log a quote
+                    </h3>
+                    <textarea
+                      autoFocus
+                      value={logText}
+                      onChange={(e) => setLogText(e.target.value)}
+                      rows={4}
+                      placeholder="Paste the quote…"
+                      dir={dirOf(logText)}
+                      className="w-full rounded border border-[var(--color-rule)] p-2 text-sm outline-none focus:border-[var(--color-accent)]"
+                    />
+                    <div className="space-y-1">
+                      <label className="block text-[0.7rem] text-[var(--color-muted)]">
+                        Tie it to a source in the library
+                      </label>
+                      {logSource ? (
+                        <p className="flex items-center gap-2 text-xs">
+                          <span className="rounded bg-[var(--color-accent-soft)] px-1.5 py-0.5">{truncate(logSource.title, 60)}</span>
+                          <button
+                            type="button"
+                            className="text-[var(--color-muted)] hover:underline"
+                            onClick={() => {
+                              setLogSource(null);
+                              setLogCite("");
+                            }}
+                          >
+                            change
+                          </button>
+                        </p>
+                      ) : (
+                        <>
+                          <input
+                            value={sourceQ}
+                            onChange={(e) => setSourceQ(e.target.value)}
+                            placeholder={library === null ? "Loading the library…" : "Type part of a title or author…"}
+                            className="w-full rounded border border-[var(--color-rule)] px-2 py-1 text-sm outline-none focus:border-[var(--color-accent)]"
+                          />
+                          {sourceQ.trim().length >= 2 && library ? (
+                            <ul className="max-h-36 divide-y divide-[var(--color-rule)] overflow-y-auto rounded border border-[var(--color-rule)] text-xs">
+                              {library
+                                .filter((s) => `${s.title} ${s.author ?? ""} ${s.outlet ?? ""}`.toLowerCase().includes(sourceQ.trim().toLowerCase()))
+                                .slice(0, 8)
+                                .map((s) => (
+                                  <li key={s.id}>
+                                    <button
+                                      type="button"
+                                      onClick={() => pickSource(s)}
+                                      className="block w-full px-2 py-1 text-left hover:bg-[var(--color-accent-soft)]/50"
+                                    >
+                                      <span className="block truncate">{s.title}</span>
+                                      <span className="block text-[var(--color-muted)]">
+                                        {[s.author, s.outlet, s.year].filter(Boolean).join(" · ")}
+                                      </span>
+                                    </button>
+                                  </li>
+                                ))}
+                            </ul>
+                          ) : null}
+                        </>
+                      )}
+                    </div>
+                    <div className="space-y-1">
+                      <label className="block text-[0.7rem] text-[var(--color-muted)]">
+                        {logSource ? "Citation, as it will read" : "Or type the citation — a book read elsewhere, a page, a broadcast"}
+                      </label>
+                      <input
+                        value={logCite}
+                        onChange={(e) => setLogCite(e.target.value)}
+                        placeholder="Author, Title, Year, page"
+                        className="w-full rounded border border-[var(--color-rule)] px-2 py-1 text-sm outline-none focus:border-[var(--color-accent)]"
+                      />
+                    </div>
+                    <div className="flex items-center gap-3 text-xs">
+                      <button
+                        type="button"
+                        disabled={!logText.trim()}
+                        onClick={() => void logQuote()}
+                        className="rounded-full bg-[var(--color-accent)] px-3 py-1 text-white disabled:opacity-30"
+                      >
+                        Put it on the shelf
+                      </button>
+                      <button
+                        type="button"
+                        className="text-[var(--color-muted)] hover:underline"
+                        onClick={() => {
+                          setLogOpen(false);
+                          setLogText("");
+                          setLogCite("");
+                          setLogSource(null);
+                        }}
+                      >
+                        Cancel
+                      </button>
+                      <span className="ml-auto text-[var(--color-muted)]">
+                        {logText.trim() ? `${logText.trim().split(/\s+/).length} words` : ""}
+                      </span>
+                    </div>
+                  </div>
+                )}
+
                 {notes.length > 0 && (
                   <div className="rounded-lg border border-[var(--color-rule)] bg-white p-3">
                     <h3 className="mb-2 text-xs font-medium uppercase tracking-[0.12em] text-[var(--color-muted)]">
@@ -680,6 +883,22 @@ export function WritingDesk({
                             >
                               Insert
                             </button>
+                            {n.citation && (
+                              <button
+                                className="text-[var(--color-muted)] hover:underline"
+                                title="Add this to your references and cite it where the cursor is"
+                                onClick={() =>
+                                  void cite({
+                                    origin: n.source_id ? "library" : "outside",
+                                    text: n.citation ?? "",
+                                    quote: n.text,
+                                    sourceId: n.source_id ?? undefined,
+                                  })
+                                }
+                              >
+                                Cite
+                              </button>
+                            )}
                             <button
                               className="text-[var(--color-muted)] hover:underline"
                               onClick={() => void drop(n.id)}

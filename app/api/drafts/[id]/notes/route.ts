@@ -8,7 +8,7 @@ import {
   queryId,
   readBody,
 } from "@/lib/http";
-import { addNote, getDraft, removeNote, reorderNotes } from "@/lib/drafts";
+import { addNote, citationForSource, getDraft, removeNote, reorderNotes } from "@/lib/drafts";
 
 export const dynamic = "force-dynamic";
 
@@ -51,11 +51,17 @@ export async function POST(req: Request, ctx: { params: Promise<{ id: string }> 
 
   if (!getDraft(id)) return notFound("No such draft.");
 
+  // A passage sent from the reader names its source and its place but not a
+  // citation; one is rendered here, the same way the desk's search renders
+  // its hits, so the two read alike at the foot of the page.
+  const cited =
+    citation?.trim() || (refs.sourceId ? citationForSource(refs.sourceId, refs.chunkId ?? null) : null);
+
   try {
     const notes = addNote(id, {
       text: text.trim(),
       kind,
-      citation: citation ?? null,
+      citation: cited ?? null,
       entity_id: refs.entityId ?? null,
       mention_id: refs.mentionId ?? null,
       chunk_id: refs.chunkId ?? null,

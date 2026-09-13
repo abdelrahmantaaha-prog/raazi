@@ -186,17 +186,22 @@ export function heldCount(): number {
 }
 
 /** What was decided in a window, for the week page and its counts. */
-export function decidedBetween(from: Date, to: Date): { kept: number; discarded: number } {
+export function decidedBetween(from: Date, to: Date): { kept: number; filed: number; discarded: number } {
   const row = db()
     .prepare(
       `SELECT
          SUM(CASE WHEN state='kept'      THEN 1 ELSE 0 END) AS kept,
+         SUM(CASE WHEN state='filed'     THEN 1 ELSE 0 END) AS filed,
          SUM(CASE WHEN state='discarded' THEN 1 ELSE 0 END) AS discarded
          FROM feed_items
-        WHERE decided_at >= ? AND decided_at < ?`
+        WHERE datetime(decided_at) >= datetime(?) AND datetime(decided_at) < datetime(?)`
+      // Both sides through datetime(): decided_at is SQLite's own "YYYY-MM-DD
+      // HH:MM:SS" and the bounds arrive as ISO with a T, and compared as text a
+      // space sorts before a T — so anything decided on the window's first day
+      // used to fall outside it.
     )
-    .get(from.toISOString(), to.toISOString()) as { kept: number | null; discarded: number | null };
-  return { kept: row.kept ?? 0, discarded: row.discarded ?? 0 };
+    .get(from.toISOString(), to.toISOString()) as { kept: number | null; filed: number | null; discarded: number | null };
+  return { kept: row.kept ?? 0, filed: row.filed ?? 0, discarded: row.discarded ?? 0 };
 }
 
 /**
@@ -256,6 +261,35 @@ export function keep(itemIds: number[]): {
   /** Refused for having nothing to read. Paste the article and keep it again. */
   refused: { id: number; title: string }[];
 } {
+  const r = admit(itemIds, "kept");
+  return { kept: r.admitted, runId: r.runId, refused: r.refused };
+}
+
+/**
+ * Says yes to an item for the library, and no for the brief.
+ *
+ * The same reading as keep — the article is read, its people and places get
+ * entries, it is filed under its topics and grouped with its story — but the
+ * source is marked `filed` rather than `kept`, and everything that builds the
+ * brief (the day's and the week's material, the watching calendar, the
+ * watchlist's recent counts) takes only `kept`. For the piece that belongs
+ * in the pedia and not in the morning: a French election, a book review, a
+ * beat you follow but do not present from.
+ */
+export function file(itemIds: number[]): {
+  filed: number;
+  runId: number | null;
+  refused: { id: number; title: string }[];
+} {
+  const r = admit(itemIds, "filed");
+  return { filed: r.admitted, runId: r.runId, refused: r.refused };
+}
+
+/** What keep and file share: everything but the word written on the source. */
+function admit(
+  itemIds: number[],
+  verdict: "kept" | "filed"
+): { admitted: number; runId: number | null; refused: { id: number; title: string }[] } {
   const all = pick(itemIds, "held");
   const refused = all
     .filter((i) => {
@@ -264,27 +298,30 @@ export function keep(itemIds: number[]): {
     })
     .map((i) => ({ id: i.id, title: i.title }));
   const items = all.filter((i) => !refused.some((r) => r.id === i.id));
-  if (!items.length) return { kept: 0, runId: null, refused };
+  if (!items.length) return { admitted: 0, runId: null, refused };
 
   return tx(() => {
     let read: number | null = null;
     const runId = createRun({
       kind: "ingest",
-      label: items.length === 1 ? items[0].title : `Reading ${items.length} articles you kept`,
+      label:
+        items.length === 1
+          ? items[0].title
+          : `Reading ${items.length} articles you ${verdict === "kept" ? "kept" : "filed"}`,
       budgetCap: getConfig().defaultBudget,
     });
 
     for (const item of items) {
       db()
-        .prepare(
-          "UPDATE feed_items SET state='kept', decided_at=datetime('now'), note=NULL WHERE id=?"
-        )
-        .run(item.id);
+        .prepare("UPDATE feed_items SET state=?, decided_at=datetime('now'), note=NULL WHERE id=?")
+        .run(verdict, item.id);
       if (item.source_id === null) continue;
 
+      // kept_at is set either way: it is the date the source entered the
+      // library, which is what the shelf orders by. The brief reads the word.
       db()
-        .prepare("UPDATE sources SET triage='kept', kept_at=datetime('now') WHERE id=?")
-        .run(item.source_id);
+        .prepare("UPDATE sources SET triage=?, kept_at=datetime('now') WHERE id=?")
+        .run(verdict, item.source_id);
 
       const tagged = (
         db().prepare("SELECT tagged_at FROM sources WHERE id=?").get(item.source_id) as
@@ -308,7 +345,7 @@ export function keep(itemIds: number[]): {
     // over and produce ten chances to merge the same pair.
     if (read !== null) appendReadingTail(runId, read);
 
-    return { kept: items.length, runId, refused };
+    return { admitted: items.length, runId, refused };
   });
 }
 

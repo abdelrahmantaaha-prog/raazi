@@ -126,6 +126,22 @@ export function IconSync(p: IconProps) {
   ]);
 }
 
+/** File: into the library, not the brief — a box with its lid. */
+export function IconShelf(p: IconProps) {
+  return svg(p, [
+    <path key="a" d="M3 8h18v12a1 1 0 0 1-1 1H4a1 1 0 0 1-1-1V8Z" />,
+    <path key="b" d="M2 5a1 1 0 0 1 1-1h18a1 1 0 0 1 1 1v3H2V5ZM10 12h4" />,
+  ]);
+}
+
+/** Send: a paper plane, for handing a passage to the writing desk. */
+export function IconSend(p: IconProps) {
+  return svg(p, [
+    <path key="a" d="M21 3 3 10.5l8 2.5 2.5 8L21 3Z" />,
+    <path key="b" d="M11 13 21 3" />,
+  ]);
+}
+
 /** Close: a small cross for dismissing a line. */
 export function IconDismiss(p: IconProps) {
   return svg({ size: 14, ...p }, <path d="M7 7l10 10M17 7 7 17" />);

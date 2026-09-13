@@ -1,5 +1,8 @@
 import { db } from "./db";
 import { htmlToText } from "./richtext";
+import { formatCitation } from "./citation";
+import { formatLocator } from "./chunk";
+import type { Locator } from "./types";
 
 /**
  * Drafts, and the material gathered beside them.
@@ -120,6 +123,36 @@ export function saveDraft(
 
 export function deleteDraft(id: number): void {
   db().prepare("DELETE FROM drafts WHERE id=?").run(id);
+}
+
+/**
+ * The citation a passage from the library carries when nothing supplied one:
+ * the source's author, title and year, and the place in it, rendered the way
+ * the desk's own search renders a hit — so a passage sent from the reader and
+ * a quote found from the desk read the same at the foot of the page.
+ */
+export function citationForSource(sourceId: number, chunkId?: number | null): string | null {
+  const s = db()
+    .prepare("SELECT title, author, year FROM sources WHERE id=?")
+    .get(sourceId) as { title: string; author: string | null; year: string | null } | undefined;
+  if (!s) return null;
+  let locator = "";
+  if (chunkId) {
+    const c = db()
+      .prepare(
+        `SELECT c.locator_json, d.label AS doc_label FROM chunks c
+      LEFT JOIN documents d ON d.id = c.doc_id WHERE c.id=? AND c.source_id=?`
+      )
+      .get(chunkId, sourceId) as { locator_json: string; doc_label: string | null } | undefined;
+    if (c) {
+      try {
+        locator = formatLocator(JSON.parse(c.locator_json) as Locator, c.doc_label);
+      } catch {
+        locator = "";
+      }
+    }
+  }
+  return formatCitation({ author: s.author, title: s.title, year: s.year, locator });
 }
 
 export function notesFor(draftId: number): DraftNote[] {

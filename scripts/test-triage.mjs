@@ -131,6 +131,48 @@ section("Nothing is read until you say so");
   );
 }
 
+section("Filed is in the library and out of the brief");
+// A French election, a book review, a beat you follow but do not present
+// from: read like anything kept, filed under its topics, its people given
+// entries — and never in the morning.
+{
+  const f = mkHeld({ title: "Élections législatives: le second tour", feedId });
+  const before = (db().prepare("SELECT COUNT(*) n FROM tasks WHERE kind='extract'").get()).n;
+  const filed = triage.file([f.itemId]);
+  check("filing one reports it", filed.filed === 1 && typeof filed.runId === "number");
+  check(
+    "and queues its passages to be read, exactly as keep does",
+    (db().prepare("SELECT COUNT(*) n FROM tasks WHERE kind='extract'").get()).n === before + 1
+  );
+  const src = db().prepare("SELECT triage, kept_at FROM sources WHERE id=?").get(f.sourceId);
+  check("the source says it was filed, not kept", src.triage === "filed");
+  check("with the date it entered the library", Boolean(src.kept_at));
+  check(
+    "the item is decided",
+    (db().prepare("SELECT state, decided_at FROM feed_items WHERE id=?").get(f.itemId)).state === "filed"
+  );
+  check("it has left the inbox", !triage.listHeld().some((i) => i.id === f.itemId));
+  check("filing cannot be undone from the inbox, like keeping", triage.undo([f.itemId]).restored === 0);
+
+  const now = new Date();
+  const counts = triage.decidedBetween(new Date(now.getTime() - 3600_000), new Date(now.getTime() + 3600_000));
+  check("the week counts it as filed, not kept", counts.filed >= 1);
+
+  // The brief's own window rule, as written in lib/brief.ts: only 'kept'.
+  const brief = await import("../lib/brief.ts");
+  const material = brief.gather(new Date(now.getTime() - 3600_000), new Date(now.getTime() + 3600_000));
+  check(
+    "the brief does not gather it",
+    !material.other.some((p) => p.source_id === f.sourceId) &&
+      !material.watched.some((w) => w.passages.some((p) => p.source_id === f.sourceId))
+  );
+
+  const stub = mkHeld({ title: "A headline only", feedId });
+  db().prepare("UPDATE chunks SET text='Too short.' WHERE source_id=?").run(stub.sourceId);
+  const refused = triage.file([stub.itemId]);
+  check("a headline cannot be filed either", refused.filed === 0 && refused.refused.length === 1);
+}
+
 /* --------------------------------------------------------------- the week */
 
 section("The week runs Friday to Thursday");

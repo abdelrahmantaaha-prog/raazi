@@ -21,7 +21,7 @@ export async function GET() {
               (SELECT COUNT(*) FROM chunks c WHERE c.source_id=s.id) AS chunks,
               (SELECT COUNT(DISTINCT m.entity_id) FROM mentions m WHERE m.source_id=s.id) AS entities
          FROM sources s
-        WHERE s.triage IS NULL OR s.triage = 'kept'
+        WHERE s.triage IS NULL OR s.triage IN ('kept', 'filed')
         ORDER BY s.id DESC`
     )
     .all();

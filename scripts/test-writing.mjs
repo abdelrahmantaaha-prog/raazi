@@ -36,8 +36,33 @@ const section = (t) => console.log(`\n${t}`);
 const { db } = await import("../lib/db/index.ts");
 const {
   createDraft, getDraft, saveDraft, listDrafts, deleteDraft,
-  addNote, notesFor, removeNote, reorderNotes,
+  addNote, notesFor, removeNote, reorderNotes, citationForSource,
 } = await import("../lib/drafts.ts");
+
+// ---------------------------------------------------------------------------
+section("A passage sent from the reader is cited the way a search hit is");
+// ---------------------------------------------------------------------------
+// The reader knows the source and the place, not the citation; the desk
+// renders one from them, so a passage sent while reading and a quote found
+// from the pane read alike at the foot of the page.
+{
+  const sourceId = Number(
+    db()
+      .prepare("INSERT INTO sources (title, kind, status, author, year) VALUES ('The Cold War', 'text', 'ready', 'Odd Arne Westad', '2017')")
+      .run().lastInsertRowid
+  );
+  const chunkId = Number(
+    db()
+      .prepare("INSERT INTO chunks (source_id, seq, text, locator_json) VALUES (?, 0, 'text', ?)")
+      .run(sourceId, JSON.stringify({ page: 212 })).lastInsertRowid
+  );
+  const full = citationForSource(sourceId, chunkId);
+  check("author, title, year and place", full === "Odd Arne Westad, The Cold War, 2017, p. 212", full);
+  const bare = citationForSource(sourceId, null);
+  check("without a place, author, title and year", bare === "Odd Arne Westad, The Cold War, 2017", bare);
+  check("an unknown source is null", citationForSource(999999, null) === null);
+  check("a chunk of another source does not lend its place", citationForSource(sourceId, chunkId + 999) === bare);
+}
 
 // ---------------------------------------------------------------------------
 section("A draft is yours and does not evaporate");
@@ -322,7 +347,9 @@ section("The curation pane's search touches no model");
       const calls = [...desk.matchAll(/fetch\(`?["'`]([^"'`]+)/g)].map((m) => m[1]);
       const aiCalls = calls.filter((c) => /check/.test(c));
       const rest = calls.filter((c) => !/check/.test(c));
-      return aiCalls.length > 0 && rest.every((c) => /\/api\/drafts/.test(c));
+      // The drafts routes, and the library's own list — read for the source
+      // picker when a quote is logged by hand. Neither touches a model.
+      return aiCalls.length > 0 && rest.every((c) => /\/api\/(drafts|sources)(\/|\?|$)/.test(c));
     })(),
     [...desk.matchAll(/fetch\(`?["'`]([^"'`]+)/g)].map((m) => m[1]).join(", ")
   );

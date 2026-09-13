@@ -12,6 +12,7 @@ import {
   IconEye,
   IconFeed,
   IconSelectAll,
+  IconShelf,
   IconText,
   IconUndo,
   IconWeek,
@@ -180,7 +181,7 @@ export default function Inbox({
       return next;
     });
 
-  async function act(action: "keep" | "discard" | "undo", itemIds: number[]) {
+  async function act(action: "keep" | "file" | "discard" | "undo", itemIds: number[]) {
     if (!itemIds.length) return;
     setBusy(true);
     setError(null);
@@ -243,7 +244,7 @@ export default function Inbox({
     }
   }
 
-  /** J/K to move, Enter to keep, D to discard, P to paste, X to select, O to open. Not while typing. */
+  /** J/K to move, Enter to keep, F to file, D to discard, P to paste, X to select, O to open. Not while typing. */
   function onKey(e: React.KeyboardEvent) {
     const tag = (e.target as HTMLElement).tagName;
     if (tag === "TEXTAREA" || tag === "INPUT" || pasting !== null) return;
@@ -251,6 +252,7 @@ export default function Inbox({
     if (e.key === "j") setCursor((c) => Math.min(c + 1, flat.length - 1));
     else if (e.key === "k") setCursor((c) => Math.max(c - 1, 0));
     else if (e.key === "Enter" && here) void act("keep", [here.id]);
+    else if (e.key === "f" && here) void act("file", [here.id]);
     else if (e.key === "d" && here) void act("discard", [here.id]);
     else if (e.key === "p" && here) {
       setPasting(here.id);
@@ -313,6 +315,7 @@ export default function Inbox({
       pasting={pasting === current.id}
       pasteBox={pasting === current.id ? pasteBox(current) : null}
       onKeep={() => act("keep", [current.id])}
+      onFile={() => act("file", [current.id])}
       onDiscard={() => act("discard", [current.id])}
       onPaste={() => {
         setPasting(pasting === current.id ? null : current.id);
@@ -424,6 +427,15 @@ export default function Inbox({
             <button
               type="button"
               disabled={busy || !selectedIds.length}
+              onClick={() => act("file", selectedIds)}
+              title="Read into the library, but leave out of the brief"
+              className="inline-flex items-center gap-1.5 rounded-full border border-[var(--color-accent)]/50 px-4 py-1.5 text-sm text-[var(--color-accent)] transition hover:bg-[var(--color-accent-soft)] disabled:opacity-30"
+            >
+              <IconShelf /> File{selectedIds.length ? ` ${selectedIds.length}` : ""}
+            </button>
+            <button
+              type="button"
+              disabled={busy || !selectedIds.length}
               onClick={() => act("discard", selectedIds)}
               className="inline-flex items-center gap-1.5 rounded-full border border-[var(--color-rule)] px-4 py-1.5 text-sm transition hover:border-red-400 hover:text-red-700 disabled:opacity-30"
             >
@@ -460,6 +472,7 @@ export default function Inbox({
               <kbd className="rounded border border-[var(--color-rule)] px-1">j</kbd>{" "}
               <kbd className="rounded border border-[var(--color-rule)] px-1">k</kbd> move ·{" "}
               <kbd className="rounded border border-[var(--color-rule)] px-1">↵</kbd> keep ·{" "}
+              <kbd className="rounded border border-[var(--color-rule)] px-1">f</kbd> file ·{" "}
               <kbd className="rounded border border-[var(--color-rule)] px-1">d</kbd> discard ·{" "}
               <kbd className="rounded border border-[var(--color-rule)] px-1">p</kbd> paste ·{" "}
               <kbd className="rounded border border-[var(--color-rule)] px-1">o</kbd> open
@@ -631,6 +644,19 @@ export default function Inbox({
                                   <button
                                     type="button"
                                     disabled={busy || thin}
+                                    onClick={() => act("file", [item.id])}
+                                    title={
+                                      thin
+                                        ? "There is no article behind this yet — paste it in first"
+                                        : "Read it into the library, but keep it out of the brief"
+                                    }
+                                    className="inline-flex items-center gap-1 transition hover:text-[var(--color-accent)] disabled:opacity-30"
+                                  >
+                                    <IconShelf /> File
+                                  </button>
+                                  <button
+                                    type="button"
+                                    disabled={busy || thin}
                                     title={
                                       thin
                                         ? "There is no article behind this yet — paste it in first"
@@ -729,6 +755,7 @@ function Preview({
   pasting,
   pasteBox,
   onKeep,
+  onFile,
   onDiscard,
   onPaste,
 }: {
@@ -739,6 +766,7 @@ function Preview({
   pasting: boolean;
   pasteBox: React.ReactNode;
   onKeep: () => void;
+  onFile: () => void;
   onDiscard: () => void;
   onPaste: () => void;
 }) {
@@ -793,6 +821,15 @@ function Preview({
             className="inline-flex items-center gap-1.5 rounded-full bg-[var(--color-accent)] px-3 py-1.5 text-sm font-medium text-white transition disabled:opacity-30"
           >
             <IconCheck /> Keep
+          </button>
+          <button
+            type="button"
+            disabled={busy || verdict !== "enough"}
+            onClick={onFile}
+            title="Read it into the library, but keep it out of the brief — for the piece that belongs in the pedia and not in the morning"
+            className="inline-flex items-center gap-1.5 rounded-full border border-[var(--color-accent)]/50 px-3 py-1.5 text-sm text-[var(--color-accent)] transition hover:bg-[var(--color-accent-soft)] disabled:opacity-30"
+          >
+            <IconShelf /> File
           </button>
           <button
             type="button"

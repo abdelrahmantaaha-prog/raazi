@@ -73,6 +73,14 @@ article. That is the question the paste box exists to answer, and it used to be
 answerable only by keeping the item and finding out. Items carry the picture
 their feed or their page declared, so the list reads at a glance.
 
+**Keep, or file.** Keep reads the article and puts it in the morning: it is in
+the library and in the brief. **File** (F) reads it exactly the same way — its
+people get entries, it is filed under its topics and grouped with its story —
+but the source is marked as filed rather than kept, and everything that builds
+the brief takes only what was kept. For the piece that belongs in the pedia and
+not in the morning: a French election, a book review, a beat you follow but do
+not present from.
+
 **From the browser.** `extension/` is a small Brave/Chrome/Edge extension
 (load it unpacked from `brave://extensions`). Click it on any article and the
 page goes into the inbox as your browser sees it — signed in, paywall open —
@@ -105,6 +113,19 @@ a year it never had. Wording that says "anniversary" or "years since" is an
 anniversary wherever it falls. Earlier filings are re-read under the current
 rule every time the calendar is filed, so a correction reaches the whole
 calendar, not only dates noticed afterwards.
+
+## Writing beside the library
+
+**Write** keeps drafts and, beside each, a shelf of the quotes and sources you
+mean to use in it — gathered rather than generated, and copied rather than
+linked, so nothing on the shelf can evaporate when a source is re-read. Three
+ways onto the shelf: search the library from the pane and keep a hit; **log a
+quote** by pasting it and tying it to a citation — pick the source from your
+library, or type the reference for a book you read elsewhere; or, while reading
+a source, select a passage and click **Send to Write** on the card that
+appears. That one lands cited to the source and the place, and linked to the
+passage so it can be checked. Every line on the shelf can be inserted as a block
+quote or turned into a numbered reference where the cursor is.
 
 ## Two laptops, one library
 

@@ -15,6 +15,7 @@ import {
   type Voice,
 } from "@/lib/speech";
 import { Lookup, type LookupAt } from "./Lookup";
+import { SendToWrite, type SendAt } from "./SendToWrite";
 import { ReaderParagraph } from "./ReaderParagraph";
 
 export interface Passage {
@@ -141,6 +142,8 @@ export function Reader({
   const [pending, setPending] = useState(readAlong.remaining);
   const [restored, setRestored] = useState<string | null>(null);
   const [lookup, setLookup] = useState<LookupAt | null>(null);
+  /** A passage selected for the writing desk — the card that offers to send it. */
+  const [send, setSend] = useState<SendAt | null>(null);
 
   const scroller = useRef<HTMLDivElement>(null);
   /** The in-flight soft scroll, so a second advance retargets it rather than
@@ -771,14 +774,27 @@ export function Reader({
         const text = sel?.toString().trim() ?? "";
         if (!sel || sel.isCollapsed || !text) {
           setLookup(null);
+          setSend(null);
           return;
         }
-        // Up to three words, and nothing with sentence punctuation in it.
-        const wordish = text.length <= 40 && text.split(/\s+/).length <= 3 && !/[.!?؟،,;:]/.test(text);
-        if (!wordish) return;
-
         const box = sel.getRangeAt(0).getBoundingClientRect();
         if (!box.width && !box.height) return;
+
+        // Up to three words, and nothing with sentence punctuation in it, is a
+        // word to look up. Anything longer is a passage, and a passage you have
+        // dragged out is one you may want on the writing desk — offered beside
+        // the selection, sent with one click, cited to this place in this
+        // source. It replaces copying it out and pasting it there by hand.
+        const wordish = text.length <= 40 && text.split(/\s+/).length <= 3 && !/[.!?؟،,;:]/.test(text);
+        if (!wordish) {
+          if (text.length < 12) return;
+          const node = sel.anchorNode instanceof Element ? sel.anchorNode : sel.anchorNode?.parentElement;
+          const chunk = node?.closest?.("section[data-chunk]")?.getAttribute("data-chunk");
+          setLookup(null);
+          setSend({ text, chunkId: chunk ? Number(chunk) : null, x: box.left + box.width / 2, y: box.top });
+          return;
+        }
+        setSend(null);
         setLookup({ word: text, x: box.left + box.width / 2, y: box.top });
       }, 0);
     };
@@ -824,15 +840,16 @@ export function Reader({
         e.preventDefault();
         void toggleMark();
       } else if (e.key === "Escape") {
-        // Innermost thing first: the dictionary, then a panel, then the reader.
+        // Innermost thing first: the dictionary or the send card, then a panel, then the reader.
         if (lookup) setLookup(null);
+        else if (send) setSend(null);
         else if (panel !== "none") setPanel("none");
         else onClose();
       }
     };
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
-  }, [page, toggleMark, panel, onClose, lookup, prefs.mode, finishParagraph, goBack, overflowing]);
+  }, [page, toggleMark, panel, onClose, lookup, send, prefs.mode, finishParagraph, goBack, overflowing]);
 
   if (!ready) return null;
 
@@ -1306,6 +1323,7 @@ export function Reader({
       )}
 
       {lookup && <Lookup at={lookup} theme={theme} onClose={() => setLookup(null)} />}
+      {send && <SendToWrite at={send} sourceId={sourceId} theme={theme} onClose={() => setSend(null)} />}
 
       {/* An entry, opened beside the book. Rendered here rather than outside
           the reader so it unmounts with it, and portalled from inside itself so
