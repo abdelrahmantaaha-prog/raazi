@@ -190,6 +190,44 @@ section("A citation of a library source carries the source's address");
   deleteDraft(draftId);
 }
 
+section("Saving a draft does not weld its paragraphs together");
+// The bug this guards: contenteditable emits a div per paragraph in Chrome and
+// in Brave, the sanitiser dropped unknown tags while keeping their text, and
+// so every autosave merged the whole draft into one run of prose. It showed on
+// the next load, which is why it looked like refreshing caused it.
+{
+  const { sanitizeHtml, saveDraft, getDraft } = await import("../lib/drafts.ts");
+
+  const typed = "First paragraph.<div>Second paragraph.</div><div>Third paragraph.</div>";
+  const clean = sanitizeHtml(typed);
+  check("a div becomes a paragraph rather than vanishing", clean === "First paragraph.<p>Second paragraph.</p><p>Third paragraph.</p>", clean);
+  check("the three are still three blocks", (clean.match(/<p>/g) ?? []).length === 2 && clean.startsWith("First"), clean);
+  check(
+    "and the words are never run together",
+    !/paragraph\.Second|paragraph\.Third/.test(clean),
+    clean
+  );
+
+  // A div wrapping paragraphs, which is the other shape a browser produces.
+  const wrapped = sanitizeHtml("<div><p>One.</p><p>Two.</p></div>");
+  check("a div around paragraphs does not nest them", wrapped === "<p></p><p>One.</p><p>Two.</p>", wrapped);
+
+  // Round-trip through the database, which is what actually bit.
+  const id = createDraft("Round trip");
+  saveDraft(id, { body_html: typed });
+  const saved = getDraft(id);
+  check("what comes back out still has its blocks", (saved.body_html.match(/<p>/g) ?? []).length === 2, saved.body_html);
+  check(
+    "and the plain text keeps them apart",
+    saved.body_md === "First paragraph.\n\nSecond paragraph.\n\nThird paragraph.",
+    JSON.stringify(saved.body_md)
+  );
+  // Saving the same body again must be stable, or every refresh drifts.
+  saveDraft(id, { body_html: saved.body_html });
+  check("saving it a second time changes nothing", getDraft(id).body_html === saved.body_html, getDraft(id).body_html);
+  deleteDraft(id);
+}
+
 section("A draft body cannot carry anything that runs");
 // ---------------------------------------------------------------------------
 {

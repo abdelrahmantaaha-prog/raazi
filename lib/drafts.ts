@@ -239,7 +239,18 @@ const ALLOWED = new Set([
   "p", "h1", "h2", "h3", "h4", "ul", "ol", "li", "blockquote",
   "strong", "em", "u", "s", "a", "span", "br", "hr", "code", "pre",
 ]);
-const RENAMED: Record<string, string> = { b: "strong", i: "em", strike: "s", del: "s" };
+/**
+ * Spellings folded into one.
+ *
+ * `b` and `i` are what contenteditable emits for bold and italic. `div` is the
+ * important one: pressing Enter in a contenteditable region produces a `div`
+ * per paragraph in Chrome and every browser built on it, and a sanitiser that
+ * merely refuses an unknown tag keeps its text — so every paragraph in the
+ * draft was being welded into one run of prose on save, and you saw it the
+ * next time the draft loaded. A div around prose is a paragraph; it is now
+ * read as one rather than thrown away.
+ */
+const RENAMED: Record<string, string> = { b: "strong", i: "em", strike: "s", del: "s", div: "p" };
 /** Tags whose inner text is not prose and must go with them. */
 const DROP_CONTENTS = new Set([
   "script", "style", "iframe", "object", "embed", "template", "noscript",

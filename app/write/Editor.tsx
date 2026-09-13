@@ -52,6 +52,23 @@ export function Editor({
     mine.current = html;
   }, [html]);
 
+  // Enter makes a paragraph, not a div.
+  //
+  // Chrome and everything built on it default to wrapping each new line in a
+  // `div`, which is not what the rest of this application means by a
+  // paragraph: the stored markup is paragraphs, the Word export reads
+  // paragraphs, and the sanitiser now has to rescue divs into them. Asking the
+  // browser for `p` up front means the markup is right from the keystroke
+  // rather than repaired afterwards. Firefox already does this; the call is
+  // harmless where it is unsupported.
+  useEffect(() => {
+    try {
+      document.execCommand("defaultParagraphSeparator", false, "p");
+    } catch {
+      /* an older engine; the sanitiser still folds divs into paragraphs */
+    }
+  }, []);
+
   const emit = useCallback(() => {
     const el = box.current;
     if (!el) return;

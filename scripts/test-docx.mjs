@@ -227,6 +227,25 @@ section("Plain text for the fact-check");
   check("paragraphs stay separated", text.includes("First para.\n\nSecond"));
   check("entities are decoded", htmlToText("<p>a &amp; b &lt;c&gt;</p>") === "a & b <c>");
   check("an empty draft is empty", htmlToText("<p><br></p>") === "");
+
+  // The first line a writer types sits in no block at all, so the break before
+  // the next paragraph has to come from that paragraph opening rather than
+  // from a closing tag. Without it the two ran together as "First.Second.".
+  check(
+    "a bare opening line is not welded to the paragraph after it",
+    htmlToText("First para.<p>Second para.</p>") === "First para.\n\nSecond para.",
+    JSON.stringify(htmlToText("First para.<p>Second para.</p>"))
+  );
+  check(
+    "and the divs contenteditable emits break the same way",
+    htmlToText("First.<div>Second.</div><div>Third.</div>") === "First.\n\nSecond.\n\nThird.",
+    JSON.stringify(htmlToText("First.<div>Second.</div><div>Third.</div>"))
+  );
+  check(
+    "a list still reads as separate items",
+    htmlToText("<ul><li>One</li><li>Two</li></ul>") === "One\n\nTwo",
+    JSON.stringify(htmlToText("<ul><li>One</li><li>Two</li></ul>"))
+  );
 }
 
 console.log(`\n${passed} passed, ${failed} failed`);

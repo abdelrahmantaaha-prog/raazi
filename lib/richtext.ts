@@ -184,7 +184,13 @@ export function htmlToText(html: string): string {
   let out = "";
   for (const part of lex(html)) {
     if (part.text !== undefined) out += decode(part.text);
-    else if (part.token && BLOCK_TAGS.test(part.token.tag) && part.token.closing) out += "\n\n";
+    // A block break belongs at both ends of a block, not only where one
+    // closes. The first line a writer types is a bare text node with nothing
+    // around it, so `First.<p>Second.</p>` has no closing tag between the two
+    // and they were being run together into "First.Second." — in the plain
+    // text the fact-check and the word count read. The run of newlines this
+    // doubles is collapsed below, so counting both ends costs nothing.
+    else if (part.token && BLOCK_TAGS.test(part.token.tag)) out += "\n\n";
     else if (part.token?.tag === "br") out += "\n";
   }
   return out.replace(/\n{3,}/g, "\n\n").trim();
