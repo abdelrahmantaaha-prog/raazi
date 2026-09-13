@@ -66,8 +66,8 @@ navigation bar — nothing has moved or gone, it is just filed now.
 ## The inbox
 
 What the feeds pull in waits here, fetched and chunked but unread, until you say
-which pieces are worth the reading. On a wide screen the item under the cursor
-opens in a pane on the right: the text the fetch actually got, a word count, and
+which pieces are worth the reading. On a wide screen the item you click, or move
+to with J and K, opens in a pane on the right: the text the fetch actually got, a word count, and
 a verdict — enough to read, only the feed's summary, or too thin to be an
 article. That is the question the paste box exists to answer, and it used to be
 answerable only by keeping the item and finding out. Items carry the picture

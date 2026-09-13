@@ -56,7 +56,8 @@ interface Item {
  * And a keyboard: J and K move, Enter keeps, D discards, P opens the paste box,
  * so a hundred items is a rhythm rather than a hundred trips to the mouse.
  *
- * On a wide screen the item under the cursor opens in a pane on the right:
+ * On a wide screen the item you click (or move to with J and K) opens in a
+ * pane on the right:
  * the text the fetch actually got, with a verdict on whether it is the
  * article or a paywall's stub. That is the question the paste box exists to
  * answer, and it used to be answerable only by keeping the item and finding
@@ -324,8 +325,8 @@ export default function Inbox({
     />
   ) : (
     <div className="p-6 text-sm text-[var(--color-muted)]">
-      Move along the list, or hover an item, and what was fetched for it shows here — so you can
-      tell an article from a paywall&apos;s stub before you keep it.
+      Click an item, or move along the list with J and K, and what was fetched for it shows here —
+      so you can tell an article from a paywall&apos;s stub before you keep it.
     </div>
   );
 
@@ -539,8 +540,16 @@ export default function Inbox({
                       return (
                         <li
                           key={item.id}
-                          onMouseEnter={() => setCursor(flat.findIndex((f) => f.id === item.id))}
-                          className={`group relative px-4 py-3 transition ${
+                          // A click on the row, not a hover: the pane used to
+                          // follow the mouse, which meant reading it while
+                          // moving to a button changed what it showed. The
+                          // row's own links, buttons and checkbox keep their
+                          // clicks; anywhere else on the row picks the item.
+                          onClick={(e) => {
+                            if ((e.target as HTMLElement).closest("a, button, input, textarea, label")) return;
+                            setCursor(flat.findIndex((f) => f.id === item.id));
+                          }}
+                          className={`group relative cursor-pointer px-4 py-3 transition ${
                             chosen ? "bg-[var(--color-accent-soft)]/60" : "hover:bg-[var(--color-accent-soft)]/25"
                           }`}
                         >
