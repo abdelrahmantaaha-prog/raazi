@@ -58,6 +58,8 @@ export function FeedsManager({
   const [value, setValue] = useState("");
   const [chosen, setChosen] = useState<number[]>([]);
   const [includeExisting, setIncludeExisting] = useState(false);
+  /** For a page with no feed: part of the address every article shares. */
+  const [linkPattern, setLinkPattern] = useState("");
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [note, setNote] = useState<string | null>(null);
@@ -96,13 +98,19 @@ export function FeedsManager({
         phrase: mode === "phrase" ? value.trim() : undefined,
         tags: chosen,
         includeExisting,
-      })) as { title?: string; items?: number };
+        linkPattern: mode === "url" && linkPattern.trim() ? linkPattern.trim() : undefined,
+      })) as { title?: string; items?: number; kind?: string };
       setValue("");
       setChosen([]);
+      setLinkPattern("");
       setNote(
-        data.title
-          ? `Following "${data.title}"${data.items ? ` — it is carrying ${data.items} item(s) right now.` : "."}`
-          : "Added."
+        data.kind === "page"
+          ? `Watching the page "${data.title}" — ${data.items ?? 0} link(s) on it now${
+              includeExisting ? ", all queued to read" : ", recorded as seen; whatever appears next arrives in the inbox"
+            }.`
+          : data.title
+            ? `Following "${data.title}"${data.items ? ` — it is carrying ${data.items} item(s) right now.` : "."}`
+            : "Added."
       );
       router.refresh();
     } catch (err) {
@@ -184,7 +192,7 @@ export function FeedsManager({
             }}
             placeholder={
               mode === "url"
-                ? "https://www.theglobeandmail.com/politics/rss/ — or a YouTube channel"
+                ? "https://www.theglobeandmail.com/politics/rss/ — a YouTube channel, or any page with no feed"
                 : "softwood lumber tariff"
             }
             className="min-w-0 flex-1 rounded border border-[var(--color-rule)] px-3 py-2 text-sm outline-none focus:border-[var(--color-accent)]"
@@ -198,6 +206,22 @@ export function FeedsManager({
             {busy ? "Checking…" : "Follow"}
           </button>
         </div>
+
+        {mode === "url" ? (
+          <div className="mt-2 flex flex-wrap items-center gap-2 text-sm">
+            <span className="text-[var(--color-muted)]">If it is a page with no feed, only links containing:</span>
+            <input
+              value={linkPattern}
+              onChange={(e) => setLinkPattern(e.target.value)}
+              placeholder="optional — e.g. ArticleID/  or  /news\/\d+/"
+              spellCheck={false}
+              className="min-w-[16rem] rounded border border-[var(--color-rule)] px-2 py-1 text-sm outline-none focus:border-[var(--color-accent)]"
+            />
+            <span className="text-xs text-[var(--color-muted)]">
+              Leave it empty and Corpus takes the links that read as headlines.
+            </span>
+          </div>
+        ) : null}
 
         {tags.length > 0 ? (
           <div className="mt-3 flex flex-wrap items-center gap-2 text-sm">

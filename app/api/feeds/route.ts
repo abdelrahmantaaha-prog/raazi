@@ -25,6 +25,8 @@ export async function POST(req: Request) {
     tags?: number[];
     /** Read what the feed already carries, rather than only what comes next. */
     includeExisting?: boolean;
+    /** For a page with no feed: part of the address every article shares. */
+    linkPattern?: string;
   }>(req);
   if (body === null) return badRequest("Malformed JSON body.");
 
@@ -50,8 +52,9 @@ export async function POST(req: Request) {
   const title = optionalString(body.title);
   const outlet = optionalString(body.outlet);
   const reliability = optionalString(body.reliability);
-  if (title === null || outlet === null || reliability === null) {
-    return badRequest("title, outlet and reliability must be strings.");
+  const linkPattern = optionalString(body.linkPattern);
+  if (title === null || outlet === null || reliability === null || linkPattern === null) {
+    return badRequest("title, outlet, reliability and linkPattern must be strings.");
   }
 
   const interval = body.intervalMinutes;
@@ -75,6 +78,7 @@ export async function POST(req: Request) {
       // A feed added with "read what it already has" starts from the beginning
       // of what it offers; otherwise from now, which is almost always right.
       since: body.includeExisting ? null : undefined,
+      linkPattern: linkPattern?.slice(0, 200),
     });
     kickWorker();
     return NextResponse.json({ ...feed, feeds: listFeeds() });

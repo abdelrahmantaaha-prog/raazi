@@ -1,7 +1,7 @@
 import { JSDOM } from "jsdom";
 import { db, tx } from "./db";
 import { safeFetch } from "./net";
-import { canonicalUrl, toPublishedAt } from "./ingest/meta";
+import { canonicalUrl, outletFromUrl, toPublishedAt } from "./ingest/meta";
 
 /**
  * Feeds: what a beat actually looks like from the outside.
@@ -35,6 +35,9 @@ export interface Feed {
   etag: string | null;
   last_modified: string | null;
   added_at: string;
+  /** For a watched page: part of the address every article link shares
+   *  ("ArticleID/"), or a /regex/. Null means "links that read as headlines". */
+  link_pattern: string | null;
 }
 
 export interface FeedItem {
@@ -48,10 +51,133 @@ export interface FeedItem {
 }
 
 export interface ParsedFeed {
-  kind: "rss" | "atom";
+  kind: "rss" | "atom" | "page";
   title: string;
   outlet: string | null;
   items: FeedItem[];
+}
+
+/**
+ * A page with no feed, read as one.
+ *
+ * Plenty of places worth watching publish a list and nothing else — a
+ * foundation's news page, a ministry, a court. This reads the page's links
+ * the way a person scanning it would: the ones that read as headlines, on the
+ * same site, outside the navigation. Each becomes an item whose id is its
+ * address, so a link seen once is never an item twice, and a link that was
+ * not there last time is news.
+ *
+ * A pattern narrows it when the page is noisy: part of the address every
+ * article shares ("ArticleID/"), or a /regex/. The same link often appears
+ * twice — once under its headline and once as a "More" button — so links are
+ * folded by address and the longest wording kept as the title.
+ */
+export function parsePage(html: string, pageUrl: string, pattern?: string | null): ParsedFeed {
+  const doc = new JSDOM(html, { url: pageUrl }).window.document;
+  const page = new URL(pageUrl);
+  const host = page.hostname.replace(/^www\./, "");
+  const pageKey = page.origin + page.pathname.replace(/\/+$/, "") + page.search;
+
+  const test = matcher(pattern);
+  const items = new Map<string, FeedItem>();
+
+  for (const a of doc.querySelectorAll<HTMLAnchorElement>("a[href]")) {
+    if (a.closest("nav, header, footer, aside, [role='navigation'], [role='banner'], [role='contentinfo']")) continue;
+    let u: URL;
+    try {
+      u = new URL(a.getAttribute("href") ?? "", pageUrl);
+    } catch {
+      continue;
+    }
+    if (u.protocol !== "http:" && u.protocol !== "https:") continue;
+    if (u.hostname.replace(/^www\./, "") !== host) continue;
+    u.hash = "";
+    const key = u.origin + u.pathname.replace(/\/+$/, "") + u.search;
+    if (key === pageKey) continue;
+
+    const text = (a.textContent ?? "").replace(/\s+/g, " ").trim() || (a.getAttribute("title") ?? "").trim();
+    if (test) {
+      if (!test(u.href)) continue;
+    } else if (!readsAsHeadline(text)) {
+      continue;
+    }
+
+    const url = u.href;
+    const have = items.get(key);
+    if (!have) {
+      items.set(key, { guid: canonicalUrl(url) ?? url, url, title: text || url, summary: null, publishedAt: null, image: null });
+    } else if (text.length > have.title.length && !isMoreButton(text)) {
+      have.title = text;
+    }
+    if (items.size >= 200) break;
+  }
+
+  // A pattern-matched link whose only wording was "More" gets its address
+  // as a title, which the fetch replaces with the page's own once it is read.
+  for (const it of items.values()) if (isMoreButton(it.title)) it.title = it.url ?? it.title;
+
+  const siteName =
+    doc.querySelector('meta[property="og:site_name"]')?.getAttribute("content")?.trim() ||
+    doc.title?.trim() ||
+    host;
+  return { kind: "page", title: siteName, outlet: outletFromUrl(pageUrl) ?? siteName, items: [...items.values()] };
+}
+
+/** "More", "Read more", "المزيد" and the like: a link's button, not its title. */
+function isMoreButton(text: string): boolean {
+  return /^(more|read more|continue reading|learn more|details|المزيد|اقرأ المزيد|التفاصيل|→|»|\.{3}|…)$/i.test(text.trim());
+}
+
+/** Three words, or the length of a short headline in any script. */
+function readsAsHeadline(text: string): boolean {
+  const t = text.trim();
+  if (!t || isMoreButton(t)) return false;
+  return t.split(/\s+/).length >= 3 || t.length >= 24;
+}
+
+function matcher(pattern?: string | null): ((href: string) => boolean) | null {
+  const p = pattern?.trim();
+  if (!p) return null;
+  const re = /^\/(.+)\/([a-z]*)$/.exec(p);
+  if (re) {
+    try {
+      const rx = new RegExp(re[1], re[2].replace(/[^gimsuy]/g, ""));
+      return (href) => rx.test(href) || rx.test(decodeURIComponent(href));
+    } catch {
+      /* fall through to a plain substring */
+    }
+  }
+  const needle = p.toLowerCase();
+  return (href) => href.toLowerCase().includes(needle) || safeDecode(href).toLowerCase().includes(needle);
+}
+
+function safeDecode(s: string): string {
+  try {
+    return decodeURIComponent(s);
+  } catch {
+    return s;
+  }
+}
+
+/** The feed a page advertises in its head, when it advertises one. */
+export function discoverFeedUrl(html: string, pageUrl: string): string | null {
+  const doc = new JSDOM(html, { url: pageUrl }).window.document;
+  for (const link of doc.querySelectorAll<HTMLLinkElement>('link[rel~="alternate"][href]')) {
+    const type = (link.getAttribute("type") ?? "").toLowerCase();
+    if (!/rss|atom|xml/.test(type)) continue;
+    try {
+      return new URL(link.getAttribute("href")!, pageUrl).href;
+    } catch {
+      /* next */
+    }
+  }
+  return null;
+}
+
+/** Whether a body is a web page rather than a feed. */
+export function looksLikeHtml(body: string, contentType?: string | null): boolean {
+  if (/text\/html/i.test(contentType ?? "")) return true;
+  return /^\s*(<!doctype\s+html|<html[\s>])/i.test(body.slice(0, 512));
 }
 
 /**
@@ -206,11 +332,23 @@ export function bingNewsQueryUrl(query: string, market = "en-US"): string {
  * A 304 is the polite outcome and the common one: most polls of most feeds
  * should cost a few hundred bytes and no parsing at all.
  */
+/**
+ * Fetches a feed and reads it.
+ *
+ * A watched page (`kind: "page"`) is read as one. A feed of no stated kind —
+ * the moment it is being added — that turns out to be a web page is handed
+ * back as `html` rather than parsed, so the caller can look for the feed the
+ * page advertises, or watch the page itself. A feed of a stated kind that
+ * starts returning HTML is a broken feed, and says so.
+ */
 export async function fetchFeed(
-  feed: Pick<Feed, "url" | "etag" | "last_modified">
-): Promise<{ status: number; parsed?: ParsedFeed; etag?: string; lastModified?: string }> {
+  feed: Pick<Feed, "url" | "etag" | "last_modified"> & { kind?: Feed["kind"]; link_pattern?: string | null }
+): Promise<{ status: number; parsed?: ParsedFeed; html?: string; etag?: string; lastModified?: string }> {
+  const page = feed.kind === "page";
   const headers: Record<string, string> = {
-    accept: "application/rss+xml, application/atom+xml, application/xml, text/xml;q=0.9, */*;q=0.5",
+    accept: page
+      ? "text/html, application/xhtml+xml;q=0.9, */*;q=0.5"
+      : "application/rss+xml, application/atom+xml, application/xml, text/xml;q=0.9, text/html;q=0.7, */*;q=0.5",
     "user-agent": "Corpus/1.0 (personal research reader)",
   };
   if (feed.etag) headers["if-none-match"] = feed.etag;
@@ -220,13 +358,18 @@ export async function fetchFeed(
   if (res.status === 304) return { status: 304 };
   if (!res.ok) throw new Error(`Feed returned ${res.status} ${res.statusText}`);
 
-  const parsed = parseFeed(await res.text());
-  return {
+  const body = await res.text();
+  const meta = {
     status: res.status,
-    parsed,
     etag: res.headers.get("etag") ?? undefined,
     lastModified: res.headers.get("last-modified") ?? undefined,
   };
+  if (page) return { ...meta, parsed: parsePage(body, res.url || feed.url, feed.link_pattern) };
+  if (looksLikeHtml(body, res.headers.get("content-type"))) {
+    if (feed.kind) throw new Error("That address now returns a web page, not a feed.");
+    return { ...meta, html: body };
+  }
+  return { ...meta, parsed: parseFeed(body) };
 }
 
 // ---------------------------------------------------------------------------
@@ -267,36 +410,77 @@ export async function addFeed(opts: {
   /** Only ingest items published after this. Defaults to now, so adding a feed
    *  does not read its archive. */
   since?: string | null;
-}): Promise<{ id: number; title: string; items: number }> {
-  const url = youtubeFeedUrl(opts.url) ?? opts.url;
-  const parsed = await fetchFeed({ url, etag: null, last_modified: null });
-  if (!parsed.parsed) throw new Error("The feed did not return anything to read.");
+  /** For a page with no feed: part of the address every article shares. */
+  linkPattern?: string | null;
+}): Promise<{ id: number; title: string; items: number; kind: Feed["kind"] }> {
+  let url = youtubeFeedUrl(opts.url) ?? opts.url;
+  const pattern = opts.linkPattern?.trim() || null;
+  let result = await fetchFeed({ url, etag: null, last_modified: null, link_pattern: pattern });
 
-  const kind = youtubeFeedUrl(opts.url) ? "youtube" : parsed.parsed.kind;
+  // A web page rather than a feed. If it advertises a feed, follow that — a
+  // real feed carries dates and ids a scrape never will. Otherwise watch the
+  // page itself for links it did not have last time.
+  if (!result.parsed && result.html) {
+    const html = result.html;
+    const advertised = discoverFeedUrl(html, url);
+    if (advertised && advertised !== url) {
+      try {
+        const viaFeed = await fetchFeed({ url: advertised, etag: null, last_modified: null, kind: "rss" });
+        if (viaFeed.parsed && viaFeed.parsed.items.length) {
+          url = advertised;
+          result = viaFeed;
+        }
+      } catch {
+        /* the page it is, then */
+      }
+    }
+    if (!result.parsed) {
+      const parsed = parsePage(html, url, pattern);
+      if (parsed.items.length === 0) {
+        throw new Error(
+          pattern
+            ? `No links on that page match "${pattern}".`
+            : "No article links found on that page. Give a link pattern — part of the address every article shares, such as ArticleID/ — and try again."
+        );
+      }
+      result = { ...result, parsed };
+    }
+  }
+  if (!result.parsed) throw new Error("The feed did not return anything to read.");
+  const parsed = result.parsed;
+
+  const kind: Feed["kind"] = youtubeFeedUrl(opts.url) ? "youtube" : parsed.kind;
+  const since = opts.since === null ? null : (opts.since ?? new Date().toISOString());
   const id = tx(() => {
     const info = db()
       .prepare(
-        `INSERT INTO feeds (url, title, outlet, kind, reliability, interval_minutes, daily_cap, since)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?)`
+        `INSERT INTO feeds (url, title, outlet, kind, reliability, interval_minutes, daily_cap, since, link_pattern)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`
       )
       .run(
         url,
-        opts.title?.trim() || parsed.parsed!.title,
-        opts.outlet?.trim() || parsed.parsed!.outlet,
+        opts.title?.trim() || parsed.title,
+        opts.outlet?.trim() || parsed.outlet,
         kind,
         opts.reliability?.trim() || null,
         opts.intervalMinutes ?? 60,
         opts.dailyCap ?? 40,
-        opts.since === null ? null : (opts.since ?? new Date().toISOString())
+        since,
+        kind === "page" ? pattern : null
       );
     const feedId = Number(info.lastInsertRowid);
     for (const tagId of opts.tags ?? []) {
       db().prepare("INSERT OR IGNORE INTO feed_tags (feed_id, tag_id) VALUES (?, ?)").run(feedId, tagId);
     }
+    // A page's links carry no dates, so `since` cannot tell the old from the
+    // new. What is on the page now is recorded as already seen; from here on
+    // a link that was not there last time is what arrives. Unless you asked to
+    // read what it is already carrying.
+    if (kind === "page" && since !== null) recordItems(feedId, parsed.items, null, { seed: true });
     return feedId;
   });
 
-  return { id, title: opts.title?.trim() || parsed.parsed.title, items: parsed.parsed.items.length };
+  return { id, title: opts.title?.trim() || parsed.title, items: parsed.items.length, kind };
 }
 
 export function updateFeed(
@@ -412,10 +596,19 @@ export function alreadyHave(canonical: string | null, url: string | null): { sou
 }
 
 /** Records what a poll found. Returns the ids of items worth ingesting. */
-export function recordItems(feedId: number, items: FeedItem[], since: string | null): number[] {
+export function recordItems(
+  feedId: number,
+  items: FeedItem[],
+  since: string | null,
+  opts: {
+    /** Record as already seen, never to be read: what a watched page held
+     *  the day it was added. */
+    seed?: boolean;
+  } = {}
+): number[] {
   const insert = db().prepare(
-    `INSERT OR IGNORE INTO feed_items (feed_id, guid, url, canonical_url, title, summary, published_at, state, image_url)
-     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`
+    `INSERT OR IGNORE INTO feed_items (feed_id, guid, url, canonical_url, title, summary, published_at, state, image_url, note)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
   );
   const fresh: number[] = [];
 
@@ -426,7 +619,7 @@ export function recordItems(feedId: number, items: FeedItem[], since: string | n
       // row still matters — it is what stops the archive arriving later.
       const tooOld = since && item.publishedAt && item.publishedAt < since;
       const seen = alreadyHave(canonical, item.url);
-      const state = tooOld ? "skipped" : seen.sourceId || seen.itemId ? "duplicate" : "new";
+      const state = opts.seed || tooOld ? "skipped" : seen.sourceId || seen.itemId ? "duplicate" : "new";
 
       const info = insert.run(
         feedId,
@@ -437,7 +630,8 @@ export function recordItems(feedId: number, items: FeedItem[], since: string | n
         item.summary,
         item.publishedAt,
         state,
-        item.image ?? null
+        item.image ?? null,
+        opts.seed ? "On the page when it was added." : null
       );
       if (info.changes === 0) continue; // already known under this guid
 

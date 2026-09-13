@@ -338,6 +338,16 @@ its archive is the failure worth guarding against and it costs tokens per item. 
 feed added today reads what comes next rather than what it already holds, unless
 you say otherwise.
 
+**A page with no feed** can be followed too: paste its address and Corpus reads
+the page's links the way you would scan it — the ones that read as headlines, on
+the same site, outside the navigation — and every link that was not there last
+time arrives in the inbox like anything a feed brought in. If the page
+advertises a feed in its head, that is followed instead, since a real feed
+carries dates a scrape never will. For a noisy page, give a link pattern: part
+of the address every article shares, such as `ArticleID/`, or a `/regex/`.
+What the page holds when it is added is recorded as already seen, so following
+a page does not read its whole front page, unless you ask for that.
+
 Polling is ordinary queue work, so a closed laptop picks up where it left off, and
 it comes ahead of the reading: a feed that falls due while a book is being chunked
 and read is checked on the worker's next pass, not once the book is done, and the

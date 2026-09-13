@@ -111,6 +111,69 @@ section("Reading what a feed actually sends");
   );
 }
 
+/* ------------------------------------------------------ a watched page */
+
+section("A page with no feed is read as one");
+// Modelled on shoman.org/الأخبار, a DNN page with no RSS: each article
+// appears twice (its headline and a "المزيد" button), the navigation is
+// full of short links, and every article shares "ArticleID/" in its address.
+{
+  const page = `<!doctype html><html><head><title>مؤسسة عبد الحميد شومان</title>
+    <meta property="og:site_name" content="Shoman Foundation"></head><body>
+    <header><a href="/">الرئيسية</a><a href="/الأخبار">الأخبار</a><a href="/about-us">About the foundation and its work</a></header>
+    <nav><a href="/events">الفعاليات</a></nav>
+    <main>
+      <div class="item"><h3 class="title"><a href="https://shoman.org/الأخبار/ArticleID/4258/winners">"شومان" تعلن الفائزين بجائزة أدب الأطفال</a></h3>
+        <a class="item-btn" href="https://shoman.org/الأخبار/ArticleID/4258/winners"> المزيد</a></div>
+      <div class="item"><h3 class="title"><a href="/الأخبار/ArticleID/4255/researchers">"شومان" تعلن أسماء الفائزين بجائزتها للباحثين</a></h3>
+        <a class="item-btn" href="/الأخبار/ArticleID/4255/researchers">المزيد</a></div>
+      <a href="https://twitter.com/shoman">Follow us on Twitter for more news</a>
+      <a href="/الأخبار#top">Top</a>
+      <a href="/tags/cinema">Cinema</a>
+    </main>
+    <footer><a href="/privacy-policy-and-terms-of-use">Privacy policy and terms of use</a></footer>
+  </body></html>`;
+
+  const p = feeds.parsePage(page, "https://shoman.org/الأخبار");
+  check("it is a page", p.kind === "page");
+  check("named after the site", p.title === "Shoman Foundation", p.title);
+  check("two articles, each folded from its headline and its button", p.items.length === 2, JSON.stringify(p.items.map((i) => i.title)));
+  check("the headline is the title, not the button", p.items[0].title.startsWith('"شومان" تعلن الفائزين'), p.items[0].title);
+  check("a relative address is made absolute", p.items[1].url === "https://shoman.org/%D8%A7%D9%84%D8%A3%D8%AE%D8%A8%D8%A7%D8%B1/ArticleID/4255/researchers", p.items[1].url);
+  check("the id is the address", p.items[0].guid.includes("ArticleID/4258"));
+  check("navigation, footer and other sites are left out", !p.items.some((i) => /about-us|privacy|twitter|events|tags/.test(i.url ?? "")));
+  check("a page item has no date to be older than", p.items.every((i) => i.publishedAt === null));
+
+  const narrowed = feeds.parsePage(page, "https://shoman.org/الأخبار", "ArticleID/");
+  check("a pattern narrows to the links that carry it", narrowed.items.length === 2 && narrowed.items.every((i) => i.url?.includes("ArticleID/")));
+  const rx = feeds.parsePage(page, "https://shoman.org/الأخبار", "/ArticleID\\/42\\d\\d/");
+  check("or a regex", rx.items.length === 2);
+  const none = feeds.parsePage(page, "https://shoman.org/الأخبار", "NewsID=");
+  check("a pattern nothing matches finds nothing", none.items.length === 0);
+
+  const advertised = `<html><head><link rel="alternate" type="application/rss+xml" href="/feed.xml"></head><body></body></html>`;
+  check("a page that advertises a feed says where", feeds.discoverFeedUrl(advertised, "https://example.org/news") === "https://example.org/feed.xml");
+  check("a page that does not, does not", feeds.discoverFeedUrl(page, "https://shoman.org/الأخبار") === null);
+  check("a web page is told from a feed", feeds.looksLikeHtml(page) && !feeds.looksLikeHtml("<?xml version=\"1.0\"?><rss></rss>"));
+
+  // Seeding: what the page holds when it is added is recorded as seen, not read.
+  const feedId = Number(
+    db().prepare("INSERT INTO feeds (url, title, kind) VALUES ('https://shoman.org/الأخبار', 'Shoman', 'page')").run().lastInsertRowid
+  );
+  const seeded = feeds.recordItems(feedId, p.items, null, { seed: true });
+  check("seeding queues nothing", seeded.length === 0);
+  const states = db().prepare("SELECT state, note FROM feed_items WHERE feed_id=?").all(feedId);
+  check("but every link is on record as skipped", states.length === 2 && states.every((s) => s.state === "skipped" && /when it was added/.test(s.note)));
+  // The next poll: the same two, plus one that was not there before.
+  const later = feeds.parsePage(
+    page.replace("</main>", `<div class="item"><h3 class="title"><a href="/الأخبار/ArticleID/4260/new-story">مقال جديد ظهر اليوم على الصفحة</a></h3></div></main>`),
+    "https://shoman.org/الأخبار"
+  );
+  const fresh = feeds.recordItems(feedId, later.items, null);
+  check("only the link that was not there last time is new", fresh.length === 1);
+  check("and it is the new one", db().prepare("SELECT url FROM feed_items WHERE id=?").get(fresh[0]).url.includes("ArticleID/4260"));
+}
+
 /* --------------------------------------------------- redirect unwrapping */
 
 section("A search feed links to itself; the article is in the query string");

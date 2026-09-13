@@ -193,4 +193,8 @@ export function migrateFeeds(db: Database.Database) {
   // inbox takes whichever exists. Nothing is downloaded: the address is enough
   // for a browser to show it, and an inbox is looked at once.
   addColumn(db, "feed_items", "image_url", "TEXT");
+
+  // A watched page (2026-09-13): part of the address every article link
+  // shares, or a /regex/, for a page whose links do not all read as headlines.
+  addColumn(db, "feeds", "link_pattern", "TEXT");
 }
