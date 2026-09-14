@@ -14,6 +14,8 @@
   button.ghost { background: transparent; color: #6b665e; border: 1px solid #e2ddd3; }
   #note { font-size: .85rem; margin-top: .6rem; }
   .ok { color: #1e4d3c; } .err { color: #7a2323; }
+  label.check { display: flex; gap: .5rem; align-items: center; margin-top: 1rem; }
+  label.check input { width: auto; margin: 0; accent-color: #7a4b2a; }
 </style>
 </head>
 <body>
@@ -26,6 +28,10 @@
   <input id="token" placeholder="Only needed when Corpus is in LAN mode" spellcheck="false" autocomplete="off">
 </label>
 <p class="hint">Settings → LAN mode in Corpus shows it. Leave empty for a Corpus on this computer.</p>
+<label class="check"><input type="checkbox" id="instant"> Send as soon as I click the icon</label>
+<p class="hint">A page that reads as a whole article goes straight to the inbox, and the popup closes itself. Anything thinner still waits for the button, in case you want to select the text first. Saved as soon as you tick it.</p>
+<label class="check"><input type="checkbox" id="embed"> Let Corpus show articles inside itself</label>
+<p class="hint">Sites refuse to be shown inside another page. With this on, that refusal is removed for pages Corpus opens in its inbox's Page view — only there, and only for Corpus at the address above. Send from Corpus while an article is open there and that article is what goes.</p>
 <div class="row">
   <button id="save">Save</button>
   <button class="ghost" id="test">Test the connection</button>

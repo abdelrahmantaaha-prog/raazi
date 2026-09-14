@@ -1,6 +1,7 @@
 import { citationsFor, getBrief, latestBrief, listBriefs, todayKey } from "@/lib/brief";
 import { listWatchlist } from "@/lib/watchlist";
 import { calendarFor } from "@/lib/calendar";
+import { listExpansions } from "@/lib/expansions";
 import { BriefView } from "./BriefView";
 
 export const dynamic = "force-dynamic";
@@ -26,6 +27,7 @@ export default async function BriefPage({
 
   const watchlist = listWatchlist();
   const stats = brief ? (JSON.parse(brief.stats_json || "{}") as Record<string, number>) : {};
+  const expansions = brief ? listExpansions(brief.day) : [];
 
   return (
     <BriefView
@@ -44,13 +46,25 @@ export default async function BriefPage({
           : null
       }
       days={briefs.map((b) => ({ day: b.day, state: b.state }))}
-      citations={brief ? citationsFor(brief.body_md) : []}
+      // The expanded looks cite passages the brief itself did not, so their
+      // markers are resolved together with the brief's.
+      citations={brief ? citationsFor([brief.body_md, ...expansions.map((x) => x.body_md)].join("\n\n")) : []}
+      expansions={expansions.map((x) => ({
+        id: x.id,
+        heading: x.heading,
+        state: x.state,
+        body: x.body_md,
+        error: x.error,
+        model: x.model,
+        runId: x.run_id,
+      }))}
       watchlist={watchlist.map((w) => ({
         id: w.id,
         label: w.label,
         kind: w.kind,
         entityId: w.entity_id,
         recent: w.recent,
+        source: w.source,
       }))}
       stats={stats}
       calendar={brief ? calendarFor(brief.day) : []}

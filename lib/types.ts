@@ -101,7 +101,9 @@ export type TaskKind =
   /** Turns one feed item into a source, which starts the ordinary ingest. */
   | "fetch_item"
   /** Writes the daily brief from what arrived. See lib/pipeline/brief.ts. */
-  | "brief";
+  | "brief"
+  /** A closer look at one heading of a written brief. See lib/pipeline/expand.ts. */
+  | "expand";
 
 export interface Locator {
   page?: number;

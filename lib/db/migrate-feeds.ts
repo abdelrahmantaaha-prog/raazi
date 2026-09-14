@@ -197,4 +197,37 @@ export function migrateFeeds(db: Database.Database) {
   // A watched page (2026-09-13): part of the address every article link
   // shares, or a /regex/, for a page whose links do not all read as headlines.
   addColumn(db, "feeds", "link_pattern", "TEXT");
+
+  // When the browser extension last sent this item's text (2026-09-14), to the
+  // millisecond. The inbox puts what you pushed at the top, and watches the
+  // latest of these to know a clip has landed without reloading its whole list
+  // every few seconds.
+  addColumn(db, "feed_items", "clipped_at", "TEXT");
+
+  // A star on an article (2026-09-14): set aside for a closer look, from the
+  // inbox, and listed on the Write page. A mark, not a decision — it sits on
+  // the source rather than the feed item so it survives keeping, filing and
+  // even discarding, whose text is never thrown away.
+  addColumn(db, "sources", "starred_at", "TEXT");
+
+  // An expanded look at one heading of a brief (2026-09-14), asked for from the
+  // brief page. One per heading per brief: expanding again rewrites it.
+  db.exec(`
+    CREATE TABLE IF NOT EXISTS brief_expansions (
+      id         INTEGER PRIMARY KEY AUTOINCREMENT,
+      brief_day  TEXT    NOT NULL,
+      heading    TEXT    NOT NULL,
+      state      TEXT    NOT NULL DEFAULT 'pending',   -- pending | done | failed
+      body_md    TEXT    NOT NULL DEFAULT '',
+      error      TEXT,
+      model      TEXT,
+      stats_json TEXT    NOT NULL DEFAULT '{}',
+      tokens_in  INTEGER NOT NULL DEFAULT 0,
+      tokens_out INTEGER NOT NULL DEFAULT 0,
+      created_at TEXT    NOT NULL DEFAULT (datetime('now')),
+      updated_at TEXT    NOT NULL DEFAULT (datetime('now')),
+      UNIQUE (brief_day, heading)
+    );
+  `);
+  db.exec(`CREATE INDEX IF NOT EXISTS idx_feed_items_clipped ON feed_items(clipped_at) WHERE clipped_at IS NOT NULL;`);
 }

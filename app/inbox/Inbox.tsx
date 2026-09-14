@@ -11,8 +11,10 @@ import {
   IconExternal,
   IconEye,
   IconFeed,
+  IconFind,
   IconSelectAll,
   IconShelf,
+  IconStar,
   IconText,
   IconUndo,
   IconWeek,
@@ -43,7 +45,23 @@ interface Item {
   story_accounts: number;
   image: string | null;
   source_note: string | null;
+  clipped_at: string | null;
+  starred: number;
 }
+
+interface Group {
+  key: string;
+  title: string;
+  storyId: number | null;
+  items: Item[];
+}
+
+type PaneView = "text" | "page";
+const VIEW_KEY = "corpus.inbox.view";
+
+/** The latest moment anything in a group was sent from the browser, or "". */
+const latestClip = (g: Group) =>
+  g.items.reduce((last, i) => (i.clipped_at && i.clipped_at > last ? i.clipped_at : last), "");
 
 /**
  * The inbox: everything the feeds pulled in, waiting on a yes or a no.
@@ -51,8 +69,9 @@ interface Item {
  * This page is the only place the reading pipeline starts, so it is built for
  * going fast rather than for looking at. Three things do that work.
  *
- * Grouping by story, so five accounts of one thing are one decision. Filtering
- * by outlet, because "clear the wires first" is how you actually triage.
+ * Grouping by story, so five accounts of one thing are one decision. What you
+ * sent from the browser at the top, because you sent it on purpose — and it
+ * arrives there by itself, without a reload.
  * And a keyboard: J and K move, Enter keeps, D discards, P opens the paste box,
  * so a hundred items is a rhythm rather than a hundred trips to the mouse.
  *
@@ -73,10 +92,13 @@ const ENOUGH_TO_READ = 1_000;
 export default function Inbox({
   initial,
   held,
+  stamp,
   reviewOn,
 }: {
   initial: Item[];
   held: number;
+  /** The clip stamp the list was read at; see clipStamp() in lib/triage.ts. */
+  stamp: string;
   reviewOn: boolean;
 }) {
   const router = useRouter();
@@ -87,10 +109,36 @@ export default function Inbox({
   const [error, setError] = useState<string | null>(null);
   const [runId, setRunId] = useState<number | null>(null);
   const [lastDiscarded, setLastDiscarded] = useState<number[]>([]);
-  const [outlet, setOutlet] = useState<string | null>(null);
   const [pasting, setPasting] = useState<number | null>(null);
   const [pasted, setPasted] = useState("");
-  const [cursor, setCursor] = useState(0);
+  /**
+   * The item in the pane, by id rather than by position. The list can gain a
+   * clip at the top or lose the row you just discarded, and the pane should
+   * stay on the article you are reading, not on whatever now sits at its index.
+   * Null until you pick one, which shows the first.
+   */
+  const [currentId, setCurrentId] = useState<number | null>(null);
+  /**
+   * What the pane shows: the text the fetch got, or the article's own page,
+   * live. Remembered in this browser, and read after the first render so the
+   * server's page and the browser's agree.
+   */
+  const [view, setView] = useState<PaneView>("text");
+  useEffect(() => {
+    try {
+      if (localStorage.getItem(VIEW_KEY) === "page") setView("page");
+    } catch {
+      /* storage blocked: the text view it is */
+    }
+  }, []);
+  const chooseView = (next: PaneView) => {
+    setView(next);
+    try {
+      localStorage.setItem(VIEW_KEY, next);
+    } catch {
+      /* remembered for this visit only */
+    }
+  };
   /** The text behind the item under the cursor, fetched once per item. */
   const [preview, setPreview] = useState<HeldText | null>(null);
   const [previewLoading, setPreviewLoading] = useState(false);
@@ -98,25 +146,94 @@ export default function Inbox({
   /** On a phone the pane is a sheet, opened on purpose. */
   const [sheet, setSheet] = useState(false);
 
-  /** Outlets, biggest first — the filter bar doubles as a picture of the day. */
-  const outlets = useMemo(() => {
-    const counts = new Map<string, number>();
-    for (const i of items) {
-      const name = i.outlet ?? i.feed_title;
-      counts.set(name, (counts.get(name) ?? 0) + 1);
-    }
-    return [...counts.entries()].sort((a, b) => b[1] - a[1]);
-  }, [items]);
+  /**
+   * A search of the inbox. `query` is what is typed; `searched` is what the list
+   * on screen is the answer to, which is also what every action and refresh
+   * sends back so the list they return is still that search.
+   */
+  const [query, setQuery] = useState("");
+  const [searched, setSearched] = useState("");
+  const [searching, setSearching] = useState(false);
+  const searchBox = useRef<HTMLInputElement>(null);
 
-  const visible = useMemo(
-    () => (outlet ? items.filter((i) => (i.outlet ?? i.feed_title) === outlet) : items),
-    [items, outlet]
+  // Asked a moment after typing stops, and the answer to an older query is
+  // thrown away when a newer one is on its way. Clearing the box asks at once.
+  useEffect(() => {
+    const q = query.trim();
+    if (q === searched) return;
+    const ctrl = new AbortController();
+    const timer = window.setTimeout(async () => {
+      setSearching(true);
+      try {
+        const res = await fetch(q ? `/api/inbox?q=${encodeURIComponent(q)}` : "/api/inbox", {
+          cache: "no-store",
+          signal: ctrl.signal,
+        });
+        if (!res.ok) throw new Error("The search did not work.");
+        const data = (await res.json()) as { items: Item[]; held: number };
+        setSearching(false);
+        setItems(data.items);
+        setCount(data.held);
+        // A selection made before the search could hide rows the buttons would act on.
+        setSelected(new Set());
+        setSearched(q);
+      } catch (err) {
+        if (ctrl.signal.aborted) return;
+        setSearching(false);
+        setError((err as Error).message);
+      }
+    }, q ? 250 : 0);
+    return () => {
+      ctrl.abort();
+      window.clearTimeout(timer);
+    };
+  }, [query, searched]);
+
+  // "/" puts you in the search box from anywhere on the page, unless you are typing.
+  useEffect(() => {
+    const onSlash = (e: KeyboardEvent) => {
+      if (e.key !== "/" || e.ctrlKey || e.metaKey || e.altKey) return;
+      const t = e.target as HTMLElement | null;
+      if (t && (t.tagName === "INPUT" || t.tagName === "TEXTAREA" || t.isContentEditable)) return;
+      e.preventDefault();
+      searchBox.current?.focus();
+      searchBox.current?.select();
+    };
+    window.addEventListener("keydown", onSlash);
+    return () => window.removeEventListener("keydown", onSlash);
+  }, []);
+
+  const searchWords = useMemo(
+    () => searched.toLowerCase().split(/\s+/).map((w) => w.replace(/"/g, "")).filter(Boolean),
+    [searched]
   );
+  /** Found by its article text alone: nothing the row shows explains the match, so the row says where it was. */
+  const foundInText = (item: Item) => {
+    if (!searchWords.length) return false;
+    const shown = [item.title, item.outlet, item.feed_title, item.lede, item.summary]
+      .filter(Boolean)
+      .join(" ")
+      .toLowerCase();
+    return !searchWords.every((w) => shown.includes(w));
+  };
+
+  /**
+   * Where each story sits in the list, fixed the first time it is seen.
+   *
+   * The list used to be re-sorted by size on every change, so discarding one
+   * account of a story could move its whole group and the rows under the
+   * pointer changed. A story now keeps its place for as long as the page is
+   * open: something new goes to the bottom, and anything the extension has
+   * just sent goes to the very top.
+   */
+  const ranks = useRef(new Map<string, number>());
+  /** The clip time last seen for each item, to tell a fresh clip from an old one. */
+  const clipsSeen = useRef(new Map<number, string>());
 
   /** Grouped by story, so duplicates arrive as one decision. */
   const groups = useMemo(() => {
-    const byStory = new Map<string, { key: string; title: string; storyId: number | null; items: Item[] }>();
-    for (const item of visible) {
+    const byStory = new Map<string, Group>();
+    for (const item of items) {
       const key = item.story_id ? `s${item.story_id}` : `i${item.id}`;
       const existing = byStory.get(key);
       if (existing) existing.items.push(item);
@@ -128,10 +245,33 @@ export default function Inbox({
           items: [item],
         });
     }
-    return [...byStory.values()].sort((a, b) => b.items.length - a.items.length);
-  }, [visible]);
+    const all = [...byStory.values()];
+    const rank = ranks.current;
+
+    // What the page opens on: clips first, the latest clip first, then the
+    // biggest stories. The sort is stable, so ties keep the server's order.
+    const opening = [...all].sort(
+      (a, b) => latestClip(b).localeCompare(latestClip(a)) || b.items.length - a.items.length
+    );
+    if (rank.size === 0) {
+      opening.forEach((g, i) => rank.set(g.key, i));
+    } else {
+      let top = Math.min(...rank.values());
+      let bottom = Math.max(...rank.values());
+      // Oldest clip first, so the most recent one is what ends up on top.
+      const clipped = all
+        .filter((g) => g.items.some((i) => i.clipped_at !== null && clipsSeen.current.get(i.id) !== i.clipped_at))
+        .sort((a, b) => latestClip(a).localeCompare(latestClip(b)));
+      for (const g of clipped) rank.set(g.key, --top);
+      for (const g of opening) if (!rank.has(g.key)) rank.set(g.key, ++bottom);
+    }
+    for (const i of items) if (i.clipped_at) clipsSeen.current.set(i.id, i.clipped_at);
+
+    return all.sort((a, b) => rank.get(a.key)! - rank.get(b.key)!);
+  }, [items]);
 
   const flat = useMemo(() => groups.flatMap((g) => g.items), [groups]);
+  const cursor = Math.max(0, flat.findIndex((f) => f.id === currentId));
   const current = flat[cursor] ?? null;
 
   // The pane follows the cursor. Cached per item, so moving back up the list
@@ -163,6 +303,81 @@ export default function Inbox({
     return () => ctrl.abort();
   }, [current]);
 
+  // Its neighbours too, quietly, so a discard — or J and K — lands on text
+  // that is already here, and the pane changes in one step instead of going
+  // blank while the next article loads.
+  const fetching = useRef(new Set<number>());
+  useEffect(() => {
+    for (const next of [flat[cursor + 1], flat[cursor - 1]]) {
+      if (!next || previews.current.has(next.id) || fetching.current.has(next.id)) continue;
+      fetching.current.add(next.id);
+      fetch(`/api/inbox/${next.id}`)
+        .then((r) => (r.ok ? (r.json() as Promise<HeldText>) : null))
+        .then((data) => {
+          if (data) previews.current.set(data.id, data);
+        })
+        .catch(() => undefined)
+        .finally(() => fetching.current.delete(next.id));
+    }
+  }, [flat, cursor]);
+
+  // A new article opens at its top, not wherever the last one was scrolled to.
+  const paneBox = useRef<HTMLElement>(null);
+  const shownId = current?.id ?? null;
+  useEffect(() => {
+    paneBox.current?.scrollTo({ top: 0 });
+  }, [shownId]);
+
+  // What the extension sends appears without a reload. The stamp moves only
+  // when something is clipped — not when a feed brings in the day's items — so
+  // the list never rearranges itself under you for anything you did not send.
+  // Checked every few seconds while the page is in front, and at once when you
+  // come back to it from the tab you clipped in.
+  const latest = useRef({ items, busy, searched });
+  useEffect(() => {
+    latest.current = { items, busy, searched };
+  });
+  const seenStamp = useRef(stamp);
+  useEffect(() => {
+    let stopped = false;
+    const check = async () => {
+      if (document.hidden || latest.current.busy) return;
+      try {
+        const res = await fetch("/api/inbox?stamp=1", { cache: "no-store" });
+        if (!res.ok) return;
+        const now = ((await res.json()) as { stamp: string }).stamp;
+        if (now === seenStamp.current) return;
+
+        const q = latest.current.searched;
+        const list = await fetch(q ? `/api/inbox?q=${encodeURIComponent(q)}` : "/api/inbox", { cache: "no-store" });
+        if (!list.ok || stopped || latest.current.busy) return;
+        const data = (await list.json()) as { items: Item[]; held: number };
+        // A clip onto an item already here replaced its text: forget the stub
+        // the pane cached, so it shows the article.
+        const before = new Map(latest.current.items.map((i) => [i.id, i.clipped_at]));
+        for (const i of data.items) {
+          if (i.clipped_at && before.get(i.id) !== i.clipped_at) previews.current.delete(i.id);
+        }
+        seenStamp.current = now;
+        setItems(data.items);
+        setCount(data.held);
+      } catch {
+        /* the next check tries again */
+      }
+    };
+    void check();
+    const timer = window.setInterval(() => void check(), 4000);
+    const onBack = () => void check();
+    document.addEventListener("visibilitychange", onBack);
+    window.addEventListener("focus", onBack);
+    return () => {
+      stopped = true;
+      window.clearInterval(timer);
+      document.removeEventListener("visibilitychange", onBack);
+      window.removeEventListener("focus", onBack);
+    };
+  }, []);
+
   const toggle = (id: number) =>
     setSelected((prev) => {
       const next = new Set(prev);
@@ -184,13 +399,22 @@ export default function Inbox({
 
   async function act(action: "keep" | "file" | "discard" | "undo", itemIds: number[]) {
     if (!itemIds.length) return;
+    // Where the pane goes when the item it shows is the one being decided: the
+    // next one down that is not going too, or failing that the nearest above.
+    const going = new Set(itemIds);
+    const shown = current?.id ?? null;
+    const successor =
+      shown !== null && going.has(shown)
+        ? ((flat.slice(cursor + 1).find((i) => !going.has(i.id)) ??
+            flat.slice(0, cursor).reverse().find((i) => !going.has(i.id)))?.id ?? null)
+        : shown;
     setBusy(true);
     setError(null);
     try {
       const res = await fetch("/api/inbox", {
         method: "POST",
         headers: { "content-type": "application/json" },
-        body: JSON.stringify({ action, itemIds }),
+        body: JSON.stringify({ action, itemIds, q: searched || undefined }),
       });
       const data = (await res.json().catch(() => ({}))) as {
         items?: Item[];
@@ -201,12 +425,15 @@ export default function Inbox({
       };
       if (!res.ok) throw new Error(data.error ?? "That did not work.");
       if (data.note) setError(data.note);
-      if (data.items) setItems(data.items);
+      if (data.items) {
+        setItems(data.items);
+        // A refused keep leaves the item where it is, and the pane with it.
+        setCurrentId(data.items.some((i) => i.id === shown) ? shown : successor);
+      }
       if (typeof data.held === "number") setCount(data.held);
       if (data.runId) setRunId(data.runId);
       setSelected(new Set());
       setLastDiscarded(action === "discard" ? itemIds : []);
-      setCursor((c) => Math.max(0, Math.min(c, (data.items?.length ?? 1) - 1)));
       for (const id of itemIds) previews.current.delete(id);
       setSheet(false);
       router.refresh();
@@ -217,6 +444,34 @@ export default function Inbox({
     }
   }
 
+  /**
+   * Stars or unstars an item's article. A mark, not a decision: the item stays
+   * in the inbox, and the Write page's Starred tab keeps the article for a
+   * closer look whatever you decide here. Shown at once and put back if the
+   * save fails.
+   */
+  async function star(item: Item) {
+    if (item.source_id === null) return;
+    const on = !item.starred;
+    const show = (value: number) =>
+      setItems((all) => all.map((i) => (i.id === item.id ? { ...i, starred: value } : i)));
+    show(on ? 1 : 0);
+    try {
+      const res = await fetch("/api/starred", {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ sourceId: item.source_id, starred: on }),
+      });
+      if (!res.ok) {
+        const data = (await res.json().catch(() => ({}))) as { error?: string };
+        throw new Error(data.error ?? "The star did not save.");
+      }
+    } catch (err) {
+      show(on ? 0 : 1);
+      setError((err as Error).message);
+    }
+  }
+
   async function savePaste(itemId: number) {
     setBusy(true);
     setError(null);
@@ -224,7 +479,7 @@ export default function Inbox({
       const res = await fetch("/api/inbox", {
         method: "POST",
         headers: { "content-type": "application/json" },
-        body: JSON.stringify({ action: "paste", itemIds: [itemId], text: pasted }),
+        body: JSON.stringify({ action: "paste", itemIds: [itemId], text: pasted, q: searched || undefined }),
       });
       const data = (await res.json().catch(() => ({}))) as {
         items?: Item[];
@@ -245,16 +500,18 @@ export default function Inbox({
     }
   }
 
-  /** J/K to move, Enter to keep, F to file, D to discard, P to paste, X to select, O to open. Not while typing. */
+  /** J/K to move, Enter to keep, F to file, D to discard, S to star, P to paste, X to select, O to open. Not while typing. */
   function onKey(e: React.KeyboardEvent) {
     const tag = (e.target as HTMLElement).tagName;
     if (tag === "TEXTAREA" || tag === "INPUT" || pasting !== null) return;
     const here = flat[cursor];
-    if (e.key === "j") setCursor((c) => Math.min(c + 1, flat.length - 1));
-    else if (e.key === "k") setCursor((c) => Math.max(c - 1, 0));
+    if (e.key === "j") setCurrentId(flat[Math.min(cursor + 1, flat.length - 1)]?.id ?? null);
+    else if (e.key === "k") setCurrentId(flat[Math.max(cursor - 1, 0)]?.id ?? null);
     else if (e.key === "Enter" && here) void act("keep", [here.id]);
     else if (e.key === "f" && here) void act("file", [here.id]);
     else if (e.key === "d" && here) void act("discard", [here.id]);
+    else if (e.key === "s" && here) void star(here);
+    else if (e.key === "v" && here?.url) chooseView(view === "page" ? "text" : "page");
     else if (e.key === "p" && here) {
       setPasting(here.id);
       setPasted("");
@@ -265,7 +522,7 @@ export default function Inbox({
   }
 
   const selectedIds = [...selected];
-  const visibleIds = visible.map((i) => i.id);
+  const visibleIds = items.map((i) => i.id);
 
   const pasteBox = (item: Item) => (
     <div className="rounded-lg border border-[var(--color-accent)]/50 bg-white p-3">
@@ -318,6 +575,10 @@ export default function Inbox({
       onKeep={() => act("keep", [current.id])}
       onFile={() => act("file", [current.id])}
       onDiscard={() => act("discard", [current.id])}
+      starred={Boolean(current.starred)}
+      onStar={() => void star(current)}
+      view={view}
+      onView={chooseView}
       onPaste={() => {
         setPasting(pasting === current.id ? null : current.id);
         setPasted("");
@@ -359,6 +620,12 @@ export default function Inbox({
             />
           ) : null}
           <Link
+            href="/write?tab=starred"
+            className="inline-flex items-center gap-1.5 rounded-full border border-[var(--color-rule)] px-3 py-1.5 text-sm transition hover:border-[var(--color-accent)]"
+          >
+            <IconStar /> Starred
+          </Link>
+          <Link
             href="/week"
             className="inline-flex items-center gap-1.5 rounded-full border border-[var(--color-rule)] px-3 py-1.5 text-sm transition hover:border-[var(--color-accent)]"
           >
@@ -380,43 +647,57 @@ export default function Inbox({
         </p>
       ) : null}
 
+      {/* Out of the page's flow: a message arriving or clearing used to push
+          the whole list up or down under the pointer. */}
       {error ? (
-        <p className="rounded-lg border border-red-300 bg-red-50 px-3 py-2 text-sm text-red-900">{error}</p>
+        <div
+          role="status"
+          className="fixed bottom-5 left-1/2 z-40 flex w-max max-w-[calc(100vw-2rem)] -translate-x-1/2 items-start gap-3 rounded-lg border border-red-300 bg-red-50 px-4 py-2.5 text-sm text-red-900 shadow-lg sm:max-w-xl"
+        >
+          <span>{error}</span>
+          <button
+            type="button"
+            onClick={() => setError(null)}
+            aria-label="Dismiss"
+            className="mt-0.5 shrink-0 opacity-60 transition hover:opacity-100"
+          >
+            <IconX size={14} />
+          </button>
+        </div>
       ) : null}
 
-      {items.length > 0 ? (
+      {items.length > 0 || searched ? (
         <>
-          {/* Outlets, as a filter and as a shape of the day. */}
-          <div className="flex flex-wrap items-center gap-1.5">
-            <button
-              type="button"
-              onClick={() => setOutlet(null)}
-              className={`rounded-full px-3 py-1 text-xs transition ${
-                outlet === null
-                  ? "bg-[var(--color-ink)] text-white"
-                  : "border border-[var(--color-rule)] hover:border-[var(--color-accent)]"
-              }`}
-            >
-              Everything {items.length}
-            </button>
-            {outlets.map(([name, n]) => (
-              <button
-                key={name}
-                type="button"
-                onClick={() => setOutlet(outlet === name ? null : name)}
-                className={`rounded-full px-3 py-1 text-xs transition ${
-                  outlet === name
-                    ? "bg-[var(--color-ink)] text-white"
-                    : "border border-[var(--color-rule)] hover:border-[var(--color-accent)]"
-                }`}
-              >
-                {name} <span className="opacity-60">{n}</span>
-              </button>
-            ))}
-          </div>
-
-          {/* The action bar follows you down the page. */}
+          {/* The action bar follows you down the page. The outlet chips that
+              sat above it are gone: a chip vanishing when its last item was
+              decided reflowed the row and moved the list. */}
           <div className="sticky top-0 z-20 -mx-2 flex flex-wrap items-center gap-2 rounded-lg border border-[var(--color-rule)] bg-white/85 px-3 py-2 backdrop-blur">
+            <label className="relative flex min-w-[12rem] flex-1 basis-56 items-center sm:max-w-xs">
+              <IconFind size={14} className="pointer-events-none absolute start-2.5 text-[var(--color-muted)]" />
+              <input
+                ref={searchBox}
+                type="search"
+                value={query}
+                onChange={(e) => setQuery(e.target.value)}
+                onKeyDown={(e) => {
+                  if (e.key === "Escape") {
+                    setQuery("");
+                    e.currentTarget.blur();
+                  }
+                }}
+                placeholder="Search the inbox"
+                aria-label="Search the inbox — headlines, outlets and article text"
+                title="Headlines, outlets and the article text. / to jump here, Esc to clear."
+                className="w-full rounded-full border border-[var(--color-rule)] bg-white py-1 pe-20 ps-7 text-sm outline-none focus:border-[var(--color-accent)]"
+              />
+              {query.trim() ? (
+                <span className="pointer-events-none absolute end-3 text-[11px] text-[var(--color-muted)]">
+                  {searching || query.trim() !== searched
+                    ? "searching…"
+                    : `${items.length}${items.length >= 200 ? "+" : ""} found`}
+                </span>
+              ) : null}
+            </label>
             <button
               type="button"
               disabled={busy || !selectedIds.length}
@@ -448,7 +729,7 @@ export default function Inbox({
               onClick={() => setSelected(new Set(visibleIds))}
               className="inline-flex items-center gap-1 text-xs text-[var(--color-muted)] transition hover:text-[var(--color-accent)]"
             >
-              <IconSelectAll size={14} /> Select all {outlet ? `from ${outlet}` : ""}
+              <IconSelectAll size={14} /> Select all{searched ? " found" : ""}
             </button>
             {selectedIds.length ? (
               <button
@@ -470,19 +751,32 @@ export default function Inbox({
               </button>
             ) : null}
             <span className="ml-auto hidden text-xs text-[var(--color-muted)] sm:inline">
+              <kbd className="rounded border border-[var(--color-rule)] px-1">/</kbd> search ·{" "}
               <kbd className="rounded border border-[var(--color-rule)] px-1">j</kbd>{" "}
               <kbd className="rounded border border-[var(--color-rule)] px-1">k</kbd> move ·{" "}
               <kbd className="rounded border border-[var(--color-rule)] px-1">↵</kbd> keep ·{" "}
               <kbd className="rounded border border-[var(--color-rule)] px-1">f</kbd> file ·{" "}
               <kbd className="rounded border border-[var(--color-rule)] px-1">d</kbd> discard ·{" "}
+              <kbd className="rounded border border-[var(--color-rule)] px-1">s</kbd> star ·{" "}
               <kbd className="rounded border border-[var(--color-rule)] px-1">p</kbd> paste ·{" "}
+              <kbd className="rounded border border-[var(--color-rule)] px-1">v</kbd> page ·{" "}
               <kbd className="rounded border border-[var(--color-rule)] px-1">o</kbd> open
             </span>
           </div>
         </>
       ) : null}
 
-      {items.length === 0 ? (
+      {items.length === 0 && searched ? (
+        <div className="rounded-xl border border-dashed border-[var(--color-rule)] px-6 py-16 text-center">
+          <p className="font-serif text-xl">Nothing in the inbox matches “{searched}”</p>
+          <p className="mx-auto mt-2 max-w-[46ch] text-sm text-[var(--color-muted)]">
+            Headlines, outlets and the text of every article waiting here were searched.{" "}
+            <button type="button" onClick={() => setQuery("")} className="underline hover:text-[var(--color-accent)]">
+              Clear the search
+            </button>
+          </p>
+        </div>
+      ) : items.length === 0 ? (
         <div className="rounded-xl border border-dashed border-[var(--color-rule)] px-6 py-16 text-center">
           <p className="font-serif text-xl">Nothing waiting</p>
           <p className="mx-auto mt-2 max-w-[46ch] text-sm text-[var(--color-muted)]">
@@ -552,7 +846,7 @@ export default function Inbox({
                           // clicks; anywhere else on the row picks the item.
                           onClick={(e) => {
                             if ((e.target as HTMLElement).closest("a, button, input, textarea, label")) return;
-                            setCursor(flat.findIndex((f) => f.id === item.id));
+                            setCurrentId(item.id);
                           }}
                           className={`group relative cursor-pointer px-4 py-3 transition ${
                             chosen ? "bg-[var(--color-accent-soft)]/60" : "hover:bg-[var(--color-accent-soft)]/25"
@@ -588,10 +882,23 @@ export default function Inbox({
                                     item.title
                                   )}
                                 </h2>
+                                {item.starred ? (
+                                  <span title="Starred — on the Write page's Starred tab" className="self-center text-amber-500">
+                                    <IconStar size={13} fill="currentColor" />
+                                  </span>
+                                ) : null}
                                 <span className="text-xs text-[var(--color-muted)]">
                                   {item.outlet ?? item.feed_title}
                                   {item.published_at ? ` · ${relativeDate(item.published_at)}` : ""}
                                 </span>
+                                {foundInText(item) ? (
+                                  <span
+                                    title="The words are in the article's text rather than the headline"
+                                    className="rounded-full bg-sky-50 px-2 py-0.5 text-[11px] text-sky-800"
+                                  >
+                                    found in the text
+                                  </span>
+                                ) : null}
                                 {thin ? (
                                   <span className="rounded-full bg-amber-100 px-2 py-0.5 text-[11px] text-amber-800">
                                     paste the article to keep it
@@ -626,7 +933,7 @@ export default function Inbox({
                                   <button
                                     type="button"
                                     onClick={() => {
-                                      setCursor(flat.findIndex((f) => f.id === item.id));
+                                      setCurrentId(item.id);
                                       setSheet(true);
                                     }}
                                     title="See what was fetched"
@@ -645,6 +952,17 @@ export default function Inbox({
                                     className="inline-flex items-center gap-1 transition hover:text-[var(--color-accent)]"
                                   >
                                     <IconClipboard /> Paste text
+                                  </button>
+                                  <button
+                                    type="button"
+                                    disabled={item.source_id === null}
+                                    onClick={() => void star(item)}
+                                    title={item.starred ? "Unstar" : "Star it for a closer look — listed on the Write page"}
+                                    className={`inline-flex items-center gap-1 transition hover:text-amber-600 disabled:opacity-30 ${
+                                      item.starred ? "text-amber-600" : ""
+                                    }`}
+                                  >
+                                    <IconStar fill={item.starred ? "currentColor" : "none"} /> {item.starred ? "Starred" : "Star"}
                                   </button>
                                   <button
                                     type="button"
@@ -696,8 +1014,12 @@ export default function Inbox({
             })}
           </div>
 
-          {/* The pane. Sticky under the action bar; scrolls on its own. */}
-          <aside className="sticky top-14 hidden max-h-[calc(100vh-4.5rem)] overflow-y-auto rounded-xl border border-[var(--color-rule)] bg-white lg:block">
+          {/* The pane. Sticky under the action bar; scrolls on its own. One
+              fixed height, so it does not shrink and regrow between articles. */}
+          <aside
+            ref={paneBox}
+            className="sticky top-14 hidden h-[calc(100vh-4.5rem)] overflow-y-auto rounded-xl border border-[var(--color-rule)] bg-white lg:block"
+          >
             {pane}
           </aside>
         </div>
@@ -734,6 +1056,41 @@ function pictureOf(item: Item): string | null {
   return null;
 }
 
+/**
+ * The article's own page, live, inside the pane.
+ *
+ * Nearly every news site refuses to be shown inside another page, and says so
+ * in a header the browser obeys; the Corpus Inbox extension (0.3.0 and later)
+ * removes that header for frames Corpus opens, and for nothing else. Without
+ * it the frame stays blank, which is why the way out is always under it.
+ *
+ * The sandbox leaves out top navigation, so a page that tries to break out of
+ * its frame cannot carry Corpus away with it.
+ */
+function PageView({ url }: { url: string }) {
+  return (
+    <div className="space-y-1.5 border-t border-[var(--color-rule)] pt-3">
+      <iframe
+        key={url}
+        src={url}
+        title="The article's own page"
+        sandbox="allow-scripts allow-same-origin allow-forms allow-popups allow-popups-to-escape-sandbox allow-storage-access-by-user-activation"
+        referrerPolicy="no-referrer"
+        className="h-[calc(100vh-17rem)] min-h-[24rem] w-full rounded-lg border border-[var(--color-rule)] bg-white"
+      />
+      <p className="text-[11px] leading-snug text-[var(--color-muted)]">
+        Blank? The site refuses to be shown inside another page — the Corpus Inbox extension lifts that from
+        version 0.3.0 — or{" "}
+        <a href={url} target="_blank" rel="noreferrer" className="underline hover:text-[var(--color-accent)]">
+          open it in a tab
+        </a>
+        . Signed out? Brave keeps your logins from pages inside another site; allow cross-site cookies for
+        Corpus in Shields. The extension&apos;s icon sends the article shown here.
+      </p>
+    </div>
+  );
+}
+
 /** A picture beside the row. Gone without a trace when it will not load. */
 function Thumb({ src, large = false }: { src: string; large?: boolean }) {
   const [failed, setFailed] = useState(false);
@@ -748,9 +1105,10 @@ function Thumb({ src, large = false }: { src: string; large?: boolean }) {
       onError={() => setFailed(true)}
       className={
         large
-          ? // Capped, now the pane can be half the page: at that width a 16:9
-            // picture stood over 300px tall and pushed the text out of sight.
-            "aspect-video max-h-56 w-full object-cover"
+          ? // A fixed height rather than a ratio: the space is held before the
+            // picture arrives, so the text does not drop when it loads, and at
+            // half the page a 16:9 picture stood over 300px tall.
+            "h-56 w-full object-cover"
           : "h-[4.5rem] w-28 shrink-0 self-start rounded-md object-cover ring-1 ring-black/10"
       }
     />
@@ -774,6 +1132,10 @@ function Preview({
   onFile,
   onDiscard,
   onPaste,
+  starred,
+  onStar,
+  view,
+  onView,
 }: {
   item: Item;
   text: HeldText | null;
@@ -785,12 +1147,16 @@ function Preview({
   onFile: () => void;
   onDiscard: () => void;
   onPaste: () => void;
+  starred: boolean;
+  onStar: () => void;
+  view: PaneView;
+  onView: (view: PaneView) => void;
 }) {
   const verdict = text?.verdict ?? (item.chars < ENOUGH_TO_READ ? "thin" : "enough");
   const body = text ? text.passages.map((p) => p.text).join("\n\n") : "";
   return (
     <div>
-      {pictureOf(item) ? <Thumb src={pictureOf(item)!} large /> : null}
+      {view === "text" && pictureOf(item) ? <Thumb src={pictureOf(item)!} large /> : null}
       <div className="space-y-3 p-4">
         <div>
           <h2 className="font-serif text-lg font-semibold leading-snug">
@@ -807,6 +1173,26 @@ function Preview({
             {item.published_at ? ` · ${formatDateTime(item.published_at)}` : ""}
           </p>
         </div>
+
+        {item.url ? (
+          <div role="tablist" aria-label="What the pane shows" className="inline-flex rounded-full border border-[var(--color-rule)] p-0.5 text-xs">
+            {(["text", "page"] as const).map((v) => (
+              <button
+                key={v}
+                type="button"
+                role="tab"
+                aria-selected={view === v}
+                onClick={() => onView(v)}
+                title={v === "text" ? "The text Corpus fetched (V)" : "The article's own page, live, inside Corpus (V)"}
+                className={`rounded-full px-3 py-1 transition ${
+                  view === v ? "bg-[var(--color-ink)] text-white" : "text-[var(--color-muted)] hover:text-[var(--color-ink)]"
+                }`}
+              >
+                {v === "text" ? "Fetched text" : "Page"}
+              </button>
+            ))}
+          </div>
+        ) : null}
 
         {verdict === "enough" ? (
           <p className="rounded-lg border border-emerald-200 bg-emerald-50 px-3 py-2 text-sm text-emerald-900">
@@ -857,6 +1243,19 @@ function Preview({
           </button>
           <button
             type="button"
+            disabled={item.source_id === null}
+            onClick={onStar}
+            title={starred ? "Unstar" : "Star it for a closer look — listed on the Write page, whatever you decide here"}
+            className={`inline-flex items-center gap-1.5 rounded-full border px-3 py-1.5 text-sm transition disabled:opacity-30 ${
+              starred
+                ? "border-amber-400 bg-amber-50 text-amber-700"
+                : "border-[var(--color-rule)] hover:border-amber-400 hover:text-amber-700"
+            }`}
+          >
+            <IconStar fill={starred ? "currentColor" : "none"} /> {starred ? "Starred" : "Star"}
+          </button>
+          <button
+            type="button"
             disabled={busy}
             onClick={onPaste}
             className={`inline-flex items-center gap-1.5 rounded-full border px-3 py-1.5 text-sm transition disabled:opacity-30 ${
@@ -873,7 +1272,9 @@ function Preview({
           <p className="text-xs italic text-[var(--color-muted)]">{text.source_note}</p>
         ) : null}
 
-        {loading && !text ? (
+        {view === "page" && item.url ? (
+          <PageView url={item.url} />
+        ) : loading && !text ? (
           <p className="text-sm text-[var(--color-muted)]">Opening…</p>
         ) : body ? (
           <div

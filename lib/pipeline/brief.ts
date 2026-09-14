@@ -156,7 +156,7 @@ Write in the language you are told to use. Quote in the source's own language
 where you quote at all, and rarely.`;
 
 /** Passages, as the writer sees them: dated, attributed, from a named outlet. */
-function renderPassages(rows: BriefPassage[]): string {
+export function renderPassages(rows: BriefPassage[]): string {
   return rows
     .map((p) => {
       const when = (p.published_at ?? "").slice(0, 16).replace("T", " ");
@@ -242,7 +242,7 @@ function material(m: BriefMaterial): string[] {
   return parts;
 }
 
-const LANGUAGE_NAMES: Record<string, string> = {
+export const LANGUAGE_NAMES: Record<string, string> = {
   en: "English",
   ar: "Arabic",
   fr: "French",

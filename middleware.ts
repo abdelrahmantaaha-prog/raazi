@@ -32,6 +32,13 @@ export const config = { runtime: "nodejs" };
 
 const YEAR = 60 * 60 * 24 * 365;
 
+/**
+ * The app's manifest and its icons: what lets a browser offer to install
+ * Corpus as its own window, which it asks for before anyone has signed in.
+ * Fixed names, read-only, and none of them says anything about the library.
+ */
+const APP_FILES = new Set(["/manifest.webmanifest", "/icon-192.png", "/icon-512.png", "/icon-maskable-512.png"]);
+
 /** Printed once per process, so `npm run dev:lan` tells you where to sign in. */
 let announced = false;
 
@@ -42,6 +49,7 @@ export async function middleware(req: NextRequest) {
 
   // Discovery must work before anyone has signed in, or nothing ever could.
   if (req.method === "GET" && pathname === "/api/hello") return NextResponse.next();
+  if (req.method === "GET" && APP_FILES.has(pathname)) return NextResponse.next();
 
   // LAN mode switched on by the environment alone has no token yet; the first
   // request makes one. Fail closed in the meantime — never open.

@@ -28,7 +28,68 @@
     article = null;
   }
 
-  const text = selection.trim().length >= 400 ? selection.trim() : (article && article.textContent ? article.textContent : document.body.innerText || "");
+  // Readability's textContent runs every paragraph into the next — a <p> holds
+  // no newline, so "…the vote.The committee…" — and that wall is what used to
+  // be sent. Its HTML keeps the structure, so the text is taken from that: a
+  // blank line between blocks, headings marked as Markdown so Corpus files the
+  // passages under them, list items on lines of their own, and figure captions
+  // left out, as Corpus's own fetcher does.
+  const BLOCK = /^(P|DIV|SECTION|ARTICLE|MAIN|HEADER|FOOTER|ASIDE|BLOCKQUOTE|PRE|UL|OL|LI|TABLE|THEAD|TBODY|TR|DL|DT|DD|HR|H[1-6])$/;
+  const SKIP = /^(SCRIPT|STYLE|NOSCRIPT|TEMPLATE|FIGURE|FIGCAPTION|BUTTON|SVG)$/;
+  const blocksOf = (html) => {
+    const doc = new DOMParser().parseFromString(html, "text/html");
+    const out = [];
+    let line = "";
+    const end = () => {
+      const t = line.replace(/ *\n */g, "\n").replace(/ {2,}/g, " ").trim();
+      if (t) out.push(t);
+      line = "";
+    };
+    const walk = (node) => {
+      for (const child of node.childNodes) {
+        if (child.nodeType === 3) {
+          line += child.nodeValue.replace(/\s+/g, " ");
+          continue;
+        }
+        if (child.nodeType !== 1) continue;
+        const tag = child.tagName.toUpperCase();
+        if (SKIP.test(tag)) continue;
+        if (tag === "BR") {
+          line += "\n";
+          continue;
+        }
+        if (!BLOCK.test(tag)) {
+          walk(child);
+          continue;
+        }
+        end();
+        const heading = /^H([1-6])$/.exec(tag);
+        if (heading) {
+          const t = child.textContent.replace(/\s+/g, " ").trim();
+          if (t) out.push(`${"#".repeat(Math.min(3, Number(heading[1])))} ${t}`);
+          continue;
+        }
+        if (tag === "LI") line = "- ";
+        walk(child);
+        end();
+      }
+    };
+    walk(doc.body);
+    end();
+    return out.join("\n\n");
+  };
+
+  let readable = "";
+  try {
+    readable = article && article.content ? blocksOf(article.content) : "";
+  } catch (e) {
+    readable = "";
+  }
+  const text =
+    selection.trim().length >= 400
+      ? selection.trim()
+      : readable || (article && article.textContent) || document.body.innerText || "";
+  const tidy = (s) => s.replace(/\r\n/g, "\n").replace(/[ \t]+\n/g, "\n").replace(/\n{3,}/g, "\n\n").trim();
 
   const image = first(
     'meta[property="og:image:secure_url"]',
@@ -69,7 +130,11 @@
     outlet: first('meta[property="og:site_name"]', 'meta[name="application-name"]') || (article && article.siteName) || "",
     image: absImage,
     lang: (document.documentElement.getAttribute("lang") || "").split(/[-_]/)[0].toLowerCase(),
-    text: text.replace(/\r\n/g, "\n").replace(/[ \t]+\n/g, "\n").replace(/\n{3,}/g, "\n\n").trim(),
+    text: tidy(text),
+    // The article whatever is selected, for sending alongside a gathered quote —
+    // where the selection is the quote, not a stand-in for the article.
+    articleText: tidy(readable || (article && article.textContent) || document.body.innerText || ""),
+    selection: selection.trim(),
     fromSelection: selection.trim().length >= 400,
   };
 })();

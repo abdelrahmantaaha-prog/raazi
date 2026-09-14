@@ -29,6 +29,7 @@ export function Editor({
   citations,
   onChange,
   onCite,
+  onLibrary,
   dir,
 }: {
   html: string;
@@ -36,6 +37,8 @@ export function Editor({
   onChange: (html: string) => void;
   /** Asked for when you press Cite with nothing selected to attach it to. */
   onCite: () => void;
+  /** Opens the search for something in the library to cite. */
+  onLibrary?: () => void;
   dir?: "ltr" | "rtl";
 }) {
   const box = useRef<HTMLDivElement>(null);
@@ -118,7 +121,10 @@ export function Editor({
 
   return (
     <div className="rounded-lg border border-[var(--color-rule)] bg-white">
-      <div className="flex flex-wrap items-center gap-0.5 border-b border-[var(--color-rule)] px-2 py-1.5">
+      {/* Pinned to the top of the window while the draft scrolls under it: in a
+          long piece the formatting and the citations were a scroll away from
+          the sentence that needed them. */}
+      <div className="sticky top-0 z-10 flex flex-wrap items-center gap-0.5 rounded-t-lg border-b border-[var(--color-rule)] bg-white/95 px-2 py-1.5 backdrop-blur">
         <Group>
           <Tool label="H1" title="Heading" onClick={() => run("formatBlock", "<h1>")} />
           <Tool label="H2" title="Subheading" onClick={() => run("formatBlock", "<h2>")} />
@@ -138,12 +144,24 @@ export function Editor({
         </Group>
         <Divider />
         <button
+          // Keeps the caret in the draft, so the citation lands where it was.
+          onMouseDown={(e) => e.preventDefault()}
           onClick={onCite}
           className="rounded px-2 py-1 text-xs font-medium text-[var(--color-accent)] hover:bg-[var(--color-accent-soft)]"
           title="Add a reference and cite it here"
         >
           + Citation
         </button>
+        {onLibrary ? (
+          <button
+            onMouseDown={(e) => e.preventDefault()}
+            onClick={onLibrary}
+            className="rounded px-2 py-1 text-xs font-medium text-[var(--color-accent)] hover:bg-[var(--color-accent-soft)]"
+            title="Search your library — titles, authors and full text — and cite what you find where the cursor is"
+          >
+            Cite from library
+          </button>
+        ) : null}
 
         {citations.length > 0 && (
           <select

@@ -111,11 +111,13 @@ export function fingerprint(): Fingerprint {
   const stamps = [
     latestOf("SELECT MAX(added_at) AS t FROM sources"),
     latestOf("SELECT MAX(kept_at) AS t FROM sources"),
+    latestOf("SELECT MAX(starred_at) AS t FROM sources"),
     latestOf("SELECT MAX(updated_at) AS t FROM entries"),
     latestOf("SELECT MAX(decided_at) AS t FROM feed_items"),
     latestOf("SELECT MAX(created_at) AS t FROM briefs"),
     latestOf("SELECT MAX(updated_at) AS t FROM runs"),
     tableExists("drafts") ? latestOf("SELECT MAX(updated_at) AS t FROM drafts") : null,
+    tableExists("brief_expansions") ? latestOf("SELECT MAX(updated_at) AS t FROM brief_expansions") : null,
   ].filter((t): t is string => Boolean(t));
   const f = {
     sources: count("SELECT COUNT(*) AS n FROM sources"),

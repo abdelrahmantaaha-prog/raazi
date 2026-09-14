@@ -393,6 +393,76 @@ section("The coherence pass cannot invent or lose citations");
 }
 
 // ---------------------------------------------------------------------------
+section("Anything in the library can be found and cited from the desk");
+// ---------------------------------------------------------------------------
+{
+  const { searchCitable, sentenceWith } = await import("../lib/cite-search.ts");
+  const src = (title, { author = null, outlet = null, year = null, triage = null, starred = false } = {}) =>
+    Number(
+      db()
+        .prepare(
+          "INSERT INTO sources (title, kind, status, author, outlet, year, triage, starred_at) VALUES (?, 'text', 'ready', ?, ?, ?, ?, ?)"
+        )
+        .run(title, author, outlet, year, triage, starred ? "2026-09-14 10:00:00" : null).lastInsertRowid
+    );
+  const chunk = (sourceId, text, locator = { page: 7 }) =>
+    db().prepare("INSERT INTO chunks (source_id, seq, text, locator_json) VALUES (?, 0, ?, ?)").run(sourceId, text, JSON.stringify(locator));
+
+  // A passage that names nobody: extraction ties no person or institution to it,
+  // so the pane's first search could never have found it.
+  const budget = src("Appropriations in an Election Year", { author: "Jane Roe", year: "2025" });
+  chunk(budget, "Congress returned in September. The subcommittee cut the disaster relief line by a third. Nobody was named in the report.", { page: 41 });
+  const held = src("Waiting in the inbox", { triage: "held" });
+  chunk(held, "The subcommittee also met about disaster relief in a piece still waiting.");
+  const thrown = src("Thrown out", { triage: "discarded" });
+  chunk(thrown, "A discarded article about disaster relief.");
+  const starred = src("A starred article on relief", { triage: "held", starred: true, outlet: "The Paper" });
+  chunk(starred, "Relief funds were delayed, the starred article said.");
+  const kept = src("Kept piece", { triage: "kept", outlet: "Northern Post" });
+  chunk(kept, "Pipeline permits were approved.");
+
+  const found = searchCitable("disaster relief");
+  const from = found.passages.map((p) => p.source_id);
+  check("a passage naming nobody is found by its words", from.includes(budget), JSON.stringify(from));
+  const hit = found.passages.find((p) => p.source_id === budget);
+  check("and handed back as the sentence it was found by", hit?.quote === "The subcommittee cut the disaster relief line by a third.", JSON.stringify(hit?.quote));
+  check("cited with author, title, year and page", hit?.citation === "Jane Roe, Appropriations in an Election Year, 2025, p. 41", JSON.stringify(hit?.citation));
+  check("nothing still waiting in the inbox", !from.includes(held));
+  check("nothing thrown out", !from.includes(thrown));
+  check("but an article you starred, read or not, is there", searchCitable("relief").passages.some((p) => p.source_id === starred));
+  check("the last word matches while it is being typed", searchCitable("subcomm").passages.some((p) => p.source_id === budget));
+  check("every word must be in the passage", searchCitable("relief pipeline").passages.length === 0);
+
+  check("a source is found by its title", searchCitable("appropriations").sources.some((s) => s.id === budget));
+  check("by its author", searchCitable("Roe").sources.some((s) => s.id === budget));
+  check("by its outlet", searchCitable("Northern").sources.some((s) => s.id === kept));
+  check(
+    "a whole source is cited without a page",
+    searchCitable("appropriations").sources.find((s) => s.id === budget)?.citation === "Jane Roe, Appropriations in an Election Year, 2025"
+  );
+  check("held and discarded sources are not offered by name either", searchCitable("Waiting inbox").sources.length === 0 && searchCitable("Thrown").sources.length === 0);
+  check("one letter is not a search", searchCitable("r").sources.length === 0 && searchCitable("r").passages.length === 0);
+  check(
+    "syntax typed into the box does not break it",
+    [`"`, "*", "(", "OR", "NEAR(", "a:b", "100%", `"relief`].every((q) => {
+      const r = searchCitable(q);
+      return Array.isArray(r.sources) && Array.isArray(r.passages);
+    })
+  );
+  check(
+    "the sentence holding most of the words wins",
+    sentenceWith("Relief came. Disaster relief came late. Nothing else.", ["disaster", "relief"]) === "Disaster relief came late."
+  );
+  check(
+    "a very long sentence is cut at a word, not mid-word",
+    (() => {
+      const s = sentenceWith(`${"word ".repeat(200)}end.`, ["word"], 60);
+      return s.length <= 60 && s.endsWith("…") && /word…$/.test(s);
+    })()
+  );
+}
+
+// ---------------------------------------------------------------------------
 section("The curation pane's search touches no model");
 // ---------------------------------------------------------------------------
 {
@@ -416,6 +486,20 @@ section("The curation pane's search touches no model");
     [...desk.matchAll(/fetch\(`?["'`]([^"'`]+)/g)].map((m) => m[1]).join(", ")
   );
   check("no model is imported into the desk at all", !/lib\/ai|generateJson|generateText/.test(desk));
+
+  // The library search for citing, and the dialog and toolbar that open it.
+  const librarySearch =
+    fs.readFileSync(path.join(root, "app/api/drafts/library/route.ts"), "utf8") +
+    fs.readFileSync(path.join(root, "lib/cite-search.ts"), "utf8");
+  check("the library search for citing imports nothing from lib/ai either", !/lib\/ai|generateJson|generateText/.test(librarySearch));
+  const deskParts = ["LibraryCite.tsx", "Editor.tsx"].map((f) => fs.readFileSync(path.join(root, "app/write", f), "utf8"));
+  const partCalls = deskParts.flatMap((s) => [...s.matchAll(/fetch\(`?["'`]([^"'`]+)/g)].map((m) => m[1]));
+  check(
+    "the cite dialog and the editor reach only the drafts routes",
+    partCalls.length > 0 && partCalls.every((c) => /\/api\/drafts(\/|\?|$)/.test(c)),
+    partCalls.join(", ")
+  );
+  check("and import no model", deskParts.every((s) => !/lib\/ai|generateJson|generateText/.test(s)));
 }
 
 console.log(`\n${passed} passed, ${failed} failed`);

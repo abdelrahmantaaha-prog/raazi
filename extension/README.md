@@ -17,12 +17,58 @@ Works in Brave, Chrome and Edge (Manifest V3).
 
 ## Use
 
-- Click the icon on any article: it shows the title, the outlet, the picture
-  and a word count, and says whether that is enough to read. **Send to inbox**
-  puts it in the inbox with the full text, marked *full text*.
-- **Alt+Shift+C** does the same without opening the popup; the icon shows ✓ or !.
+- Click the icon on any article and it is sent at once: the popup shows the
+  title, outlet, picture and word count, confirms it is in the inbox with the
+  full text, marked *full text*, and closes itself (rest the pointer on it to
+  keep it open). The icon shows ✓.
+- A page too thin to be an article is not sent on the click — the popup says
+  so and waits for **Send to inbox**, so you can select the text first.
+  **Enter** sends from the popup.
+- Untick **Send as soon as I click the icon** (in the popup or Options) to see
+  the article before sending it every time.
+- **Alt+Shift+C** sends without opening the popup at all; the icon shows ✓ or !.
+  The popup shows the key your browser actually assigned — Brave leaves a
+  suggested key unset if something else has it — with a link to change it.
 - If Readability picks the wrong part of a page, select the article text first —
   a selection of 400 characters or more is sent in its place.
+
+## Gathering quotes
+
+Select words on any article, then right-click → **Gather quote to “draft” and
+send the article**, or press **Alt+Shift+Q**. Two things happen at once: the
+words go onto the shelf of your draft on the Write page, and the whole article
+goes into the inbox. The words are marked on the page in yellow, so you can see
+what you have taken; the page itself is not changed.
+
+Each quote is found in the article's own text and tied to that place, so its
+citation names the source and the Write page can open it there. A quote from a
+page you already sent only adds to the shelf — the article is not sent twice —
+and the same words twice on one draft are kept once. An article already read
+into the library still gives up its quotes.
+
+The popup does the same with a draft picker: select words, click the icon,
+choose the draft, **Gather quote + send article**. The draft you choose there is
+the one right-click and the shortcut use afterwards; until you choose, it is the
+draft you worked on last.
+
+## Articles inside Corpus
+
+The inbox's reading pane has a **Page** view that shows the article's own page,
+live, inside Corpus. Nearly every news site refuses to be shown inside another
+page, so on its own that view is blank. The extension lifts the refusal —
+removing `X-Frame-Options` and `Content-Security-Policy` from the response — for
+frames that Corpus's page opens, and nothing else: the rule matches only
+sub-frame requests started by Corpus's own address, and is rewritten when that
+address changes. Untick **Let Corpus show articles inside itself** in Options to
+remove it.
+
+Clicking the icon, or Alt+Shift+C, on Corpus while an article is open in the
+Page view sends *that article*, read out of its frame.
+
+Brave treats a page inside another site as a third party and keeps your logins
+away from it, so a paywalled article inside Corpus usually shows you signed
+out. To have it signed in, allow cross-site cookies for Corpus's address in
+Brave Shields — or open the article in its own tab and send it from there.
 
 The item behaves like anything a feed brought in: it groups with the running
 story, counts in the week when kept, can be discarded and undone. Sending an

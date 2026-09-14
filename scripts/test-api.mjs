@@ -311,6 +311,16 @@ section("LAN mode: bound to everything means asking for a token");
     /req\.method === "GET" && pathname === "\/api\/hello"/.test(middleware),
     "the open route must not accept writes"
   );
+  const appFiles = /APP_FILES = new Set\(\[([^\]]*)\]\)/.exec(middleware)?.[1] ?? "";
+  check(
+    "besides those, only the app's manifest and icons, by exact name",
+    appFiles.split(",").map((s) => s.trim().replace(/"/g, "")).filter(Boolean).every((p) => /^\/(manifest\.webmanifest|icon-[a-z0-9-]+\.png)$/.test(p)),
+    appFiles
+  );
+  check(
+    "and those only for a GET",
+    /req\.method === "GET" && APP_FILES\.has\(pathname\)/.test(middleware) && !/APP_FILES\.has\(pathname\)\)\s*return[^;]*;\s*$/m.test(middleware.replace(/req\.method === "GET" && APP_FILES\.has\(pathname\)/, ""))
+  );
   const hello = fs.readFileSync(path.join(root, "app/api/hello/route.ts"), "utf8");
   check("the open route starts no work", !/kickWorker/.test(hello));
   check("and reports counts, never content", !/quote|body_md|SELECT \*/.test(hello));

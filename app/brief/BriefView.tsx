@@ -9,7 +9,18 @@ import { RunChip } from "../components/RunChip";
 import { Badge } from "../components/ui";
 import { formatDate, formatDateTime } from "@/lib/dates";
 import type { CalendarRow } from "@/lib/calendar";
-import { IconCalendar } from "../components/Icons";
+import { briefSections, headingKey } from "@/lib/brief-sections";
+import { IconCalendar, IconX } from "../components/Icons";
+
+interface ExpansionView {
+  id: number;
+  heading: string;
+  state: string;
+  body: string;
+  error: string | null;
+  model: string | null;
+  runId: number | null;
+}
 
 interface BriefCitation extends Citation {
   chunkId: number | null;
@@ -33,6 +44,7 @@ export function BriefView({
   watchlist,
   stats,
   calendar,
+  expansions = [],
 }: {
   today: string;
   brief: {
@@ -46,10 +58,12 @@ export function BriefView({
   } | null;
   days: { day: string; state: string }[];
   citations: BriefCitation[];
-  watchlist: { id: number; label: string; kind: string; entityId: number | null; recent: number }[];
+  watchlist: { id: number; label: string; kind: string; entityId: number | null; recent: number; source: string }[];
   stats: Record<string, number>;
   /** The dates this brief noticed, for the block under it. */
   calendar?: CalendarRow[];
+  /** The expanded looks written for this brief's headings. */
+  expansions?: ExpansionView[];
 }) {
   const router = useRouter();
   const [openCite, setOpenCite] = useState<{ id: number; anchor: HTMLElement } | null>(null);
@@ -59,6 +73,195 @@ export function BriefView({
 
   const citationMap = useMemo(() => new Map(citations.map((c) => [c.id, c])), [citations]);
   const open = openCite ? citationMap.get(openCite.id) : undefined;
+
+  // --- Following, and not following ----------------------------------------
+  const [phrase, setPhrase] = useState("");
+  const [watchBusy, setWatchBusy] = useState(false);
+
+  /** Stops following something. One Corpus added itself is not suggested again. */
+  async function unwatch(id: number) {
+    setWatchBusy(true);
+    setError(null);
+    try {
+      const res = await fetch(`/api/watchlist?id=${id}`, { method: "DELETE" });
+      if (!res.ok) {
+        const data = (await res.json().catch(() => ({}))) as { error?: string };
+        throw new Error(data.error ?? "That did not work.");
+      }
+      router.refresh();
+    } catch (err) {
+      setError((err as Error).message);
+    } finally {
+      setWatchBusy(false);
+    }
+  }
+
+  async function follow() {
+    const words = phrase.trim();
+    if (!words) return;
+    setWatchBusy(true);
+    setError(null);
+    try {
+      const res = await fetch("/api/watchlist", {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ phrase: words }),
+      });
+      if (!res.ok) {
+        const data = (await res.json().catch(() => ({}))) as { error?: string };
+        throw new Error(data.error ?? "That did not work.");
+      }
+      setPhrase("");
+      router.refresh();
+    } catch (err) {
+      setError((err as Error).message);
+    } finally {
+      setWatchBusy(false);
+    }
+  }
+
+  // --- Expanded looks ---------------------------------------------------------
+  const sections = useMemo(
+    () => new Map(briefSections(brief?.body ?? "").map((s) => [s.heading, s])),
+    [brief?.body]
+  );
+  const expansionOf = useMemo(() => new Map(expansions.map((x) => [x.heading, x])), [expansions]);
+  /** Runs started from this page, by heading, until they finish. */
+  const [expandRuns, setExpandRuns] = useState<Record<string, number>>({});
+  const [expandErrors, setExpandErrors] = useState<Record<string, string>>({});
+  /** Written looks you have folded away. */
+  const [folded, setFolded] = useState<Set<string>>(new Set());
+
+  async function expand(heading: string, force: boolean) {
+    if (!brief) return;
+    setExpandErrors(({ [heading]: _gone, ...rest }) => rest);
+    setFolded((f) => {
+      const next = new Set(f);
+      next.delete(heading);
+      return next;
+    });
+    try {
+      const res = await fetch("/api/brief/expand", {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ day: brief.day, heading, force }),
+      });
+      const data = (await res.json().catch(() => ({}))) as { runId?: number | null; note?: string; error?: string };
+      if (!res.ok) throw new Error(data.error ?? "That did not work.");
+      if (data.runId) setExpandRuns((r) => ({ ...r, [heading]: data.runId! }));
+      else router.refresh();
+    } catch (err) {
+      setExpandErrors((e) => ({ ...e, [heading]: (err as Error).message }));
+    }
+  }
+
+  /** The Expand button, on a heading whose section cites something to expand from. */
+  const expandButton = (h: { text: string; level: number }) => {
+    const key = headingKey(h.text);
+    const section = sections.get(key);
+    if (!brief || h.level < 2 || !section || section.mentionIds.length === 0) return null;
+    const written = expansionOf.get(key);
+    const running = Boolean(expandRuns[key] ?? written?.runId);
+    const done = written?.state === "done";
+    const label = running ? "Expanding…" : done ? (folded.has(key) ? "Show expanded" : "Hide expanded") : "Expand";
+    return (
+      <button
+        type="button"
+        disabled={running}
+        onClick={() =>
+          done
+            ? setFolded((f) => {
+                const next = new Set(f);
+                if (next.has(key)) next.delete(key);
+                else next.add(key);
+                return next;
+              })
+            : void expand(key, false)
+        }
+        title={
+          done
+            ? "Show or hide the expanded look"
+            : "Write a closer look at this from the passages cited here, the rest of those articles, and earlier coverage in your library"
+        }
+        className="ms-2 inline-flex items-center rounded-full border border-[var(--color-rule)] px-2 py-0.5 align-middle font-sans text-[0.7rem] font-normal normal-case tracking-normal text-[var(--color-muted)] transition hover:border-[var(--color-accent)] hover:text-[var(--color-accent)] disabled:opacity-60"
+      >
+        {label}
+      </button>
+    );
+  };
+
+  /** The expanded look, under the whole section it expands. */
+  const expandedLook = (h: { text: string; level: number }) => {
+    const key = headingKey(h.text);
+    const written = expansionOf.get(key);
+    const run = expandRuns[key] ?? written?.runId ?? null;
+    const problem = expandErrors[key];
+    if (!written && !run && !problem) return null;
+    if (written?.state === "done" && folded.has(key) && !run) return null;
+
+    return (
+      <aside className="my-5 rounded-xl border border-[var(--color-accent)]/30 bg-[var(--color-accent-soft)]/20 px-4 py-3 font-sans">
+        <div className="flex flex-wrap items-center gap-2">
+          <span className="text-xs font-semibold uppercase tracking-wide text-[var(--color-accent)]">Expanded · {key}</span>
+          {run ? (
+            <RunChip
+              runId={run}
+              onDone={() => {
+                setExpandRuns(({ [key]: _done, ...rest }) => rest);
+                router.refresh();
+              }}
+            />
+          ) : null}
+          {written?.state === "done" && !run ? (
+            <button
+              type="button"
+              onClick={() => void expand(key, true)}
+              className="ms-auto text-xs text-[var(--color-muted)] transition hover:text-[var(--color-accent)]"
+            >
+              Write it again
+            </button>
+          ) : null}
+        </div>
+
+        {problem ? <p className="mt-2 text-sm text-red-800">{problem}</p> : null}
+
+        {run ? (
+          <p className="mt-2 text-sm text-[var(--color-muted)]">
+            Reading everything the library has on it — the passages cited here, the rest of those articles, and earlier
+            coverage. This takes a minute or two.
+          </p>
+        ) : written?.state === "failed" ? (
+          <p className="mt-2 text-sm text-red-800">
+            {written.error ?? "It could not be written."}{" "}
+            <button type="button" onClick={() => void expand(key, false)} className="underline">
+              Try again
+            </button>
+          </p>
+        ) : written?.state === "done" && written.body ? (
+          <div className="mt-2">
+            <EntryBody
+              body={written.body}
+              citations={citationMap}
+              onCite={(id, anchor) => setOpenCite((cur) => (cur?.id === id ? null : { id, anchor }))}
+              activeId={openCite?.id}
+            />
+            {written.model ? (
+              <p className="mt-2 text-xs text-[var(--color-muted)]">
+                Written by <Badge>{written.model}</Badge>.
+              </p>
+            ) : null}
+          </div>
+        ) : written?.state === "pending" ? (
+          <p className="mt-2 text-sm text-[var(--color-muted)]">
+            It stopped before it finished.{" "}
+            <button type="button" onClick={() => void expand(key, false)} className="underline">
+              Try again
+            </button>
+          </p>
+        ) : null}
+      </aside>
+    );
+  };
 
   /**
    * Writes a brief for a named day.
@@ -145,32 +348,83 @@ export function BriefView({
         <p className="rounded border border-amber-300 bg-amber-50 px-3 py-2 text-sm text-amber-900">{error}</p>
       ) : null}
 
-      {watchlist.length > 0 ? (
-        <div className="flex flex-wrap items-center gap-2 text-sm">
-          <span className="text-[var(--color-muted)]">Watching:</span>
-          {watchlist.map((w) => (
-            <span key={w.id} className="inline-flex items-center gap-1 rounded-full border border-[var(--color-rule)] px-2 py-0.5">
-              {w.entityId ? (
-                <Link href={`/pedia/${w.entityId}`} className="hover:text-[var(--color-accent)]">
-                  {w.label}
-                </Link>
-              ) : (
-                w.label
-              )}
-              {w.recent > 0 ? (
-                <span className="rounded-full bg-[var(--color-accent-soft)] px-1.5 text-xs text-[var(--color-accent)]">
-                  {w.recent}
-                </span>
-              ) : null}
-            </span>
-          ))}
-        </div>
-      ) : (
-        <p className="rounded border border-dashed border-[var(--color-rule)] px-3 py-2 text-sm text-[var(--color-muted)]">
-          Nothing on your watchlist yet. Star a person or an institution in the pedia, or a topic, and the brief
-          will lead with them.
-        </p>
-      )}
+      {/* What the brief is built around — and the one place to change it. The
+          cross stops following something; one Corpus added on its own is not
+          suggested again. People and institutions are followed from their
+          pedia page, topics arrive as the library files them, phrases here. */}
+      <div className="flex flex-wrap items-center gap-2 text-sm">
+        <span
+          className="text-[var(--color-muted)]"
+          title="Topics are added as they come up across outlets; people and institutions from their pedia page; phrases here."
+        >
+          Watching:
+        </span>
+        {watchlist.length === 0 ? (
+          <span className="text-[var(--color-muted)]">
+            nothing yet. Watch a person or institution from their pedia page, or follow a phrase.
+          </span>
+        ) : null}
+        {watchlist.map((w) => (
+          <span
+            key={w.id}
+            className="inline-flex items-center gap-1 rounded-full border border-[var(--color-rule)] py-0.5 pe-1 ps-2"
+            title={w.source === "auto" ? "Added by Corpus because it kept coming up" : undefined}
+          >
+            {w.entityId ? (
+              <Link href={`/pedia/${w.entityId}`} className="hover:text-[var(--color-accent)]">
+                {w.label}
+              </Link>
+            ) : w.kind === "phrase" ? (
+              <span>“{w.label}”</span>
+            ) : (
+              w.label
+            )}
+            {w.recent > 0 ? (
+              <span className="rounded-full bg-[var(--color-accent-soft)] px-1.5 text-xs text-[var(--color-accent)]">
+                {w.recent}
+              </span>
+            ) : null}
+            <button
+              type="button"
+              disabled={watchBusy}
+              onClick={() => void unwatch(w.id)}
+              title={
+                w.source === "auto"
+                  ? `Stop following ${w.label}. Corpus added it, and will not suggest it again.`
+                  : `Stop following ${w.label}`
+              }
+              aria-label={`Stop following ${w.label}`}
+              className="rounded-full p-0.5 text-[var(--color-muted)] opacity-50 transition hover:bg-red-50 hover:text-red-700 hover:opacity-100 disabled:opacity-20"
+            >
+              <IconX size={12} />
+            </button>
+          </span>
+        ))}
+        <form
+          onSubmit={(e) => {
+            e.preventDefault();
+            void follow();
+          }}
+          className="inline-flex items-center gap-1"
+        >
+          <input
+            value={phrase}
+            onChange={(e) => setPhrase(e.target.value)}
+            placeholder="Follow a phrase…"
+            aria-label="Follow a phrase"
+            className="w-40 rounded-full border border-[var(--color-rule)] bg-white px-2.5 py-0.5 text-sm outline-none focus:border-[var(--color-accent)]"
+          />
+          {phrase.trim() ? (
+            <button
+              type="submit"
+              disabled={watchBusy}
+              className="rounded-full bg-[var(--color-accent)] px-2.5 py-0.5 text-xs text-white disabled:opacity-50"
+            >
+              Follow
+            </button>
+          ) : null}
+        </form>
+      </div>
 
       {brief && brief.state === "done" && brief.body ? (
         <>
@@ -180,6 +434,8 @@ export function BriefView({
               citations={citationMap}
               onCite={(id, anchor) => setOpenCite((cur) => (cur?.id === id ? null : { id, anchor }))}
               activeId={openCite?.id}
+              headingExtra={expandButton}
+              sectionEnd={expandedLook}
             />
           </article>
 

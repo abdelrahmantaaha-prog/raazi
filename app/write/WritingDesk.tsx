@@ -8,6 +8,8 @@ import { Button } from "../components/ui";
 import { Modal } from "../components/Modal";
 import { Editor } from "./Editor";
 import { citationMarker, renumberDom, renumberHtml } from "./citations";
+import { LibraryCite, type LibraryPick } from "./LibraryCite";
+import type { CitablePassage } from "@/lib/cite-search";
 
 interface Reference {
   id: number;
@@ -108,6 +110,8 @@ export function WritingDesk({
   const [body, setBody] = useState("");
   const [refs, setRefs] = useState<Reference[]>([]);
   const [citeOpen, setCiteOpen] = useState(false);
+  /** The library search opened from the editor's toolbar. */
+  const [libraryOpen, setLibraryOpen] = useState(false);
   const [notes, setNotes] = useState<Note[]>([]);
   const [loaded, setLoaded] = useState(false);
   const [saved, setSaved] = useState<"idle" | "saving" | "saved" | "failed">("idle");
@@ -437,11 +441,36 @@ export function WritingDesk({
     }
   };
 
-  /** Puts a block quote where the cursor is, in the editor's own markup. */
+  /**
+   * Where the caret was in the draft when a dialog took the focus.
+   *
+   * Typing a search into a dialog moves the browser's selection into that box,
+   * and focusing the draft again afterwards put the caret back at the start —
+   * so a citation chosen from a dialog landed at the top of the piece. The
+   * caret is remembered as the dialog opens and put back before inserting.
+   */
+  const caret = useRef<Range | null>(null);
+  const rememberCaret = () => {
+    const box = document.querySelector<HTMLElement>('[role="textbox"][aria-label="Draft"]');
+    const sel = window.getSelection();
+    caret.current =
+      box && sel && sel.rangeCount && box.contains(sel.getRangeAt(0).commonAncestorContainer)
+        ? sel.getRangeAt(0).cloneRange()
+        : null;
+  };
+
+  /** Puts markup where the cursor is — or was, when a dialog took it — in the editor's own terms. */
   const insert = (html: string) => {
     const box = document.querySelector<HTMLElement>('[role="textbox"][aria-label="Draft"]');
     if (!box) return;
     box.focus();
+    const range = caret.current;
+    caret.current = null;
+    if (range && box.contains(range.commonAncestorContainer)) {
+      const sel = window.getSelection();
+      sel?.removeAllRanges();
+      sel?.addRange(range);
+    }
     document.execCommand("insertHTML", false, html);
     setBody(box.innerHTML);
   };
@@ -462,7 +491,10 @@ export function WritingDesk({
    * you typed. Both end up in the same numbered sequence, because a reader of
    * the finished piece does not care which of your bookshelves a book was on.
    */
-  const cite = async (ref: Partial<Reference> & { quote?: string; sourceId?: number; mentionId?: number }) => {
+  const cite = async (
+    ref: Partial<Reference> & { quote?: string; sourceId?: number; mentionId?: number },
+    opts: { withQuote?: string } = {}
+  ) => {
     if (id === null) return;
     setPaneError(null);
     try {
@@ -477,10 +509,64 @@ export function WritingDesk({
       // The marker carries the reference's id; the number it shows is only
       // the id's position in the list today, and is redrawn when that moves.
       const index = citations.length - 1;
-      if (index >= 0) insert(citationMarker(citations[index].id, index));
+      if (index >= 0) {
+        const marker = citationMarker(citations[index].id, index);
+        // Quoted, the sentence goes in as a block quote with its marker at the end.
+        insert(
+          opts.withQuote ? `<blockquote>${escapeHtml(opts.withQuote)} ${marker}</blockquote><p><br></p>` : marker
+        );
+      }
       setCiteOpen(false);
+      setLibraryOpen(false);
     } catch (err) {
       setPaneError((err as Error).message);
+    }
+  };
+
+  /** A source or a passage chosen in the library search, cited at the cursor. */
+  const citeFromLibrary = (pick: LibraryPick, withQuote: boolean) => {
+    if (pick.kind === "source") {
+      const s = pick.source;
+      void cite({ origin: "library", text: s.citation, author: s.author, title: s.title, year: s.year, sourceId: s.id });
+      return;
+    }
+    const p = pick.passage;
+    void cite(
+      {
+        origin: "library",
+        text: p.citation,
+        author: p.author,
+        title: p.title,
+        year: p.year,
+        locator: p.locator || null,
+        quote: p.quote,
+        sourceId: p.source_id,
+      },
+      withQuote ? { withQuote: p.quote } : {}
+    );
+  };
+
+  /** A passage from the library search, onto the shelf beside the draft. */
+  const keepPassage = async (p: CitablePassage): Promise<boolean> => {
+    if (id === null) return false;
+    setPaneError(null);
+    try {
+      const res = await fetch(`/api/drafts/${id}/notes`, {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({
+          text: p.quote,
+          kind: "quote",
+          citation: p.citation,
+          chunkId: p.chunk_id,
+          sourceId: p.source_id,
+        }),
+      });
+      setNotes(await listFrom<Note>(res, "notes"));
+      return true;
+    } catch (err) {
+      setPaneError((err as Error).message);
+      return false;
     }
   };
 
@@ -589,7 +675,25 @@ export function WritingDesk({
         </div>
       </div>
 
-      {citeOpen && <CiteDialog onCancel={() => setCiteOpen(false)} onAdd={cite} />}
+      {citeOpen && (
+        <CiteDialog
+          onCancel={() => {
+            caret.current = null;
+            setCiteOpen(false);
+          }}
+          onAdd={(ref) => void cite(ref)}
+        />
+      )}
+      {libraryOpen && (
+        <LibraryCite
+          onClose={() => {
+            caret.current = null;
+            setLibraryOpen(false);
+          }}
+          onCite={citeFromLibrary}
+          onKeep={keepPassage}
+        />
+      )}
 
       {paneError && (
         <p className="rounded border border-red-200 bg-red-50 px-3 py-2 text-sm text-red-800">
@@ -641,7 +745,14 @@ export function WritingDesk({
               html={body}
               citations={refs}
               onChange={setBody}
-              onCite={() => setCiteOpen(true)}
+              onCite={() => {
+                rememberCaret();
+                setCiteOpen(true);
+              }}
+              onLibrary={() => {
+                rememberCaret();
+                setLibraryOpen(true);
+              }}
               dir={dirOf(stripTags(body)) as "ltr" | "rtl"}
             />
 
@@ -1183,8 +1294,8 @@ function CiteDialog({
     <Modal label="Add a reference" onClose={onCancel}>
         <h3 className="font-serif text-lg font-semibold">Add a reference</h3>
         <p className="mt-0.5 text-xs text-[var(--color-muted)]">
-          For something not in your library. To cite your own sources, use <em>Cite</em> beside a
-          search result.
+          For something not in your library. To cite your own sources, use <em>Cite from library</em> in
+          the toolbar, or <em>Cite</em> beside a search result.
         </p>
 
         <div className="mt-3 space-y-2">

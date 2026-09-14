@@ -69,13 +69,13 @@ export interface BriefMaterial {
   counts: { sources: number; passages: number; entities: number; stories: number };
 }
 
-const PASSAGE_COLUMNS = `
+export const PASSAGE_COLUMNS = `
   m.id AS mention_id, m.quote, m.claim, m.context, m.attribution, m.claim_kind,
   e.id AS entity_id, e.canonical_name AS entity, e.type AS entity_type,
   s.id AS source_id, s.title AS source_title, s.outlet, s.author, s.published_at, s.reliability,
   st.story_id AS story_id, story.title AS story_title`;
 
-const PASSAGE_JOINS = `
+export const PASSAGE_JOINS = `
   FROM live_mentions m
   JOIN entities e ON e.id = m.entity_id AND e.merged_into IS NULL
   JOIN sources  s ON s.id = m.source_id
@@ -103,7 +103,7 @@ const IN_WINDOW = `COALESCE(s.kept_at, s.published_at, s.added_at) >= @from
  * finding a mention in a sentence about something else; it belongs in the
  * pedia and not in a brief.
  */
-const WORTH_READING = `(m.claim IS NOT NULL OR m.context IS NOT NULL)`;
+export const WORTH_READING = `(m.claim IS NOT NULL OR m.context IS NOT NULL)`;
 
 export function gather(from: Date, to: Date, opts: { perWatch?: number; maxOther?: number } = {}): BriefMaterial {
   const params = { from: from.toISOString(), to: to.toISOString() };

@@ -19,9 +19,25 @@ opens it to your own devices behind a token.
 ## Running it
 
 Double-click **Corpus.exe** (or the desktop shortcut). It starts the server in the
-background, opens your browser, and sits in the notification area — right-click the
-tray icon to reopen it, open the data folder, or quit. Closing the browser leaves
-it running, so a long ingest keeps going; quitting from the tray stops it.
+background, opens Corpus in **its own window**, and sits in the notification area —
+right-click the tray icon to reopen it, open the data folder, or quit. Closing the
+window leaves it running, so a long ingest keeps going; quitting from the tray
+stops it.
+
+**One window.** The window is your browser in app mode — Brave first, then Chrome,
+then Edge — so it has no tabs and no address bar, but it keeps your sign-ins, the
+browser extension, and the inbox's Page view. Opening Corpus again, from the tray,
+the shortcut or a second double-click, brings that window to the front rather than
+opening another. Links to articles open in the browser as usual. Untick *Open in its
+own window* in the tray menu to go back to a browser tab. The browser can also
+install it (Brave's menu → *Install Corpus*), which pins it to the taskbar.
+
+**A Corpus on another computer.** Right-click the tray icon → *Connect to another
+Corpus…*, paste the other machine's address and token from its *Settings → LAN
+mode*, test, and connect. This copy then runs no server of its own and opens that
+one — the laptop on the desk working from the library on the machine at home, over
+the LAN or Tailscale. *Connect to… → This computer* switches back. Point the
+browser extension's options at the same address.
 
 First time only:
 
@@ -73,6 +89,11 @@ article. That is the question the paste box exists to answer, and it used to be
 answerable only by keeping the item and finding out. Items carry the picture
 their feed or their page declared, so the list reads at a glance.
 
+**Search** (/) at the top of the list finds what is waiting by its headline,
+its outlet, or anything in the article's own text — the last word matches while
+you are still typing it, and a row found only by its text says *found in the
+text*. Keeping, filing and discarding keep the search in place; Esc clears it.
+
 **Keep, or file.** Keep reads the article and puts it in the morning: it is in
 the library and in the brief. **File** (F) reads it exactly the same way — its
 people get entries, it is filed under its topics and grouped with its story —
@@ -81,12 +102,38 @@ the brief takes only what was kept. For the piece that belongs in the pedia and
 not in the morning: a French election, a book review, a beat you follow but do
 not present from.
 
+**Star** (S) sets an article aside for a closer look without deciding anything
+about it. It stays in the inbox, and it is also listed on the **Starred** tab of
+the Write page, beside the drafts it may end up in — with where it stands
+(waiting, kept, filed or discarded), a link to read it on its own page, and Keep
+and File for one still waiting. The star is on the article rather than the inbox
+item, so keeping, filing or discarding it leaves it starred; a discarded
+article's text is never thrown away.
+
 **From the browser.** `extension/` is a small Brave/Chrome/Edge extension
 (load it unpacked from `brave://extensions`). Click it on any article and the
 page goes into the inbox as your browser sees it — signed in, paywall open —
-with the full text, marked *full text*. `Alt+Shift+C` does the same without
-the popup. Sending an address that is already waiting replaces its text, which
-is exactly what pasting does. See `extension/README.md`.
+with the full text, marked *full text*: one click sends it, and the popup
+closes itself (a page too thin to be an article waits for the button instead).
+`Alt+Shift+C` does the same without the popup. Sending an address that is already waiting replaces its text, which
+is exactly what pasting does. What you send goes to the top of the inbox, and an
+inbox open in another window shows it within a few seconds, without a reload —
+including new text for the article already in the pane. See `extension/README.md`.
+
+**The page itself.** The pane's **Page** view (V) shows the article's own page,
+live, inside Corpus, instead of the text the fetch got. Sites refuse to be shown
+inside another page, so it needs the browser extension, which lifts that refusal
+for frames Corpus opens and nowhere else; without it the view is blank, with a
+link to open the article in a tab. Clicking the extension on Corpus while an
+article is open there sends that article. Brave keeps logins away from pages
+shown inside another site, so a paywalled article appears signed out unless
+cross-site cookies are allowed for Corpus in Shields.
+
+**It holds still.** Deciding an item moves the pane to the next one without
+the page jumping: stories keep their place in the list while the page is open,
+the pane keeps one height and has the neighbouring articles loaded before you
+reach them, and messages appear at the foot of the screen rather than above the
+list.
 
 ## The watching calendar
 
@@ -126,6 +173,16 @@ a source, select a passage and click **Send to Write** on the card that
 appears. That one lands cited to the source and the place, and linked to the
 passage so it can be checked. Every line on the shelf can be inserted as a block
 quote or turned into a numbered reference where the cursor is.
+
+**Cite from library**, in the editor's toolbar, searches everything in the
+library from inside the draft — sources by title, author and outlet, and the
+full text of every source, articles you starred included — and cites what you
+choose where the cursor was: a whole source, or a passage as the sentence it
+was found by, which can also be set into the draft as a block quote. It finds
+passages the pane's search cannot, since that one reads only what extraction
+tied to a person or an institution. Like the rest of the desk it matches words;
+no model is involved. The toolbar stays pinned to the top of the window while a
+long draft scrolls under it.
 
 ## Two laptops, one library
 
@@ -361,14 +418,29 @@ one story and six sources. Grouping needs two signals to agree, headline overlap
 and shared entities inside three days, and is one click from corrected — rename a
 story, pin it, or say "not this story" of an account.
 
-**The watchlist** is the shortlist the brief is built around: star a person, an
-institution, a topic, or a phrase.
+**The watchlist** is the shortlist the brief is built around: a person, an
+institution, a topic, or a phrase. It is changed at the top of the brief, under
+*Watching*: the × on any of them stops following it, and *Follow a phrase…*
+adds one. People and institutions are also followed from their pedia page with
+**Watch**. Topics are added by Corpus itself once they come up across several
+outlets; removing one of those says no for good, so it is not suggested again.
 
 **The brief** is assembled from the database — which passages arrived, about whom,
 from which outlet, at what time — and only then written up, under the same rule as
 an entry: every claim carries a marker, and a marker the writer was not given is
 stripped. It says when only one outlet has something, and never merges two
 outlets' numbers into one figure.
+
+**Expand**, beside any heading of the brief that cites something, writes a
+closer look at that topic under its section: where it stands, how it got there
+in order, who is saying what, and where the reporting disagrees. It is written
+from more of the library than the brief could use — the passages cited under
+the heading, everything else read from those same articles, and earlier
+coverage from the last two months that shares the subject — under the same
+citation rule. Earlier coverage is found by SQL: an article counts when it
+shares a subject that is rare in the library, or belongs to the same running
+story, so a subject every article mentions pulls nothing in. Expanding again
+writes it again; *Hide expanded* folds it away.
 
 ## Tests
 

@@ -1,12 +1,22 @@
 import { NextResponse } from "next/server";
 import { badRequest, readBody } from "@/lib/http";
-import { discard, file, heldCount, keep, listHeld, pasteText, undo } from "@/lib/triage";
+import { clipStamp, discard, file, heldCount, keep, listHeld, pasteText, undo } from "@/lib/triage";
 import { kickWorker } from "@/lib/worker";
 
 export const dynamic = "force-dynamic";
 
-export async function GET() {
-  return NextResponse.json({ items: listHeld(), held: heldCount() });
+/** How much of a search is worth reading. */
+const MAX_QUERY = 200;
+
+const queryOf = (value: unknown): string | undefined =>
+  typeof value === "string" && value.trim() ? value.slice(0, MAX_QUERY) : undefined;
+
+export async function GET(req: Request) {
+  const params = new URL(req.url).searchParams;
+  // The inbox's watch for clips: a few bytes, asked for every few seconds.
+  if (params.has("stamp")) return NextResponse.json({ stamp: clipStamp() });
+  const q = queryOf(params.get("q"));
+  return NextResponse.json({ items: listHeld(200, q), held: heldCount(), query: q ?? null });
 }
 
 export async function POST(req: Request) {
@@ -15,8 +25,11 @@ export async function POST(req: Request) {
     itemIds?: number[];
     reason?: string;
     text?: string;
+    /** The search the inbox is showing, so the list it gets back is still that search. */
+    q?: string;
   }>(req);
   if (body === null) return badRequest("Malformed JSON body.");
+  const q = queryOf(body.q);
 
   // Pasting is about one article at a time — it is the paywalled one you went
   // and fetched by hand.
@@ -26,7 +39,7 @@ export async function POST(req: Request) {
     if (typeof body.text !== "string") return badRequest("Nothing was pasted.");
     try {
       const result = pasteText(itemId, body.text);
-      return NextResponse.json({ ...result, items: listHeld(), held: heldCount() });
+      return NextResponse.json({ ...result, items: listHeld(200, q), held: heldCount() });
     } catch (err) {
       return badRequest((err as Error).message.slice(0, 200));
     }
@@ -38,12 +51,12 @@ export async function POST(req: Request) {
 
   if (body.action === "discard") {
     const result = discard(ids, body.reason);
-    return NextResponse.json({ ...result, held: heldCount(), items: listHeld() });
+    return NextResponse.json({ ...result, held: heldCount(), items: listHeld(200, q) });
   }
 
   if (body.action === "undo") {
     const result = undo(ids);
-    return NextResponse.json({ ...result, held: heldCount(), items: listHeld() });
+    return NextResponse.json({ ...result, held: heldCount(), items: listHeld(200, q) });
   }
 
   if (body.action === "keep") {
@@ -59,7 +72,7 @@ export async function POST(req: Request) {
           } left where ${result.refused.length === 1 ? "it is" : "they are"} — paste the article, then keep it.`
         : undefined,
       held: heldCount(),
-      items: listHeld(),
+      items: listHeld(200, q),
     });
   }
 
@@ -75,7 +88,7 @@ export async function POST(req: Request) {
           } left where ${result.refused.length === 1 ? "it is" : "they are"} — paste the article, then file it.`
         : undefined,
       held: heldCount(),
-      items: listHeld(),
+      items: listHeld(200, q),
     });
   }
 

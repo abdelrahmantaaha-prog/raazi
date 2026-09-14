@@ -1,7 +1,10 @@
 /**
  * Draws the extension's icons: a rounded square in the accent brown with a
- * white "C" — the rail's own mark — at 16, 48 and 128 pixels. A tiny PNG
- * encoder rather than a dependency, since three images do not justify one.
+ * white "C" — the rail's own mark — at 16, 48 and 128 pixels. And the app's:
+ * the same mark at 192 and 512 for public/, which is what lets a browser
+ * install Corpus as an app window, plus a full-bleed 512 for systems that cut
+ * their own shape. A tiny PNG encoder rather than a dependency, since a handful
+ * of images do not justify one.
  *
  *   node scripts/extension-icons.mjs
  */
@@ -57,11 +60,12 @@ function png(size, pixel) {
   ]);
 }
 
-/** Supersampled so the edges are smooth at 16px. */
-function draw(size) {
+/** Supersampled so the edges are smooth at 16px. `bleed` fills the whole square, for an icon the system masks. */
+function draw(size, { bleed = false } = {}) {
   const S = 4;
   const bg = [0x7a, 0x4b, 0x2a];
   const inside = (x, y) => {
+    if (bleed) return true;
     // Rounded square.
     const r = size * 0.22;
     const dx = Math.max(Math.abs(x - size / 2) - (size / 2 - r), 0);
@@ -73,8 +77,9 @@ function draw(size) {
     const cx = size / 2;
     const cy = size / 2;
     const d = Math.hypot(x - cx, y - cy);
-    const R = size * 0.34;
-    const w = size * 0.13;
+    // Full bleed keeps the mark inside the circle a mask is guaranteed to show.
+    const R = size * (bleed ? 0.27 : 0.34);
+    const w = size * (bleed ? 0.1 : 0.13);
     if (d < R - w / 2 || d > R + w / 2) return false;
     const angle = Math.atan2(y - cy, x - cx);
     return Math.abs(angle) > 0.7;
@@ -107,5 +112,17 @@ function draw(size) {
 for (const size of [16, 48, 128]) {
   const file = path.join(out, `icon${size}.png`);
   fs.writeFileSync(file, png(size, draw(size)));
+  console.log(`wrote ${path.relative(root, file)}`);
+}
+
+const pub = path.join(root, "public");
+fs.mkdirSync(pub, { recursive: true });
+for (const [name, size, opts] of [
+  ["icon-192.png", 192, {}],
+  ["icon-512.png", 512, {}],
+  ["icon-maskable-512.png", 512, { bleed: true }],
+]) {
+  const file = path.join(pub, name);
+  fs.writeFileSync(file, png(size, draw(size, opts)));
   console.log(`wrote ${path.relative(root, file)}`);
 }

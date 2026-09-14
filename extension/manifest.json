@@ -1,9 +1,9 @@
 {
   "manifest_version": 3,
   "name": "Corpus Inbox",
-  "version": "0.1.0",
+  "version": "0.4.0",
   "description": "Send the article you are reading — as you see it, signed in — to your Corpus inbox.",
-  "permissions": ["activeTab", "scripting", "storage"],
+  "permissions": ["activeTab", "scripting", "storage", "declarativeNetRequestWithHostAccess", "contextMenus"],
   "host_permissions": ["http://*/*", "https://*/*"],
   "background": { "service_worker": "background.js" },
   "action": {
@@ -15,6 +15,10 @@
     "clip": {
       "suggested_key": { "default": "Alt+Shift+C" },
       "description": "Send this page to the Corpus inbox"
+    },
+    "gather": {
+      "suggested_key": { "default": "Alt+Shift+Q" },
+      "description": "Gather the selected quote to your draft, and send the article to the inbox"
     }
   },
   "icons": { "16": "icon16.png", "48": "icon48.png", "128": "icon128.png" }

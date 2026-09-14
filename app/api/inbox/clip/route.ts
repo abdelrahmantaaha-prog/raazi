@@ -1,12 +1,21 @@
 import { NextResponse } from "next/server";
 import { badRequest, readBody, tooLarge } from "@/lib/http";
-import { AlreadyReadError, clipArticle, clipVerdict } from "@/lib/clip";
+import {
+  AlreadyReadError,
+  GatherError,
+  clipArticle,
+  clipVerdict,
+  gatherQuotes,
+  sourceForUrl,
+  type ClipResult,
+} from "@/lib/clip";
 import { heldCount } from "@/lib/triage";
 
 export const dynamic = "force-dynamic";
 
 /**
- * The browser extension's one call: this page, as I see it, into the inbox.
+ * The browser extension's call: this page, as I see it, into the inbox — and,
+ * when words on it were marked, those words onto a draft.
  *
  * Answers with CORS headers for an extension origin only. A Chromium
  * extension with host permission for this address is not subject to CORS at
@@ -44,6 +53,12 @@ export async function POST(req: Request) {
     outlet?: string | null;
     image?: string | null;
     lang?: string | null;
+    /** Words marked on the page, for a draft's shelf. */
+    quotes?: unknown;
+    /** The draft they go to. */
+    draftId?: unknown;
+    /** False for a second quote from a page already sent: no second copy of the article. */
+    clip?: boolean;
   }>(req);
   if (body === null) return cors(req, badRequest("Malformed JSON body."));
   if (typeof body.url !== "string" || typeof body.text !== "string") {
@@ -52,35 +67,80 @@ export async function POST(req: Request) {
   if (body.text.length > MAX_CLIP) return cors(req, tooLarge(MAX_CLIP));
   const str = (v: unknown) => (typeof v === "string" ? v.slice(0, 2000) : null);
 
-  try {
-    const result = clipArticle({
-      url: body.url,
-      title: typeof body.title === "string" ? body.title : body.url,
-      text: body.text,
-      author: str(body.author),
-      publishedAt: str(body.publishedAt),
-      outlet: str(body.outlet),
-      image: str(body.image),
-      lang: str(body.lang),
-    });
-    return cors(
-      req,
-      NextResponse.json({
-        ...result,
-        verdict: clipVerdict(body.text),
-        held: heldCount(),
-        note: result.replaced
+  const quotes = Array.isArray(body.quotes)
+    ? body.quotes.filter((q): q is string => typeof q === "string" && q.trim().length > 0)
+    : [];
+  const draftId =
+    typeof body.draftId === "number" && Number.isInteger(body.draftId) && body.draftId > 0 ? body.draftId : null;
+  if (quotes.length && draftId === null) return cors(req, badRequest("Say which draft the quotes go to."));
+
+  let result: ClipResult | null = null;
+  let sourceId: number | null = body.clip === false ? sourceForUrl(body.url) : null;
+  let alreadyRead = false;
+
+  if (sourceId === null) {
+    try {
+      result = clipArticle({
+        url: body.url,
+        title: typeof body.title === "string" ? body.title : body.url,
+        text: body.text,
+        author: str(body.author),
+        publishedAt: str(body.publishedAt),
+        outlet: str(body.outlet),
+        image: str(body.image),
+        lang: str(body.lang),
+      });
+      sourceId = result.sourceId;
+    } catch (err) {
+      if (err instanceof AlreadyReadError) {
+        // Already read: nothing to send, but a quote from it is still a quote.
+        if (!quotes.length) {
+          return cors(req, NextResponse.json({ error: err.message, sourceId: err.sourceId }, { status: 409 }));
+        }
+        sourceId = err.sourceId;
+        alreadyRead = true;
+      } else {
+        return cors(req, badRequest((err as Error).message.slice(0, 300)));
+      }
+    }
+  }
+
+  let gathered: ReturnType<typeof gatherQuotes> | null = null;
+  if (quotes.length && draftId !== null && sourceId !== null) {
+    try {
+      gathered = gatherQuotes(draftId, sourceId, quotes);
+    } catch (err) {
+      if (err instanceof GatherError) {
+        return cors(req, NextResponse.json({ error: err.message, sourceId, clipped: Boolean(result) }, { status: 404 }));
+      }
+      throw err;
+    }
+  }
+
+  const articleNote = alreadyRead
+    ? "the article was already in your library"
+    : result?.replaced
+      ? "that address was already waiting, and its text has been replaced with what you sent"
+      : result
+        ? "the article is in the inbox, with the full text"
+        : "the article was already sent";
+
+  return cors(
+    req,
+    NextResponse.json({
+      ...(result ?? { itemId: null, words: 0, chunks: 0, replaced: false }),
+      sourceId,
+      alreadyRead,
+      verdict: clipVerdict(body.text),
+      held: heldCount(),
+      gathered: gathered?.gathered ?? 0,
+      skipped: gathered?.skipped ?? 0,
+      draft: gathered ? { id: gathered.draftId, title: gathered.draftTitle } : null,
+      note: gathered
+        ? `${gathered.gathered ? `${gathered.gathered} quote${gathered.gathered === 1 ? "" : "s"} on "${gathered.draftTitle}"` : `Already on "${gathered.draftTitle}"`}; ${articleNote}.`
+        : result?.replaced
           ? "That address was already waiting; its text has been replaced with what you sent."
           : "In the inbox, with the full text.",
-      })
-    );
-  } catch (err) {
-    if (err instanceof AlreadyReadError) {
-      return cors(
-        req,
-        NextResponse.json({ error: err.message, sourceId: err.sourceId }, { status: 409 })
-      );
-    }
-    return cors(req, badRequest((err as Error).message.slice(0, 300)));
-  }
+    })
+  );
 }

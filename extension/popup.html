@@ -13,13 +13,22 @@
   .ok { background: #e6f4ee; color: #1e4d3c; border: 1px solid #b8dcc9; }
   .warn { background: #fdf3e0; color: #6b4a12; border: 1px solid #f0d8a8; }
   .err { background: #fbe7e7; color: #7a2323; border: 1px solid #efbcbc; }
-  .row { display: flex; gap: .5rem; align-items: center; margin-top: .6rem; }
+  .row { display: flex; gap: .5rem; align-items: center; margin-top: .6rem; flex-wrap: wrap; }
   button { font: inherit; border: 0; border-radius: 999px; padding: .45rem .9rem; cursor: pointer; }
   button.primary { background: #7a4b2a; color: #fff; }
   button.primary:disabled { opacity: .35; cursor: default; }
   button.ghost { background: transparent; color: #6b665e; }
   a { color: #7a4b2a; }
   img.pic { width: 100%; aspect-ratio: 16/9; object-fit: cover; border-radius: 6px; margin-top: .5rem; display: none; }
+  kbd { font: 600 .72rem/1 ui-monospace, "Cascadia Mono", Consolas, monospace; border: 1px solid #d9d3c7; border-bottom-width: 2px; border-radius: 4px; padding: .12rem .32rem; background: #fff; color: #1c1a17; }
+  button.primary kbd { background: transparent; color: #fff; border-color: rgba(255,255,255,.45); margin-left: .3rem; }
+  .gather { margin-top: .7rem; padding: .6rem .7rem; border: 1px solid #e8d9c8; border-radius: 8px; background: #fff; }
+  .gather label { display: block; margin-bottom: .25rem; }
+  .gather select { font: inherit; width: 100%; padding: .3rem .4rem; border: 1px solid #e2ddd3; border-radius: 6px; background: #fff; }
+  .gather blockquote { margin: .5rem 0 0; padding: .1rem 0 .1rem .6rem; border-left: 3px solid #eab308; font-style: italic; font-size: .85rem; color: #3a352e; }
+  .foot { border-top: 1px solid #e2ddd3; margin-top: .85rem; padding-top: .6rem; display: flex; flex-direction: column; gap: .4rem; font-size: .78rem; color: #6b665e; }
+  .foot label { display: flex; gap: .45rem; align-items: center; cursor: pointer; }
+  .foot input { margin: 0; accent-color: #7a4b2a; }
 </style>
 </head>
 <body>
@@ -30,10 +39,28 @@
   <div class="title" id="title"></div>
   <div class="muted" id="meta"></div>
   <div class="verdict" id="verdict" hidden></div>
+
+  <!-- Shown when words on the page are selected. -->
+  <div class="gather" id="gatherBox" hidden>
+    <label class="muted" for="draft">Gather the selected quote to</label>
+    <select id="draft"></select>
+    <blockquote id="quote" hidden></blockquote>
+    <div class="row">
+      <button class="primary" id="gather" disabled>Gather quote + send article<kbd>↵</kbd></button>
+    </div>
+    <div class="muted" id="gatherNote"></div>
+  </div>
+  <div class="muted" id="gatheredCount"></div>
+
   <div class="row">
-    <button class="primary" id="send" disabled>Send to inbox</button>
+    <button class="primary" id="send" disabled>Send to inbox<kbd>↵</kbd></button>
     <button class="ghost" id="options">Options</button>
     <a id="open" href="#" target="_blank" hidden>Open the inbox</a>
+  </div>
+  <div class="foot">
+    <label><input type="checkbox" id="instant" checked> Send as soon as I click the icon</label>
+    <div id="shortcut">Without opening this: <kbd id="key">Alt+Shift+C</kbd> sends the page · <a id="keys" href="#">change</a></div>
+    <div id="gatherShortcut">Select words, then right-click → <em>Gather quote</em>, or <kbd id="gatherKey">Alt+Shift+Q</kbd></div>
   </div>
 </main>
 <script src="popup.js"></script>

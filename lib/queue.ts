@@ -75,6 +75,8 @@ export const PRIORITY: Record<string, number> = {
   poll: 0,
   plan_polls: 0,
   brief: 0,
+  // Asked for with a click on the brief, and wanted while you are still reading it.
+  expand: 0,
   fetch_item: 1,
   portrait: 3,
   plan_portraits: 3,

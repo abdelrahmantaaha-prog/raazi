@@ -134,6 +134,16 @@ export function IconShelf(p: IconProps) {
   ]);
 }
 
+/** Search: a magnifying glass. */
+export function IconFind(p: IconProps) {
+  return svg(p, [<circle key="a" cx="11" cy="11" r="6.5" />, <path key="b" d="m20 20-4.2-4.2" />]);
+}
+
+/** Star: set aside for a closer look. Pass `fill="currentColor"` when it is on. */
+export function IconStar(p: IconProps) {
+  return svg(p, <path d="M12 3.6l2.6 5.3 5.8.8-4.2 4.1 1 5.8L12 16.9l-5.2 2.7 1-5.8-4.2-4.1 5.8-.8L12 3.6Z" />);
+}
+
 /** Send: a paper plane, for handing a passage to the writing desk. */
 export function IconSend(p: IconProps) {
   return svg(p, [

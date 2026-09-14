@@ -1,9 +1,11 @@
 const $ = (id) => document.getElementById(id);
-const DEFAULTS = { corpusUrl: "http://127.0.0.1:5400", token: "" };
+const DEFAULTS = { corpusUrl: "http://127.0.0.1:5400", token: "", instant: true, embed: true };
 
 chrome.storage.sync.get(DEFAULTS).then((s) => {
   $("corpusUrl").value = s.corpusUrl || DEFAULTS.corpusUrl;
   $("token").value = s.token || "";
+  $("instant").checked = s.instant;
+  $("embed").checked = s.embed;
 });
 
 function note(kind, text) {
@@ -16,6 +18,17 @@ $("save").addEventListener("click", async () => {
   if (!/^https?:\/\//.test(corpusUrl)) return note("err", "The address must start with http:// or https://.");
   await chrome.storage.sync.set({ corpusUrl, token: $("token").value.trim() });
   note("ok", "Saved.");
+});
+
+// A checkbox saves itself; there is nothing to type wrong.
+$("instant").addEventListener("change", async () => {
+  await chrome.storage.sync.set({ instant: $("instant").checked });
+  note("ok", $("instant").checked ? "Clicking the icon sends the article." : "Clicking the icon shows the article first.");
+});
+
+$("embed").addEventListener("change", async () => {
+  await chrome.storage.sync.set({ embed: $("embed").checked });
+  note("ok", $("embed").checked ? "Corpus can show articles inside itself." : "Articles keep their refusal to be shown inside Corpus.");
 });
 
 $("test").addEventListener("click", async () => {

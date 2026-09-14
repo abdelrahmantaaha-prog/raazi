@@ -5,6 +5,7 @@ import { appendReadingTail, queueUnreadInto } from "./reading";
 import { writeChunks } from "./pipeline/ocr";
 import { parseText } from "./ingest/text";
 import { clean } from "./ingest/clean";
+import { ftsMatch, likePattern, queryWords } from "./fts";
 
 /**
  * The inbox: what a feed pulled in, waiting for you to say whether it matters.
@@ -52,11 +53,15 @@ export interface HeldItem {
   image: string | null;
   /** The fetcher's note on the source — says when only the feed's summary could be read. */
   source_note: string | null;
+  /** When the browser extension last sent its text. What you pushed heads the inbox. */
+  clipped_at: string | null;
+  /** 1 when the article is starred for a closer look (lib/starred.ts), else 0. */
+  starred: number;
 }
 
 const HELD_COLUMNS = `
   i.id, i.feed_id, i.title, i.summary, i.url, i.published_at, i.seen_at,
-  i.source_id, i.note,
+  i.source_id, i.note, i.clipped_at,
   f.title AS feed_title, f.outlet, f.reliability,
   (SELECT c.text FROM chunks c WHERE c.source_id = i.source_id ORDER BY c.seq LIMIT 1) AS lede,
   (SELECT COUNT(*) FROM chunks c WHERE c.source_id = i.source_id) AS chunks,
@@ -65,7 +70,8 @@ const HELD_COLUMNS = `
   st.title AS story_title,
   (SELECT COUNT(*) FROM story_sources s2 WHERE s2.story_id = ss.story_id) AS story_accounts,
   COALESCE(i.image_url, json_extract(s.meta_json, '$.image')) AS image,
-  s.note AS source_note`;
+  s.note AS source_note,
+  (s.starred_at IS NOT NULL) AS starred`;
 
 const HELD_JOINS = `
   FROM feed_items i
@@ -74,16 +80,55 @@ const HELD_JOINS = `
   LEFT JOIN story_sources ss ON ss.source_id = i.source_id
   LEFT JOIN stories st ON st.id = ss.story_id`;
 
-/** Everything waiting on you, newest first. */
-export function listHeld(limit = 200): HeldItem[] {
-  const rows = db()
-    .prepare(
-      `SELECT ${HELD_COLUMNS} ${HELD_JOINS}
-        WHERE i.state = 'held'
-        ORDER BY COALESCE(i.published_at, i.seen_at) DESC, i.id DESC
-        LIMIT ?`
-    )
-    .all(limit) as HeldItem[];
+/** A search typed into the inbox, made safe for the full-text index. See lib/fts.ts. */
+export const inboxMatch = ftsMatch;
+
+/**
+ * Everything waiting on you: what you sent from the browser first, most
+ * recent clip first, then newest.
+ *
+ * With a query, only what matches it. Every word must be in what the row
+ * shows — the headline, the summary, the outlet — or the article's own text
+ * must hold all of them; the text is searched through the full-text index,
+ * so an article whose headline says nothing about Alberta is still found by
+ * the word Alberta in its fourth paragraph.
+ */
+export function listHeld(limit = 200, query?: string): HeldItem[] {
+  const words = queryWords(query ?? "");
+  const params: Record<string, string | number> = { limit };
+  const run = (where: string, extra: Record<string, string> = {}) =>
+    db()
+      .prepare(
+        `SELECT ${HELD_COLUMNS} ${HELD_JOINS}
+          WHERE i.state = 'held' ${where}
+          ORDER BY i.clipped_at IS NULL, i.clipped_at DESC, COALESCE(i.published_at, i.seen_at) DESC, i.id DESC
+          LIMIT @limit`
+      )
+      .all({ ...params, ...extra }) as HeldItem[];
+
+  let rows: HeldItem[];
+  if (!words.length) {
+    rows = run("");
+  } else {
+    // A typed % or _ is a character to find, not a wildcard.
+    const shown = words
+      .map((w, n) => {
+        const p = `@w${n}`;
+        params[`w${n}`] = likePattern(w);
+        return `(i.title LIKE ${p} ESCAPE '\\' OR i.summary LIKE ${p} ESCAPE '\\'
+                 OR f.title LIKE ${p} ESCAPE '\\' OR f.outlet LIKE ${p} ESCAPE '\\' OR s.outlet LIKE ${p} ESCAPE '\\')`;
+      })
+      .join(" AND ");
+    const match = inboxMatch(words);
+    const inText = `i.source_id IN (SELECT c.source_id FROM chunks c
+                     WHERE c.id IN (SELECT rowid FROM chunks_fts WHERE chunks_fts MATCH @match))`;
+    try {
+      rows = match ? run(`AND ((${shown}) OR ${inText})`, { match }) : run(`AND (${shown})`);
+    } catch {
+      // Something the index still cannot parse: the headline match alone.
+      rows = run(`AND (${shown})`);
+    }
+  }
 
   // The lede is for judging, not for reading — a paragraph is plenty and the
   // page is showing a hundred of them.
@@ -91,6 +136,21 @@ export function listHeld(limit = 200): HeldItem[] {
     ...r,
     lede: r.lede ? r.lede.replace(/\s+/g, " ").trim().slice(0, 400) : null,
   }));
+}
+
+/**
+ * Changes whenever the browser extension sends an article, and at no other time.
+ *
+ * The inbox asks for this every few seconds so a clip shows up without a
+ * reload. Deliberately not the held count: that moves whenever a feed brings
+ * something in, and a list that rearranges itself under you while you are
+ * working through it is worse than one that waits.
+ */
+export function clipStamp(): string {
+  const row = db()
+    .prepare("SELECT COUNT(clipped_at) AS n, MAX(clipped_at) AS last FROM feed_items WHERE clipped_at IS NOT NULL")
+    .get() as { n: number; last: string | null };
+  return `${row.n}:${row.last ?? ""}`;
 }
 
 export interface HeldText {
