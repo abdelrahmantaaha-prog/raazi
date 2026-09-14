@@ -1,0 +1,10 @@
+{
+  "name": "corpus-video",
+  "private": true,
+  "type": "module",
+  "description": "Scripted recordings of Corpus — kept apart so the app's dependencies stay its own.",
+  "dependencies": {
+    "msedge-tts": "^2.0.7",
+    "playwright": "^1.63.0"
+  }
+}

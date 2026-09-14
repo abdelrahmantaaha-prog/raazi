@@ -18,6 +18,12 @@
       "runtimeExecutable": "node",
       "runtimeArgs": ["node_modules/next/dist/bin/next", "dev", "--port", "5401", "--hostname", "127.0.0.1"],
       "port": 5401
+    },
+    {
+      "name": "corpus-film",
+      "runtimeExecutable": "node",
+      "runtimeArgs": ["--env-file=video/film.env", "node_modules/next/dist/bin/next", "start", "--port", "5410", "--hostname", "127.0.0.1"],
+      "port": 5410
     }
   ]
 }

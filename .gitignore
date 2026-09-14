@@ -19,3 +19,6 @@ data/
 
 # Launcher build output.
 dist/
+
+# Rendered videos and captured frames — rebuild from video/.
+video/out/
