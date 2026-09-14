@@ -491,7 +491,12 @@ export default function Inbox({
           </p>
         </div>
       ) : (
-        <div className="lg:grid lg:grid-cols-[minmax(0,1fr)_minmax(19rem,24rem)] lg:items-start lg:gap-5">
+        // Half and half once there is room for it: the pane is where an item is
+        // actually read, and a 24rem column made that a scroll through a narrow
+        // strip. Below xl the page leaves under 800px beside the sidebar, and
+        // halving that squeezes the rows until their buttons wrap, so the list
+        // keeps the larger share there.
+        <div className="lg:grid lg:grid-cols-[minmax(0,1fr)_minmax(19rem,24rem)] lg:items-start lg:gap-5 xl:grid-cols-2">
           <div className="space-y-3">
             {groups.map((group) => {
               const many = group.items.length > 1;
@@ -743,7 +748,9 @@ function Thumb({ src, large = false }: { src: string; large?: boolean }) {
       onError={() => setFailed(true)}
       className={
         large
-          ? "aspect-video w-full object-cover"
+          ? // Capped, now the pane can be half the page: at that width a 16:9
+            // picture stood over 300px tall and pushed the text out of sight.
+            "aspect-video max-h-56 w-full object-cover"
           : "h-[4.5rem] w-28 shrink-0 self-start rounded-md object-cover ring-1 ring-black/10"
       }
     />
