@@ -53,6 +53,7 @@ export async function parseUrl(url: string): Promise<WebParse> {
   const doc = dom.window.document;
   const meta = readMeta(doc, finalUrl);
 
+  dropOverlays(doc);
   const article = new Readability(doc).parse();
 
   // Readability's textContent flattens the article into one undifferentiated
@@ -76,6 +77,39 @@ export async function parseUrl(url: string): Promise<WebParse> {
   }));
 
   return { pieces, meta };
+}
+
+/** A loading screen, spinner or splash, by the names sites give them. The
+ *  word has to stand alone in the name — "page-loaders" and "loading-center"
+ *  are overlays, "lazyload" is an image that is part of the article. */
+const OVERLAY = /(?:^|[\s_-])(?:pre)?load(?:er|ers|ing)(?:$|[\s_-])|spinner|splash/i;
+
+/** More text than any loading screen carries. Some sites leave `is-loading`
+ *  on the container the article itself sits in until a script clears it. */
+const OVERLAY_MAX_CHARS = 300;
+
+/**
+ * Removes the page's loading screen before Readability chooses the article.
+ *
+ * A loader is a logo and a line — Shoman's is the foundation's tagline — and
+ * it sits in the markup ahead of everything, hidden by a script the reader
+ * never runs. Readability judged that line part of the article, so every piece
+ * from the site opened with it: in the inbox, in the chunks, and in whatever
+ * an entry quoted from the top of the piece. Only elements named like
+ * overlays go, and only small ones, so a mislabelled container keeps its
+ * article. Exported for the tests.
+ */
+export function dropOverlays(doc: Document): number {
+  let dropped = 0;
+  for (const el of Array.from(doc.querySelectorAll("[class], [id]"))) {
+    if (!el.isConnected) continue;
+    const name = `${el.getAttribute("class") ?? ""} ${el.getAttribute("id") ?? ""}`;
+    if (!OVERLAY.test(name)) continue;
+    if ((el.textContent ?? "").trim().length > OVERLAY_MAX_CHARS) continue;
+    el.remove();
+    dropped++;
+  }
+  return dropped;
 }
 
 /**

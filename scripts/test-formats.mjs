@@ -249,6 +249,40 @@ section("URL — what the page says about itself");
   check("the helpers are re-exported for callers of web.ts", typeof canonicalUrl === "function" && normaliseLang("eng") === "en");
 }
 
+// ---------------------------------------------------------------------------
+section("URL — a loading screen is not the article");
+// ---------------------------------------------------------------------------
+{
+  const { dropOverlays } = await import("../lib/ingest/web.ts");
+  const { JSDOM } = await import("jsdom");
+  const { Readability } = await import("@mozilla/readability");
+
+  const prose = Array.from({ length: 6 }, (_, i) =>
+    `<p>Paragraph ${i + 1} of the forum report: the speaker traced the argument through the archives and the audience pressed him on the dates, the sources and what the record leaves out.</p>`
+  ).join("");
+  const page = (body) => new JSDOM(`<html><body>${body}</body></html>`, { url: "https://site.example/ArticleID/1" }).window.document;
+  const read = (doc) => new Readability(doc).parse()?.textContent ?? "";
+
+  // Shoman's shape: a logo and the foundation's tagline in a loader ahead of everything.
+  const shoman = page(
+    `<div class="page-loaders"><div class="loading-center has-logo"><img src="logo.svg"><span>A cultural arm tagline</span></div></div>` +
+      `<div class="content"><article>${prose}</article></div>`
+  );
+  check("the loader is removed", dropOverlays(shoman) >= 1);
+  const text = read(shoman);
+  check("its tagline does not open the article", !text.includes("tagline"), text.slice(0, 80));
+  check("the article is all still there", text.includes("Paragraph 1") && text.includes("Paragraph 6"));
+
+  const others = page(
+    `<div id="preloader">Loading…</div><div class="spinner"></div>` +
+      `<article class="story is-loading">${prose}<img class="lazyload" src="a.jpg"></article>`
+  );
+  dropOverlays(others);
+  check("a preloader and a spinner go too", !others.getElementById("preloader") && !others.querySelector(".spinner"));
+  check("a container still marked loading keeps its article", others.querySelector("article.is-loading") !== null);
+  check("a lazy-loaded picture is not an overlay", others.querySelector("img.lazyload") !== null);
+}
+
 fs.rmSync(path.join(root, "data", "__fmt__"), { recursive: true, force: true });
 console.log(`\n${failed === 0 ? "All passed" : "FAILURES PRESENT"}: ${passed} passed, ${failed} failed\n`);
 process.exit(failed === 0 ? 0 : 1);
