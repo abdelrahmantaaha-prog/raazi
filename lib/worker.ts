@@ -312,6 +312,7 @@ export async function splitTask(task: Task) {
  * while, and any API route can start it again.
  */
 export async function startWorker(override?: Record<string, Handler>): Promise<void> {
+  if (followerCopy()) return;
   const s = state();
   if (s.running) return;
   s.running = true;
@@ -595,8 +596,23 @@ function sweepBrief(): boolean {
   return true;
 }
 
+/**
+ * Whether this server is a follower's copy of another Corpus (lib/follow.ts).
+ *
+ * A copy never runs the worker. Reading, polling and writing entries are the
+ * primary's job; a copy that did them too would spend the same tokens twice
+ * and drift from the library it is meant to match, turning every reconnect
+ * into a choice between two libraries. Work queued on the copy while the
+ * primary is away waits in the queue, and the primary does it once the copy
+ * has been sent back.
+ */
+function followerCopy(): boolean {
+  return process.env.CORPUS_FOLLOWER === "1";
+}
+
 /** Fire-and-forget kick. Safe to call on every mutation; it self-deduplicates. */
 export function kickWorker(): void {
+  if (followerCopy()) return;
   const s = state();
   s.idleSince = Date.now();
   if (s.running) return;

@@ -2,7 +2,7 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { pipeline } from "node:stream/promises";
-import { Readable } from "node:stream";
+import { Readable, Transform } from "node:stream";
 import Database from "better-sqlite3";
 import { DATA_DIR, SOURCES_DIR, db } from "./db";
 import { readStore, writeStore } from "./config-file";
@@ -98,6 +98,13 @@ export interface Fingerprint {
   briefs: number;
   latest: string | null;
   key: string;
+  /**
+   * The same without the queue's bookkeeping. Opening a copy puts interrupted
+   * tasks back in the queue and a run's timestamp moves whenever it is looked
+   * at; neither is work, and a follower comparing copies must not mistake them
+   * for it.
+   */
+  workKey: string;
 }
 
 function tableExists(name: string): boolean {
@@ -108,17 +115,19 @@ export function fingerprint(): Fingerprint {
   const count = (sql: string) => (db().prepare(sql).get() as { n: number }).n;
   const latestOf = (sql: string) => (db().prepare(sql).get() as { t: string | null }).t;
   const drafts = tableExists("drafts") ? count("SELECT COUNT(*) AS n FROM drafts") : 0;
-  const stamps = [
+  const work = [
     latestOf("SELECT MAX(added_at) AS t FROM sources"),
     latestOf("SELECT MAX(kept_at) AS t FROM sources"),
     latestOf("SELECT MAX(starred_at) AS t FROM sources"),
     latestOf("SELECT MAX(updated_at) AS t FROM entries"),
     latestOf("SELECT MAX(decided_at) AS t FROM feed_items"),
     latestOf("SELECT MAX(created_at) AS t FROM briefs"),
-    latestOf("SELECT MAX(updated_at) AS t FROM runs"),
     tableExists("drafts") ? latestOf("SELECT MAX(updated_at) AS t FROM drafts") : null,
     tableExists("brief_expansions") ? latestOf("SELECT MAX(updated_at) AS t FROM brief_expansions") : null,
   ].filter((t): t is string => Boolean(t));
+  const runsAt = latestOf("SELECT MAX(updated_at) AS t FROM runs");
+  const stamps = runsAt ? [...work, runsAt] : [...work];
+  const workLatest = [...work].sort().at(-1) ?? "";
   const f = {
     sources: count("SELECT COUNT(*) AS n FROM sources"),
     chunks: count("SELECT COUNT(*) AS n FROM chunks"),
@@ -130,7 +139,8 @@ export function fingerprint(): Fingerprint {
     briefs: count("SELECT COUNT(*) AS n FROM briefs"),
     latest: stamps.sort().at(-1) ?? null,
   };
-  return { ...f, key: [f.sources, f.chunks, f.mentions, f.entries, f.drafts, f.feedItems, f.decided, f.briefs, f.latest ?? ""].join("|") };
+  const counts = [f.sources, f.chunks, f.mentions, f.entries, f.drafts, f.feedItems, f.decided, f.briefs].join("|");
+  return { ...f, key: `${counts}|${f.latest ?? ""}`, workKey: `${counts}|${workLatest}` };
 }
 
 export interface LocalStatus {
@@ -238,7 +248,7 @@ export interface Peer {
   token: string;
 }
 
-async function peerFetch(peer: Peer, route: string, init: RequestInit = {}, timeoutMs = 15_000): Promise<Response> {
+export async function peerFetch(peer: Peer, route: string, init: RequestInit = {}, timeoutMs = 15_000): Promise<Response> {
   const url = `${peer.url.replace(/\/+$/, "")}${route}`;
   const ctrl = new AbortController();
   const timer = setTimeout(() => ctrl.abort(), timeoutMs);
@@ -511,6 +521,181 @@ export async function pushTo(peer: Peer, opts: { force?: boolean } = {}): Promis
     return data;
   } finally {
     syncing = null;
+  }
+}
+
+// ---------------------------------------------------------------------------
+// Sending a copy, for a follower bringing its work back
+// ---------------------------------------------------------------------------
+
+/** The other library moved on too: installing this copy would lose that. */
+export class SyncConflictError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = "SyncConflictError";
+  }
+}
+
+/** Larger than any library should be; a stream past it is not a library. */
+const MAX_SNAPSHOT_BYTES = 16 * 1024 ** 3;
+const MAX_FILE_BYTES = 4 * 1024 ** 3;
+
+/** Passes bytes through, and fails past a limit rather than filling the disk. */
+function capped(limit: number, what: string): Transform {
+  let seen = 0;
+  return new Transform({
+    transform(chunk: Buffer, _encoding, done) {
+      seen += chunk.length;
+      if (seen > limit) done(new Error(`${what} is larger than any Corpus should send.`));
+      else done(null, chunk);
+    },
+  });
+}
+
+/**
+ * Makes this library a copy of one sent to it — a follower bringing back what
+ * was done on it while this machine could not be reached.
+ *
+ * Pull, run the other way round: the follower sends, so this machine never
+ * has to reach the laptop, which is usually the one behind a firewall. The
+ * safety is pull's: the copy is checked before anything is touched, and this
+ * library is kept as a backup. And one more check, first: `expect` is this
+ * library's work key as the follower last saw it. If this library has moved
+ * since, installing the copy would throw that away, so it is refused unless
+ * forced — the follower asks you which to keep.
+ */
+export async function receiveSnapshot(
+  body: ReadableStream<Uint8Array>,
+  opts: { from: string; expect?: string | null; force?: boolean }
+): Promise<{ backup: string | null; fingerprint: Fingerprint }> {
+  if (syncing) {
+    await body.cancel().catch(() => undefined);
+    throw new Error(`A sync is already running (${syncing}).`);
+  }
+  if (opts.expect && !opts.force && opts.expect !== fingerprint().workKey) {
+    await body.cancel().catch(() => undefined);
+    throw new SyncConflictError("This library has changed since the copy being sent was taken from it.");
+  }
+
+  syncing = `receiving from ${opts.from}`;
+  fs.mkdirSync(SYNC_DIR, { recursive: true });
+  const file = path.join(SYNC_DIR, `received-${Date.now()}.db`);
+  try {
+    await pipeline(
+      Readable.fromWeb(body as import("node:stream/web").ReadableStream),
+      capped(MAX_SNAPSHOT_BYTES, "The copy"),
+      fs.createWriteStream(file)
+    );
+    const installed = await installSnapshot(file);
+    saveSyncSettings({
+      last: { at: new Date().toISOString(), peer: opts.from, direction: "pull", fingerprint: installed.fingerprint.key },
+    });
+    kickWorker();
+    return installed;
+  } catch (err) {
+    try {
+      fs.unlinkSync(file);
+    } catch {
+      /* consumed by the install, or never written */
+    }
+    throw err;
+  } finally {
+    syncing = null;
+  }
+}
+
+/** One file of a library being sent here, written where the listing names it and nowhere else. */
+export async function receiveFile(rel: string, body: ReadableStream<Uint8Array>): Promise<number> {
+  const abs = resolveFile(rel);
+  if (!abs) {
+    await body.cancel().catch(() => undefined);
+    throw new Error("Not a file a Corpus library keeps.");
+  }
+  fs.mkdirSync(path.dirname(abs), { recursive: true });
+  const tmp = `${abs}.${process.pid}.part`;
+  try {
+    await pipeline(
+      Readable.fromWeb(body as import("node:stream/web").ReadableStream),
+      capped(MAX_FILE_BYTES, "A file"),
+      fs.createWriteStream(tmp)
+    );
+    fs.renameSync(tmp, abs);
+  } catch (err) {
+    try {
+      fs.unlinkSync(tmp);
+    } catch {
+      /* never written */
+    }
+    throw err;
+  }
+  return fs.statSync(abs).size;
+}
+
+/**
+ * Sends this library to a peer, which installs it: the follower's half of
+ * bringing work back. Then every file the peer lacks, or holds at a different
+ * size. `expect` is the peer's work key as this machine last copied it; the
+ * peer refuses if it has moved since.
+ */
+export async function uploadTo(
+  peer: Peer,
+  opts: { expect?: string | null; force?: boolean } = {}
+): Promise<{ fingerprint: Fingerprint; filesSent: number; bytesSent: number }> {
+  if (syncing) throw new Error(`A sync is already running (${syncing}).`);
+  syncing = `sending to ${peer.url}`;
+  const file = snapshot();
+  try {
+    const query = new URLSearchParams({ from: os.hostname() });
+    if (opts.expect) query.set("expect", opts.expect);
+    if (opts.force) query.set("force", "1");
+    const res = await peerFetch(
+      peer,
+      `/api/sync/receive?${query}`,
+      {
+        method: "POST",
+        headers: { "content-type": "application/vnd.sqlite3" },
+        body: Readable.toWeb(fs.createReadStream(file)) as ReadableStream,
+        // A streamed request body has to say it will not wait for the response.
+        duplex: "half",
+      } as RequestInit,
+      60 * 60_000
+    );
+    const data = (await res.json().catch(() => ({}))) as { error?: string; conflict?: boolean };
+    if (res.status === 409 && data.conflict) throw new SyncConflictError(data.error ?? "The other library has changed too.");
+    if (!res.ok) throw new Error(data.error ?? `The peer answered ${res.status} to the copy.`);
+
+    const listing = await peerFetch(peer, "/api/sync/files");
+    if (!listing.ok) throw new Error(`The peer answered ${listing.status} to a file listing.`);
+    const theirs = new Map(((await listing.json()) as { files: SyncFile[] }).files.map((f) => [f.rel, f.size]));
+    let filesSent = 0;
+    let bytesSent = 0;
+    for (const f of listFiles()) {
+      if (theirs.get(f.rel) === f.size) continue;
+      const abs = resolveFile(f.rel);
+      if (!abs) continue;
+      const put = await peerFetch(
+        peer,
+        `/api/sync/receive-file?path=${encodeURIComponent(f.rel)}`,
+        {
+          method: "PUT",
+          headers: { "content-type": "application/octet-stream" },
+          body: Readable.toWeb(fs.createReadStream(abs)) as ReadableStream,
+          duplex: "half",
+        } as RequestInit,
+        30 * 60_000
+      );
+      if (!put.ok) continue;
+      filesSent++;
+      bytesSent += f.size;
+    }
+    return { fingerprint: fingerprint(), filesSent, bytesSent };
+  } finally {
+    syncing = null;
+    try {
+      fs.unlinkSync(file);
+    } catch {
+      /* already gone */
+    }
   }
 }
 

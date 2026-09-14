@@ -61,6 +61,100 @@ check("picks up the PDF's own title metadata", parsed.meta.title === "A Test Mon
 check("and its author", parsed.meta.author === "R. Tester", parsed.meta.author);
 
 // ---------------------------------------------------------------------------
+section("PDF — running heads, folios and notes stay out of the prose");
+// ---------------------------------------------------------------------------
+{
+  const { cleanLine, furnitureKey, joinCut } = await import("../lib/ingest/pdf.ts");
+  check("a folio in dashes is not prose", cleanLine("- 12 -") === "");
+  check("nor one in brackets", cleanLine("(12)") === "" && cleanLine("[14]") === "");
+  check("nor 'Page 3 of 10'", cleanLine("Page 3 of 10") === "");
+  check("nor an Arabic folio", cleanLine("صفحة ٣") === "" && cleanLine("١٢") === "");
+  check("a roman folio goes", cleanLine("xii") === "" && cleanLine("XLIV") === "");
+  check("but a word spelled in roman letters stays", cleanLine("CIVIL") === "CIVIL" && cleanLine("dim") === "dim");
+  check("and a lone capital is a drop cap, not a folio", cleanLine("I") === "I");
+  check("contents-page dot leaders collapse", cleanLine("Preface .......... 9") === "Preface 9", cleanLine("Preface .......... 9"));
+  check("a running head matches whatever number it carries", furnitureKey("MY BOOK · 23") === furnitureKey("My Book — 24"));
+  check("in Arabic digits too", furnitureKey("تاريخ النفط ٢٣") === furnitureKey("تاريخ النفط ٢٤"));
+  check("a word hyphenated at the break is mended", joinCut("the pro-", "visions") === "the provisions");
+
+  const places = ["Abadan", "Basra", "Kirkuk", "Dhahran", "Muscat", "Bahrain", "Aden", "Jeddah", "Kuwait", "Doha",
+    "Mosul", "Tabriz", "Shiraz", "Haifa", "Tripoli", "Suez", "Aswan", "Luxor", "Amman", "Sanaa"];
+  const book = await PDFDocument.create();
+  const helv = await book.embedFont(StandardFonts.Helvetica);
+  const draw = (page, text, y, size = 11, x = 72) => page.drawText(text, { x, y, size, font: helv });
+
+  for (let n = 1; n <= 20; n++) {
+    const page = book.addPage([612, 792]);
+    const place = places[n - 1];
+    // A running head carrying its own page number, on every page.
+    draw(page, `THE CONCESSION YEARS · ${n + 10}`, 750, 9);
+    // A chapter's own running head, on four pages of twenty.
+    if (n >= 9 && n <= 12) draw(page, "CHAPTER TWO: THE OIL", 736, 9);
+
+    let y = 700;
+    const line = (text, opts = {}) => {
+      const at = y;
+      draw(page, text, y, opts.size ?? 11, opts.x ?? 72);
+      y -= opts.gap ?? 15;
+      return at;
+    };
+    if (n === 3) line("visions that would bind every member of the council equally.", { gap: 34 });
+    if (n === 7) {
+      draw(page, "A", 690, 26);
+      line("s the ceremony closed, the delegates filed out into the square at dusk.", { x: 100, gap: 34 });
+    }
+    line(`In ${place} the delegation met again to weigh the terms of the concession`);
+    line(`before the talks moved on, and the ministers from ${place} kept their own counsel`);
+    if (n === 6) line("THE CONCESSION YEARS");
+    if (n === 8) line("CIVIL");
+    line(`about what the agreement would cost them once ${place} had signed it.`, { gap: n === 5 ? 34 : 15 });
+    if (n === 6) {
+      // Enough below the repeated words that they sit in the middle of the page, not at its foot.
+      line("and nobody in the room expected the matter to be settled that week,");
+      line("whatever the newspapers in the capital chose to print about it.");
+    }
+    if (n === 5) line(`A second paragraph began here, set apart from the first by a wider space in ${place}.`);
+    if (n === 2) line("When they reconvened the ministers finally agreed to draft the pro-");
+    if (n === 4) {
+      const sentence = "The decision was carried into force later.";
+      const at = line(sentence);
+      draw(page, "7", at + 5, 6, 72 + helv.widthOfTextAtSize(sentence, 11) + 1);
+      draw(page, "7. Cabinet minutes, file twelve, folder nine.", 90, 8);
+    }
+    draw(page, n === 8 ? "viii" : `- ${n} -`, 40, 9);
+  }
+
+  const read = await parsePdf(Buffer.from(await book.save()));
+  const pageText = new Map(read.pieces.map((p) => [p.locator.page, p.text]));
+  const all = read.pieces.map((p) => p.text).join("\n\n");
+  const show = (n) => JSON.stringify((pageText.get(n) ?? "").slice(0, 240));
+
+  check("twenty pages of prose make twenty pieces", read.pieces.length === 20, String(read.pieces.length));
+  check("the running head is gone from every page, whatever number it carried", !/CONCESSION YEARS\s*·/.test(all));
+  check("a chapter's running head on four pages of twenty goes too", !/CHAPTER TWO/.test(all));
+  check("no page number is left standing as a paragraph", !/^(?:-\s*\d+\s*-|viii)$/m.test(all));
+  check("its words are kept where they are prose, mid-page", /THE CONCESSION YEARS/.test(pageText.get(6) ?? ""), show(6));
+  check("a word spelled in roman letters is kept", /CIVIL/.test(pageText.get(8) ?? ""), show(8));
+  check(
+    "a sentence the page broke off is whole again, on the page it began",
+    /draft the provisions that would bind every member/.test(pageText.get(2) ?? ""),
+    show(2)
+  );
+  check("and the next page does not start with its tail", !/^visions/.test(pageText.get(3) ?? ""), show(3));
+  check("a raised citation number stays on its sentence", /force later\.7/.test(pageText.get(4) ?? ""), show(4));
+  check("and is not left as a line of its own", !/^7$/m.test(pageText.get(4) ?? ""));
+  const four = pageText.get(4) ?? "";
+  check("the footnote is kept, after the prose", four.indexOf("Cabinet minutes, file twelve") > four.indexOf("force later"), show(4));
+  check("a wider space starts a new paragraph", /signed it\.\n\nA second paragraph/.test(pageText.get(5) ?? ""), show(5));
+  check("a drop cap rejoins its word", /As the ceremony closed/.test(pageText.get(7) ?? ""), show(7));
+  check(
+    "no paragraph starts in lower case",
+    !read.pieces.some((p) => p.text.split("\n\n").some((para) => /^\p{Ll}/u.test(para))),
+    read.pieces.flatMap((p) => p.text.split("\n\n")).find((para) => /^\p{Ll}/u.test(para)) ?? ""
+  );
+}
+
+// ---------------------------------------------------------------------------
 section("EPUB — chapters and metadata straight out of the manifest");
 // ---------------------------------------------------------------------------
 const { parseEpub } = await import("../lib/ingest/epub.ts");

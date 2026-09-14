@@ -149,6 +149,16 @@ export function tokenMatches(candidate: string | null, expected: string | null):
   return crypto.timingSafeEqual(a, b);
 }
 
+/**
+ * For the few routes the middleware does not cover — those receiving a whole
+ * library, which Next would otherwise cut off at 10 MB while buffering it for
+ * the middleware — the same door, checked in the route.
+ */
+export function requestAllowed(req: { headers: { get(name: string): string | null } }): boolean {
+  if (!lanEnabled()) return true;
+  return tokenMatches(tokenFrom(req), lanSettings().token);
+}
+
 /** This machine's IPv4 addresses on real networks — what a phone would type. */
 export function lanAddresses(): string[] {
   const out: string[] = [];

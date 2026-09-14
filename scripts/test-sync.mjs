@@ -117,6 +117,122 @@ section("Installing a snapshot swaps the library and keeps the old one");
   check("a file that is not a library is refused before anything is touched", refused !== null && db().prepare("SELECT title FROM sources").get()?.title === "From the peer");
 }
 
+section("The work key ignores the queue's bookkeeping");
+{
+  const before = sync.fingerprint();
+  db().prepare("INSERT INTO runs (kind, label, state) VALUES ('ingest', 'x', 'done')").run();
+  db().prepare("UPDATE runs SET updated_at = '2999-01-01 00:00:00'").run();
+  const after = sync.fingerprint();
+  check("the full key notices a run moving", after.key !== before.key);
+  check("the work key does not", after.workKey === before.workKey, `${before.workKey} → ${after.workKey}`);
+  db().prepare("INSERT INTO sources (title, kind, status) VALUES ('Work', 'text', 'ready')").run();
+  check("but it notices work", sync.fingerprint().workKey !== before.workKey);
+}
+
+const follow = await import("../lib/follow.ts");
+
+section("A follower decides from what changed on each side");
+{
+  const last = { at: "2026-09-14T10:00:00Z", localKey: "L", primaryKey: "P", direction: "pull" };
+  const d = (o) => follow.decide({ localKey: "L", primaryKey: "P", last, sinceLastPullMs: 10 * 60_000, returning: false, ...o });
+  check("nothing changed: in step", d({}) === "in-step");
+  check("only the primary changed: take a copy", d({ primaryKey: "P2" }) === "pull");
+  check("but not more often than the interval while both are up", d({ primaryKey: "P2", sinceLastPullMs: 60_000 }) === "wait");
+  check("unless coming back from an outage", d({ primaryKey: "P2", sinceLastPullMs: 60_000, returning: true }) === "pull");
+  check("only this copy changed: send it back", d({ localKey: "L2" }) === "push");
+  check("both changed: ask, never guess", d({ localKey: "L2", primaryKey: "P2" }) === "conflict");
+  check("never synced and different: take a first copy", d({ last: null, primaryKey: "P2" }) === "first-sync");
+  check(
+    "never synced but already the same: nothing to copy",
+    follow.decide({ localKey: "S", primaryKey: "S", last: null, sinceLastPullMs: null, returning: false }) === "adopt"
+  );
+}
+
+section("A primary that cannot be reached is reported down");
+{
+  const token = "t".repeat(64);
+  follow.saveFollowSettings({ primaryUrl: "http://127.0.0.1:9", primaryToken: token });
+  const first = await follow.followTick();
+  check("the state is offline", first.state === "offline" && first.primaryUp === false, JSON.stringify(first));
+  const since = follow.followSettings().offlineSince;
+  check("and when it went is remembered", typeof since === "string");
+  const second = await follow.followTick();
+  check("a second miss keeps the time of the first", second.state === "offline" && follow.followSettings().offlineSince === since);
+  check("what a page is told carries no token", !JSON.stringify(follow.followView()).includes(token));
+  follow.saveFollowSettings({ primaryUrl: "", primaryToken: "" });
+  check("with nothing to follow it says so", (await follow.followTick()).state === "not-following");
+}
+
+section("A copy sent back is checked before it is installed");
+{
+  const { Readable } = await import("node:stream");
+  const sent = sync.snapshot();
+  const peer = new Database(sent);
+  peer.prepare("INSERT INTO sources (title, kind, status) VALUES ('Sent back', 'text', 'ready')").run();
+  peer.close();
+  const stream = () => Readable.toWeb(fs.createReadStream(sent));
+
+  let refused = null;
+  try {
+    await sync.receiveSnapshot(stream(), { from: "laptop", expect: "a library that has moved on" });
+  } catch (err) {
+    refused = err;
+  }
+  check("sent against a library that moved on since, it is refused", refused instanceof sync.SyncConflictError);
+  check("and nothing here is touched", !db().prepare("SELECT 1 FROM sources WHERE title = 'Sent back'").get());
+
+  const got = await sync.receiveSnapshot(stream(), { from: "laptop", expect: sync.fingerprint().workKey });
+  check("sent against the library it was taken from, it is installed", Boolean(db().prepare("SELECT 1 FROM sources WHERE title = 'Sent back'").get()));
+  check("the library it replaced is kept as a backup", got.backup !== null && fs.existsSync(got.backup));
+  check("and the sync is recorded", sync.syncSettings().last?.peer === "laptop");
+  try {
+    fs.unlinkSync(sent);
+  } catch {
+    /* consumed */
+  }
+
+  const size = await sync.receiveFile("sources/sent.txt", Readable.toWeb(Readable.from([Buffer.from("hello")])));
+  check("a file sent is written where the listing names it", size === 5 && fs.readFileSync(path.join(SOURCES_DIR, "sent.txt"), "utf8") === "hello");
+  let outside = null;
+  try {
+    await sync.receiveFile("../config.json", Readable.toWeb(Readable.from([Buffer.from("x")])));
+  } catch (err) {
+    outside = err;
+  }
+  check("and never outside the library's folders", outside !== null);
+}
+
+section("A primary waits for a follower that may be bringing work back");
+{
+  const { readStore, writeStore } = await import("../lib/config-file.ts");
+  check("with no follower ever seen, there is nothing to wait for", follow.primaryWaiting().expect === false);
+  writeStore({ ...readStore(), followers: { laptop: { lastSeen: new Date(Date.now() - 3 * 86_400_000).toISOString(), bringingWork: false } } });
+  const before = follow.primaryWaiting();
+  check("a follower seen before start-up is waited for", before.expect === true && before.checkedIn === false && before.host === "laptop");
+  follow.recordCheckin({ host: "laptop", bringingWork: true });
+  const coming = follow.primaryWaiting();
+  check("once it checks in saying it has work, that is what the launcher sees", coming.checkedIn === true && coming.bringingWork === true);
+  follow.recordCheckin({ host: "laptop", bringingWork: false });
+  check("and once it has sent it, nothing more to wait for", follow.primaryWaiting().bringingWork === false);
+  writeStore({ ...readStore(), followers: { old: { lastSeen: new Date(Date.now() - 90 * 86_400_000).toISOString(), bringingWork: false } } });
+  check("a follower not heard from in months is not waited for", follow.primaryWaiting().followers.includes("old") === false);
+}
+
+section("A follower's copy never runs the worker");
+{
+  const worker = await import("../lib/worker.ts");
+  // Installing a copy earlier kicked the worker on this (not yet follower)
+  // library; let it stand down before asking whether a follower starts one.
+  worker.stopWorker();
+  for (let i = 0; i < 60 && worker.workerStatus().running; i++) await new Promise((r) => setTimeout(r, 50));
+  process.env.CORPUS_FOLLOWER = "1";
+  worker.kickWorker();
+  await new Promise((r) => setTimeout(r, 50));
+  check("kicking it does nothing on a copy", worker.workerStatus().running === false);
+  check("and the copy knows it is one", follow.isFollower() === true && follow.followView().follower === true);
+  delete process.env.CORPUS_FOLLOWER;
+}
+
 console.log(`\n${passed} passed, ${failed} failed`);
 db().close();
 fs.rmSync(SANDBOX, { recursive: true, force: true });

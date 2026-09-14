@@ -3,6 +3,7 @@ import "./globals.css";
 import { Nav } from "./components/Nav";
 import { PageTransition } from "./components/PageTransition";
 import { SectionTabs } from "./components/SectionTabs";
+import { ServerWatch } from "./components/ServerWatch";
 
 export const metadata: Metadata = {
   title: "Corpus",
@@ -20,6 +21,7 @@ export default function RootLayout({ children }: { children: React.ReactNode }) 
   return (
     <html lang="en">
       <body className="min-h-screen">
+        <ServerWatch />
         <Nav />
         {/* Offset by the rail, which is fixed. The max width is applied inside
             the remaining space rather than to the page, so a wide screen still

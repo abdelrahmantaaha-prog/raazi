@@ -12,10 +12,14 @@
 // Chrome, then Edge), so it has no tabs or address bar but keeps your sign-ins,
 // the Corpus Inbox extension, and the Page view.
 //
-// Local, or remote. "Connect to another Corpus" points this launcher at a
-// Corpus running on another machine — the other laptop, over the LAN or
-// Tailscale — and then it starts no server of its own and opens that one
-// instead. The choice lives in data\launcher.ini.
+// Local, or following another. "Connect to another Corpus" points this
+// launcher at a Corpus running on another machine — the other laptop, over the
+// LAN or Tailscale. The window opens on that one, and a quiet copy of it runs
+// here beside it (a follower: lib/follow.ts), kept in step every few minutes.
+// When that machine stops answering, the launcher says so and moves the window
+// to the copy; when it answers again, what was done here goes back to it
+// first, and the window goes back to it after. The choice lives in
+// data\launcher.ini.
 //
 // Compiled with the C# compiler that ships with Windows — see build.ps1. No
 // Electron, no extra runtime, a few dozen KB.
@@ -36,6 +40,7 @@ using Microsoft.Win32;
 static class Corpus
 {
     const int Port = 5400;
+    const string CopyTitle = "Corpus · this computer's copy";
     static Process server;
     static NotifyIcon tray;
     static readonly string Root =
@@ -59,7 +64,10 @@ static class Corpus
             if (!owned)
             {
                 // Already running: bring its window forward rather than start
-                // a second of anything.
+                // a second of anything. A follower's launcher knows which
+                // window that is; this process does not, so it asks for the
+                // primary's, which is right unless the primary is down — and
+                // then the running launcher has already opened the copy.
                 if (settings.Remote || Healthy()) Open(false);
                 else Error("Corpus is already starting up. Give it a moment.");
                 return;
@@ -68,6 +76,8 @@ static class Corpus
             try
             {
                 Application.EnableVisualStyles();
+                ui = new Control();
+                var handle = ui.Handle; // created now, on this thread, so others can marshal onto it
                 if (settings.Remote) RunRemote();
                 else RunLocal();
             }
@@ -84,10 +94,7 @@ static class Corpus
         if (node == null)
         {
             Error("Node.js isn't installed, or isn't where I expected.\n\n" +
-                  "Install the LTS build from nodejs.org, then run Corpus again.\n\n" +
-                  "To use a Corpus running on another computer instead, this copy doesn't need Node — " +
-                  "but it needs to be told where that Corpus is. Run it once with Node installed and use " +
-                  "Connect to another Corpus in the tray.");
+                  "Install the LTS build from nodejs.org, then run Corpus again.");
             return;
         }
 
@@ -119,10 +126,12 @@ static class Corpus
             return;
         }
 
-        // The health probe is a plain GET now: it reports what the library
-        // holds and starts nothing. Resuming pending work on a headless
-        // start is this call, once, from the one client that is entitled
-        // to make it.
+        // Before this library starts working or opens: if another computer
+        // follows it and did work while this one was off, that comes back first.
+        AwaitFollowers();
+
+        // Resuming pending work on a headless start is this call, once, from
+        // the one client that is entitled to make it.
         KickWorker();
 
         Open(false);
@@ -134,12 +143,30 @@ static class Corpus
         Stop();
     }
 
+    // -- following another Corpus ---------------------------------------------
+
+    static Control ui;
+    static volatile bool offline;
+    static volatile bool conflict;
+    static volatile bool hasCopy;
+    static volatile bool tickNow;
+    static volatile string pendingResolve;
+    static bool follower;          // start the local server as a follower's copy
+    static bool adoptedFollower;   // a follower already running from a launcher that did not close cleanly
+    static bool windowOpened;
+    static string lastSyncText = "";
+    static Form downForm;
+    static Form conflictForm;
+    static ToolStripItem resolveItem;
+
     /**
-     * Uses a Corpus on another machine: no server here, just the window.
+     * Uses a Corpus on another machine, with a copy of it kept here.
      *
-     * The tray stays up even when the other Corpus cannot be reached, because
-     * the tray is where you change your mind — back to this computer, or to a
-     * corrected address.
+     * The window opens on the other machine at once, if it answers; the copy is
+     * started and kept in step on a background thread, so a first copy that
+     * takes minutes never holds up the window. The tray stays up even when the
+     * other Corpus cannot be reached, because the tray is where you change your
+     * mind.
      */
     static void RunRemote()
     {
@@ -147,18 +174,389 @@ static class Corpus
         if (RemoteHealthy(settings.RemoteUrl))
         {
             Open(false);
-            Notify("Using the Corpus at " + HostOf(settings.RemoteUrl) + ".");
+            windowOpened = true;
+            Notify("Using the Corpus at " + HostOf(settings.RemoteUrl) + ". A copy is kept on this computer in case it goes down.");
         }
-        else
-        {
-            Error("Couldn't reach a Corpus at " + settings.RemoteUrl + ".\n\n" +
-                  "Check that Corpus is running there with LAN mode on (Settings → LAN mode), " +
-                  "and that this computer can reach it.\n\n" +
-                  "Right-click the Corpus icon in the notification area to try another address, " +
-                  "or to use the Corpus on this computer.");
-        }
+
+        var thread = new Thread(FollowLoop) { IsBackground = true, Name = "Corpus follower" };
+        thread.Start();
+
         Application.Run();
-        if (tray != null) tray.Visible = false;
+        Stop();
+    }
+
+    static string LocalBase() { return "http://127.0.0.1:" + Port; }
+
+    static void FollowLoop()
+    {
+        hasCopy = StartFollower();
+        if (!hasCopy)
+        {
+            WatchOnly();
+            return;
+        }
+
+        Http("POST", LocalBase() + "/api/sync/follow",
+            "{\"action\":\"configure\",\"url\":\"" + JsonEscape(settings.RemoteUrl) + "\",\"token\":\"" + JsonEscape(settings.Token) + "\"}",
+            15000);
+
+        while (!quitting)
+        {
+            string resolve = pendingResolve;
+            pendingResolve = null;
+            string body = resolve == null
+                ? "{\"action\":\"tick\"}"
+                : "{\"action\":\"tick\",\"resolve\":\"" + resolve + "\"}";
+            // A tick may take a whole copy of a library across the network.
+            var json = Http("POST", LocalBase() + "/api/sync/follow", body, 60 * 60 * 1000);
+            string state = JsonString(json, "state") ?? "error";
+            string message = JsonString(json, "message") ?? "This computer's copy isn't answering.";
+            string lastSync = JsonString(json, "lastSyncAt");
+            Ui(() => OnFollowState(state, message, lastSync));
+
+            // Every twenty seconds while it answers; every ten while it doesn't,
+            // so its return is noticed quickly.
+            int quarterSeconds = (offline ? 10 : 20) * 4;
+            for (int i = 0; i < quarterSeconds && !quitting && !tickNow; i++) Thread.Sleep(250);
+            tickNow = false;
+        }
+    }
+
+    /** No copy here: all that can be done is to say when the other one is down, and when it is back. */
+    static void WatchOnly()
+    {
+        while (!quitting)
+        {
+            bool up = RemoteHealthy(settings.RemoteUrl);
+            if (!up && !offline)
+            {
+                offline = true;
+                Ui(() => { ShowDown(false); UpdateTip(); });
+            }
+            else if (up && offline)
+            {
+                offline = false;
+                Ui(() =>
+                {
+                    CloseForm(downForm);
+                    Notify(HostOf(settings.RemoteUrl) + " is back.");
+                    UpdateTip();
+                    Open(false);
+                    windowOpened = true;
+                });
+            }
+            else if (up && !windowOpened)
+            {
+                Ui(() => { Open(false); windowOpened = true; });
+            }
+            for (int i = 0; i < 60 && !quitting; i++) Thread.Sleep(250);
+        }
+    }
+
+    /** Starts this computer's copy, as a follower. False when there cannot be one. */
+    static bool StartFollower()
+    {
+        string node = FindNode();
+        string standalone = Path.Combine(Root, "server", "server.js");
+        bool packaged = File.Exists(standalone);
+        string nextBin = Path.Combine(Root, "node_modules", "next", "dist", "bin", "next");
+        if (node == null || (!packaged && !File.Exists(nextBin)))
+        {
+            Ui(() => Notify("No copy is kept on this computer: " +
+                (node == null ? "Node.js isn't installed." : "Corpus isn't set up here.") +
+                " If " + HostOf(settings.RemoteUrl) + " goes down there is nothing to work from."));
+            return false;
+        }
+
+        if (PortBusy())
+        {
+            if (Healthy())
+            {
+                if (IsFollowerServer())
+                {
+                    adoptedFollower = true;
+                    return true;
+                }
+                // A Corpus running here as its own library would keep reading and
+                // spending, and drift from the one being followed.
+                var answer = MessageBox.Show(
+                    "A Corpus is already running on this computer as its own library.\n\n" +
+                    "Keeping a copy of " + HostOf(settings.RemoteUrl) + " here needs it stopped. Stop it?",
+                    "Corpus", MessageBoxButtons.YesNo, MessageBoxIcon.Question);
+                if (answer != DialogResult.Yes) return false;
+            }
+            KillTree(PortOwner());
+            for (int i = 0; i < 20 && PortBusy(); i++) Thread.Sleep(250);
+            if (PortBusy())
+            {
+                Ui(() => Notify("Port " + Port + " is taken, so no copy is kept on this computer."));
+                return false;
+            }
+        }
+
+        follower = true;
+        if (!(packaged ? StartStandalone(node, standalone) : Start(node, nextBin))) return false;
+        return WaitForServer(90);
+    }
+
+    static bool IsFollowerServer()
+    {
+        var json = Http("GET", LocalBase() + "/api/sync/follow", null, 10000);
+        return json != null && json.IndexOf("\"follower\":true", StringComparison.Ordinal) >= 0;
+    }
+
+    static void OnFollowState(string state, string message, string lastSync)
+    {
+        if (!string.IsNullOrEmpty(lastSync)) lastSyncText = FormatWhen(lastSync);
+        string host = HostOf(settings.RemoteUrl);
+
+        if (state == "offline")
+        {
+            if (!offline)
+            {
+                offline = true;
+                ShowDown(true);
+            }
+        }
+        else if (state == "conflict")
+        {
+            offline = false;
+            CloseForm(downForm);
+            if (!conflict)
+            {
+                conflict = true;
+                if (resolveItem != null) resolveItem.Visible = true;
+                ShowConflict(message);
+            }
+        }
+        else if (state == "in-step" || state == "pulled" || state == "behind" || state == "pushed")
+        {
+            bool wasAway = offline || conflict;
+            offline = false;
+            conflict = false;
+            if (resolveItem != null) resolveItem.Visible = false;
+            CloseForm(downForm);
+            CloseForm(conflictForm);
+            if (state == "pushed")
+                Notify("What you did on this computer is on " + host + " now. Back to using " + host + ".");
+            else if (wasAway)
+                Notify(host + " is back. Using it again.");
+            if (wasAway || !windowOpened)
+            {
+                Open(false);
+                windowOpened = true;
+            }
+        }
+        UpdateTip();
+    }
+
+    /**
+     * The warning, when the Corpus this computer follows stops answering.
+     *
+     * A window of its own rather than a balloon, because a balloon is gone in
+     * four seconds and this is the moment your changes stop saving.
+     */
+    static void ShowDown(bool withCopy)
+    {
+        string host = HostOf(settings.RemoteUrl);
+        Notify("The Corpus server at " + host + " is down.");
+        if (downForm != null && !downForm.IsDisposed)
+        {
+            downForm.Activate();
+            return;
+        }
+        string text = "The Corpus server at " + host + " is down. Anything you change in its window now will not be saved.\n\n" +
+            (withCopy
+                ? "You can keep working from this computer's copy" +
+                  (lastSyncText.Length > 0 ? ", which has everything up to " + lastSyncText : "") +
+                  ". What you change on it goes back to " + host + " as soon as it answers again, before you are switched back."
+                : "This computer keeps no copy of it, so there is nothing to work from until it answers again.");
+        downForm = Prompt("Corpus — the server is down", text,
+            withCopy ? new[] { "Work on this computer", "Wait for it" } : new[] { "OK" },
+            choice =>
+            {
+                if (withCopy && choice == 0)
+                {
+                    Open(false);
+                    windowOpened = true;
+                }
+            });
+    }
+
+    /** Both libraries changed while apart. A library is copied whole, so this is a choice, not a merge. */
+    static void ShowConflict(string message)
+    {
+        string host = HostOf(settings.RemoteUrl);
+        if (conflictForm != null && !conflictForm.IsDisposed)
+        {
+            conflictForm.Activate();
+            return;
+        }
+        conflictForm = Prompt("Corpus — both copies changed",
+            host + " and this computer both changed while they were apart.\n\n" + message + "\n\n" +
+            "Corpus copies a library whole; it can't merge two of them. Choose which to keep. " +
+            "The other is not deleted: it is saved as a backup on its own machine, in data\\backups.\n\n" +
+            "Until you choose, you are working on this computer's copy.",
+            new[] { "Keep this computer's", "Keep " + host + "'s", "Decide later" },
+            choice =>
+            {
+                if (choice == 0) Resolve("keep-local");
+                else if (choice == 1) Resolve("keep-primary");
+                else
+                {
+                    Open(false);
+                    windowOpened = true;
+                }
+            });
+    }
+
+    static void Resolve(string which)
+    {
+        string host = HostOf(settings.RemoteUrl);
+        pendingResolve = which;
+        tickNow = true;
+        Notify(which == "keep-local"
+            ? "Sending this computer's copy to " + host + "…"
+            : "Taking " + host + "'s copy; this computer's is kept as a backup…");
+    }
+
+    static void UpdateTip()
+    {
+        if (tray == null) return;
+        string host = HostOf(settings.RemoteUrl);
+        string text = !settings.Remote
+            ? (LanWanted() ? "Corpus — on this network, port " + Port + " (token required)" : "Corpus — running on localhost:" + Port)
+            : offline
+                ? "Corpus — " + host + " is down; using this computer's copy"
+                : conflict
+                    ? "Corpus — both copies changed; choose which to keep"
+                    : "Corpus — using " + host + (hasCopy && lastSyncText.Length > 0 ? ", copy " + lastSyncText : "");
+        // The notification area refuses a tooltip over 63 characters.
+        tray.Text = text.Length > 63 ? text.Substring(0, 63) : text;
+    }
+
+    static string FormatWhen(string iso)
+    {
+        DateTime when;
+        if (!DateTime.TryParse(iso, null, System.Globalization.DateTimeStyles.RoundtripKind, out when)) return "";
+        when = when.ToLocalTime();
+        return when.Date == DateTime.Today ? when.ToString("HH:mm") : when.ToString("d MMM HH:mm");
+    }
+
+    /**
+     * On the primary, before it starts its worker and opens: a computer that
+     * follows this one may have done work while this one was off, and that has
+     * to come back before this library does anything of its own.
+     *
+     * Waits a short while for a follower seen before to check in, and for as
+     * long as it takes once one says it is bringing work. "Open now" skips it.
+     */
+    static void AwaitFollowers()
+    {
+        var json = Http("GET", LocalBase() + "/api/sync/followers", null, 10000);
+        if (json == null || json.IndexOf("\"expect\":true", StringComparison.Ordinal) < 0) return;
+
+        string host = JsonString(json, "host") ?? "your other computer";
+        bool skip = false;
+        var form = Prompt("Corpus",
+            "Checking with " + host + " for anything done on it while this computer was off…",
+            new[] { "Open now" }, c => skip = true);
+
+        DateTime until = DateTime.Now.AddSeconds(25);
+        DateTime nextPoll = DateTime.Now;
+        while (!skip && DateTime.Now < until && !form.IsDisposed)
+        {
+            Application.DoEvents();
+            Thread.Sleep(100);
+            if (DateTime.Now < nextPoll) continue;
+            nextPoll = DateTime.Now.AddSeconds(1.5);
+
+            json = Http("GET", LocalBase() + "/api/sync/followers", null, 10000);
+            if (json == null) continue;
+            bool receiving = json.IndexOf("\"receiving\":true", StringComparison.Ordinal) >= 0;
+            bool bringing = json.IndexOf("\"bringingWork\":true", StringComparison.Ordinal) >= 0;
+            if (receiving || bringing)
+            {
+                until = DateTime.Now.AddMinutes(20);
+                var label = form.Tag as Label;
+                if (label != null)
+                    label.Text = "Bringing back what was done on " + host + " while this computer was off. Corpus opens as soon as it has it.";
+            }
+            else if (json.IndexOf("\"checkedIn\":true", StringComparison.Ordinal) >= 0)
+            {
+                break;
+            }
+        }
+        CloseForm(form);
+    }
+
+    /** Runs on the UI thread, from any thread. */
+    static void Ui(Action action)
+    {
+        try
+        {
+            if (ui != null && ui.IsHandleCreated) ui.BeginInvoke(action);
+        }
+        catch { }
+    }
+
+    static void CloseForm(Form form)
+    {
+        try { if (form != null && !form.IsDisposed) form.Close(); } catch { }
+    }
+
+    /**
+     * A small window that stays on top with a message and a row of buttons.
+     * Not modal, so the tray and the follower carry on while it is up. The
+     * message label is left in Tag for callers that update it.
+     */
+    static Form Prompt(string title, string text, string[] buttons, Action<int> onChoice)
+    {
+        var form = new Form
+        {
+            Text = title,
+            FormBorderStyle = FormBorderStyle.FixedDialog,
+            MaximizeBox = false,
+            MinimizeBox = false,
+            StartPosition = FormStartPosition.CenterScreen,
+            TopMost = true,
+            ShowInTaskbar = true,
+            Icon = LoadIcon(),
+            Font = SystemFonts.MessageBoxFont,
+            ClientSize = new Size(500, 200),
+        };
+        var picture = new PictureBox { Image = SystemIcons.Warning.ToBitmap(), Left = 18, Top = 18, Width = 32, Height = 32 };
+        var label = new Label { Text = text, Left = 64, Top = 16, Width = 420, AutoSize = false };
+        using (var g = form.CreateGraphics())
+        {
+            var size = g.MeasureString(text, form.Font, 420);
+            label.Height = (int)Math.Ceiling(size.Height) + 10;
+        }
+        form.Controls.Add(picture);
+        form.Controls.Add(label);
+        form.Tag = label;
+
+        int top = Math.Max(label.Bottom, 56) + 14;
+        int right = 486;
+        for (int i = buttons.Length - 1; i >= 0; i--)
+        {
+            int index = i;
+            var button = new Button { Text = buttons[i], Top = top, Height = 30 };
+            button.Width = Math.Max(96, TextRenderer.MeasureText(buttons[i], form.Font).Width + 28);
+            button.Left = right - button.Width;
+            right = button.Left - 8;
+            button.Click += (s, e) =>
+            {
+                form.Close();
+                if (onChoice != null) onChoice(index);
+            };
+            form.Controls.Add(button);
+            if (i == 0) form.AcceptButton = button;
+        }
+        form.ClientSize = new Size(500, top + 30 + 16);
+        form.Show();
+        form.Activate();
+        return form;
     }
 
     // -- server ------------------------------------------------------------
@@ -176,14 +574,20 @@ static class Corpus
      *     Corpus that has stopped
      *     answering                → almost always our own orphaned node, left
      *                                behind when the launcher was killed rather
-     *                                than quit. Offer to end it, because the
-     *                                alternative is a window served by a dead
-     *                                build and a Quit button that quits nothing.
+     *                                than quit. Offer to end it.
      */
     static bool ClaimPort()
     {
         if (!PortBusy()) return false;
-        if (Healthy()) return true;
+        if (Healthy())
+        {
+            // A follower's copy left behind is not this machine's own library
+            // running; it has no worker and is not what should be opened.
+            if (!IsFollowerServer()) return true;
+            KillTree(PortOwner());
+            for (int i = 0; i < 20 && PortBusy(); i++) Thread.Sleep(250);
+            return false;
+        }
 
         // A server that is still booting will start answering shortly; give it
         // a moment before accusing it of being dead.
@@ -253,9 +657,8 @@ static class Corpus
      * Read here rather than passed in because the setting is changed from the
      * Settings page, in the running app, and takes effect the next time the
      * launcher starts the server. Deliberately a substring test rather than a
-     * JSON parser: the question is "does the object have lan.enabled true",
-     * which survives the formatting writeStore produces. A file we cannot read
-     * means off, which is the setting that keeps the server on this machine only.
+     * JSON parser. A file we cannot read means off, which is the setting that
+     * keeps the server on this machine only.
      */
     static bool LanWanted()
     {
@@ -269,8 +672,6 @@ static class Corpus
             int end = text.IndexOf('}', at);
             if (end < 0) end = text.Length;
             var section = text.Substring(at, end - at);
-            // Whitespace out, so the check does not depend on how the JSON
-            // happened to be formatted when it was written.
             var packed = new StringBuilder();
             foreach (var c in section) if (!char.IsWhiteSpace(c)) packed.Append(c);
             return packed.ToString().Contains("\"enabled\":true");
@@ -284,13 +685,6 @@ static class Corpus
      * Starts a packaged copy: Next's standalone server, which carries the
      * node_modules it needs and takes its port and hostname from the
      * environment rather than the command line.
-     *
-     * The data directory is pinned to the folder the exe sits in, so a copy on
-     * a USB stick keeps its own library beside it instead of writing into
-     * wherever the process happened to start. LAN mode is still read from
-     * data/config.json and still means the same two things — bind every
-     * interface, and set CORPUS_LAN so middleware.ts demands the token — but
-     * without scripts/lan.mjs, which a handed-over copy does not carry.
      */
     static bool StartStandalone(string node, string serverJs)
     {
@@ -311,6 +705,7 @@ static class Corpus
         psi.EnvironmentVariables["HOSTNAME"] = lanMode ? "0.0.0.0" : "127.0.0.1";
         psi.EnvironmentVariables["CORPUS_DATA_DIR"] = Path.Combine(Root, "data");
         if (lanMode) psi.EnvironmentVariables["CORPUS_LAN"] = "1";
+        if (follower) psi.EnvironmentVariables["CORPUS_FOLLOWER"] = "1";
 
         return Launch(psi);
     }
@@ -319,12 +714,6 @@ static class Corpus
     {
         // A production build is faster and quieter; fall back to dev if the
         // build output isn't there, so the launcher works either way.
-        //
-        // BUILD_ID rather than the .next/server directory, because `next dev`
-        // creates that directory too. Checking for it meant that after anyone
-        // ran the dev server even once, the launcher would confidently start in
-        // production mode against a development .next and die with "Could not
-        // find a production build" — a real failure with a misleading message.
         bool built = File.Exists(Path.Combine(Root, ".next", "BUILD_ID"));
         string mode = built ? "start" : "dev";
 
@@ -348,6 +737,7 @@ static class Corpus
         };
         psi.EnvironmentVariables["NODE_ENV"] = built ? "production" : "development";
         psi.EnvironmentVariables["PORT"] = Port.ToString();
+        if (follower) psi.EnvironmentVariables["CORPUS_FOLLOWER"] = "1";
 
         return Launch(psi);
     }
@@ -358,17 +748,13 @@ static class Corpus
         {
             server = Process.Start(psi);
             // The pipes must be drained or a chatty server fills the buffer and
-            // blocks. Since we are reading them anyway, keep the last run's
-            // output — without it a 500 in the window has nowhere to be
-            // explained, and there is no console to look at.
+            // blocks. Since we are reading them anyway, keep the last run's output.
             OpenLog();
             server.OutputDataReceived += (s, e) => Log(e.Data);
             server.ErrorDataReceived += (s, e) => Log(e.Data);
             server.BeginOutputReadLine();
             server.BeginErrorReadLine();
 
-            // If the server dies, say so and go. A tray icon that stays put
-            // while nothing is listening is worse than no tray icon.
             server.EnableRaisingEvents = true;
             server.Exited += (s, e) => OnServerExit();
             return true;
@@ -380,7 +766,7 @@ static class Corpus
         }
     }
 
-    static bool quitting;
+    static volatile bool quitting;
 
     static void OnServerExit()
     {
@@ -388,9 +774,20 @@ static class Corpus
         int code = -1;
         try { code = server.ExitCode; } catch { }
 
-        // Marshalled onto the UI thread: Process.Exited fires on a pool thread,
-        // and touching the tray or ending the message loop from there is how you
-        // get a launcher that hangs instead of closing.
+        // A follower's copy stopping is not the end of the session: the window
+        // on the other machine is unaffected. Say so and carry on without it.
+        if (settings.Remote)
+        {
+            hasCopy = false;
+            Ui(() =>
+            {
+                Notify("This computer's copy of Corpus stopped (exit code " + code + "). The window on " +
+                       HostOf(settings.RemoteUrl) + " is unaffected; restart Corpus to keep a copy again.");
+                UpdateTip();
+            });
+            return;
+        }
+
         Action report = () =>
         {
             if (quitting) return;
@@ -402,15 +799,7 @@ static class Corpus
             if (tray != null) tray.Visible = false;
             Application.Exit();
         };
-
-        try
-        {
-            if (tray != null && tray.ContextMenuStrip != null && tray.ContextMenuStrip.InvokeRequired)
-                tray.ContextMenuStrip.BeginInvoke(report);
-            else
-                report();
-        }
-        catch { }
+        Ui(report);
     }
 
     // -- logging -----------------------------------------------------------
@@ -425,10 +814,8 @@ static class Corpus
         try
         {
             Directory.CreateDirectory(Path.Combine(Root, "data"));
-            // Fresh file each launch; the previous run's log is rarely what you
-            // want and an ever-growing one is worse.
             log = new StreamWriter(LogPath, false) { AutoFlush = true };
-            log.WriteLine("--- Corpus started " + DateTime.Now + " ---");
+            log.WriteLine("--- Corpus started " + DateTime.Now + (follower ? " (a copy following " + settings.RemoteUrl + ")" : "") + " ---");
         }
         catch { log = null; }
     }
@@ -460,7 +847,7 @@ static class Corpus
                 // next spawns a child; killing the tree is the only reliable way.
                 KillTree(server.Id);
             }
-            else if (server == null)
+            else if (server == null && (!settings.Remote || adoptedFollower))
             {
                 // We adopted a server we did not start, so there is no handle to
                 // kill — but Quit still has to mean quit.
@@ -490,11 +877,9 @@ static class Corpus
     }
 
     // A *Corpus* is listening on this machine, and it is answering requests.
-    // Asking the server to identify itself costs one request and removes a
-    // whole class of problem: an orphaned server that merely holds the port.
     static bool Healthy()
     {
-        return Hello("http://127.0.0.1:" + Port, 15000) != null;
+        return Hello(LocalBase(), 15000) != null;
     }
 
     static bool RemoteHealthy(string baseUrl)
@@ -508,8 +893,6 @@ static class Corpus
         try
         {
             var req = (HttpWebRequest)WebRequest.Create(baseUrl.TrimEnd('/') + "/api/hello");
-            // Generous locally, because the first request is the expensive one:
-            // it opens the database, which runs migrations.
             req.Timeout = timeoutMs;
             req.ReadWriteTimeout = timeoutMs;
             using (var res = (HttpWebResponse)req.GetResponse())
@@ -523,27 +906,93 @@ static class Corpus
     }
 
     /**
-     * Sets the worker going once the server is up.
-     *
-     * A failure is not worth reporting: the first action in the app kicks the
-     * worker too, so the cost of missing it is a delay, not lost work.
+     * A request to this computer's own Corpus, with its LAN token when LAN mode
+     * is on. Answers the body, error bodies included; null when nothing answered.
      */
-    static void KickWorker()
+    static string Http(string method, string url, string body, int timeoutMs)
     {
         try
         {
-            var req = (HttpWebRequest)WebRequest.Create("http://127.0.0.1:" + Port + "/api/worker/kick");
-            req.Method = "POST";
-            req.ContentLength = 0;
-            req.Timeout = 15000;
-            req.ReadWriteTimeout = 15000;
-            // In LAN mode every route but /api/hello wants the token. We are on
-            // the machine that owns it, so read it from the same file.
-            var token = LanToken();
+            var req = (HttpWebRequest)WebRequest.Create(url);
+            req.Method = method;
+            req.Timeout = timeoutMs;
+            req.ReadWriteTimeout = timeoutMs;
+            var token = LanWanted() ? LanToken() : null;
             if (token != null) req.Headers.Add("x-corpus-token", token);
-            using (var res = (HttpWebResponse)req.GetResponse()) { }
+            if (body != null)
+            {
+                var bytes = Encoding.UTF8.GetBytes(body);
+                req.ContentType = "application/json";
+                req.ContentLength = bytes.Length;
+                using (var stream = req.GetRequestStream()) stream.Write(bytes, 0, bytes.Length);
+            }
+            using (var res = (HttpWebResponse)req.GetResponse())
+            using (var reader = new StreamReader(res.GetResponseStream(), Encoding.UTF8))
+                return reader.ReadToEnd();
         }
-        catch { }
+        catch (WebException ex)
+        {
+            var res = ex.Response as HttpWebResponse;
+            if (res == null) return null;
+            try
+            {
+                using (var reader = new StreamReader(res.GetResponseStream(), Encoding.UTF8))
+                    return reader.ReadToEnd();
+            }
+            catch { return null; }
+        }
+        catch { return null; }
+    }
+
+    /** One string value from a JSON object, by key. Enough for the few answers the launcher reads. */
+    static string JsonString(string json, string key)
+    {
+        if (json == null) return null;
+        string needle = "\"" + key + "\":";
+        int at = json.IndexOf(needle, StringComparison.Ordinal);
+        if (at < 0) return null;
+        int i = at + needle.Length;
+        while (i < json.Length && json[i] == ' ') i++;
+        if (i >= json.Length || json[i] != '"') return null;
+        var sb = new StringBuilder();
+        for (i++; i < json.Length; i++)
+        {
+            char c = json[i];
+            if (c == '\\' && i + 1 < json.Length)
+            {
+                char next = json[++i];
+                if (next == 'n') sb.Append('\n');
+                else if (next == 't') sb.Append('\t');
+                else if (next == 'u' && i + 4 < json.Length)
+                {
+                    int code;
+                    if (int.TryParse(json.Substring(i + 1, 4), System.Globalization.NumberStyles.HexNumber, null, out code))
+                    {
+                        sb.Append((char)code);
+                        i += 4;
+                    }
+                }
+                else sb.Append(next);
+                continue;
+            }
+            if (c == '"') break;
+            sb.Append(c);
+        }
+        return sb.ToString();
+    }
+
+    static string JsonEscape(string s)
+    {
+        return (s ?? "").Replace("\\", "\\\\").Replace("\"", "\\\"");
+    }
+
+    /**
+     * Sets the worker going once the server is up. A failure is not worth
+     * reporting: the first action in the app kicks the worker too.
+     */
+    static void KickWorker()
+    {
+        Http("POST", LocalBase() + "/api/worker/kick", "", 15000);
     }
 
     /** The LAN token from data/config.json, or null when there is none yet. */
@@ -624,21 +1073,26 @@ static class Corpus
 
     // -- the window ----------------------------------------------------------
 
-    /** The Corpus this launcher uses. 127.0.0.1 rather than localhost: the server binds IPv4 only, and Windows tries ::1 first. */
+    /** Whether the window should be this computer's copy rather than the Corpus it follows. */
+    static bool UsingCopy()
+    {
+        return settings.Remote && hasCopy && (offline || conflict);
+    }
+
+    /** The Corpus the window shows. 127.0.0.1 rather than localhost: the server binds IPv4 only. */
     static string BaseUrl()
     {
-        return settings.Remote ? settings.RemoteUrl : "http://127.0.0.1:" + Port;
+        return settings.Remote && !UsingCopy() ? settings.RemoteUrl : LocalBase();
     }
 
     /**
      * Where a new window starts. In LAN mode that is the sign-in link, so the
-     * window arrives signed in rather than at a page asking for a token: this
-     * machine's own token when the Corpus is local, the one saved with the
-     * address when it is remote.
+     * window arrives signed in: this machine's own token for its own Corpus,
+     * the one saved with the address for the other.
      */
     static string EntryUrl()
     {
-        string token = settings.Remote ? settings.Token : (LanWanted() ? LanToken() : null);
+        string token = settings.Remote && !UsingCopy() ? settings.Token : (LanWanted() ? LanToken() : null);
         return string.IsNullOrEmpty(token)
             ? BaseUrl() + "/"
             : BaseUrl() + "/login?token=" + Uri.EscapeDataString(token);
@@ -653,7 +1107,7 @@ static class Corpus
     {
         if (!inTab && settings.Window != "tab")
         {
-            if (FocusCorpusWindow()) return;
+            if (FocusCorpusWindow(UsingCopy())) return;
             var browser = FindAppBrowser();
             if (browser != null)
             {
@@ -691,12 +1145,13 @@ static class Corpus
     /**
      * Finds an app window already showing Corpus and brings it forward.
      *
-     * Every page in Corpus is titled "Corpus", and an app window's title is the
-     * page's title and nothing else; a browser window whose tab happens to be
-     * Corpus appends the browser's name. So an app window is one owned by a
-     * Chromium browser whose title starts with Corpus and names no browser.
+     * An app window's title is the page's title and nothing else, while a
+     * browser window whose tab happens to be Corpus appends the browser's name.
+     * Every page is titled "Corpus", and a follower's copy titles itself as
+     * one, so the window wanted — the Corpus followed, or this computer's copy
+     * — is told apart by its title.
      */
-    static bool FocusCorpusWindow()
+    static bool FocusCorpusWindow(bool copy)
     {
         IntPtr found = IntPtr.Zero;
         EnumWindows((hWnd, lParam) =>
@@ -707,6 +1162,8 @@ static class Corpus
             var title = text.ToString();
             if (!title.StartsWith("Corpus", StringComparison.Ordinal)) return true;
             if (title.Contains(" - Brave") || title.Contains(" - Google Chrome") || title.Contains(" - Microsoft")) return true;
+            bool isCopy = title.StartsWith(CopyTitle, StringComparison.Ordinal);
+            if (isCopy != copy) return true;
             uint pid;
             GetWindowThreadProcessId(hWnd, out pid);
             try
@@ -828,14 +1285,7 @@ static class Corpus
         if (hello == null)
             return "Nothing answered as Corpus at " + baseUrl + ". Is it running there, with LAN mode on?";
 
-        string host = HostOf(baseUrl);
-        int at = hello.IndexOf("\"host\":\"", StringComparison.Ordinal);
-        if (at >= 0)
-        {
-            int start = at + 8;
-            int end = hello.IndexOf('"', start);
-            if (end > start) host = hello.Substring(start, end - start);
-        }
+        string host = JsonString(hello, "host") ?? HostOf(baseUrl);
 
         try
         {
@@ -872,7 +1322,7 @@ static class Corpus
             form.MaximizeBox = false;
             form.MinimizeBox = false;
             form.StartPosition = FormStartPosition.CenterScreen;
-            form.ClientSize = new Size(460, 318);
+            form.ClientSize = new Size(460, 350);
             form.Icon = LoadIcon();
             form.Font = SystemFonts.MessageBoxFont;
 
@@ -882,15 +1332,17 @@ static class Corpus
             var address = new TextBox { Left = 36, Top = 96, Width = 404, Text = settings.RemoteUrl.Length > 0 ? settings.RemoteUrl : "http://" };
             var tokenLabel = new Label { Text = "Its token, from the same place:", Left = 36, Top = 128, Width = 404 };
             var token = new TextBox { Left = 36, Top = 148, Width = 404, Text = settings.Token, UseSystemPasswordChar = true };
-            var status = new Label { Left = 16, Top = 186, Width = 428, Height = 58, ForeColor = Color.DimGray };
+            var status = new Label { Left = 16, Top = 184, Width = 428, Height = 48, ForeColor = Color.DimGray };
             var hint = new Label
             {
-                Left = 16, Top = 244, Width = 428, Height = 30, ForeColor = Color.DimGray,
-                Text = "On another computer Corpus runs there: this one only opens its window. Point the browser extension's options at the same address.",
+                Left = 16, Top = 234, Width = 428, Height = 72, ForeColor = Color.DimGray,
+                Text = "The window opens on that computer, and this one keeps a copy of its library in step, to work from if it goes down. " +
+                       "This computer's own library is replaced by that copy (the old one is kept in data\\backups). " +
+                       "Point the browser extension's options at the same address.",
             };
-            var test = new Button { Text = "Test", Left = 16, Top = 280, Width = 90 };
-            var connect = new Button { Text = "Connect", Left = 256, Top = 280, Width = 90 };
-            var cancel = new Button { Text = "Cancel", Left = 352, Top = 280, Width = 90, DialogResult = DialogResult.Cancel };
+            var test = new Button { Text = "Test", Left = 16, Top = 312, Width = 90 };
+            var connect = new Button { Text = "Connect", Left = 256, Top = 312, Width = 90 };
+            var cancel = new Button { Text = "Cancel", Left = 352, Top = 312, Width = 90, DialogResult = DialogResult.Cancel };
 
             Action sync = () =>
             {
@@ -939,9 +1391,18 @@ static class Corpus
             if (!wasRemote)
             {
                 var sure = MessageBox.Show(
-                    "Using another computer's Corpus stops the Corpus server on this one.\n\n" +
-                    "Anything it was reading resumes the next time you switch back.\n\nSwitch?",
+                    "Using another computer's Corpus stops this one's own server, and replaces this computer's library " +
+                    "with a copy of that one's — the library here now is kept as a backup in data\\backups.\n\nSwitch?",
                     "Corpus", MessageBoxButtons.YesNo, MessageBoxIcon.Question);
+                if (sure != DialogResult.Yes) return;
+            }
+            else if (connectTo == "local" && (offline || conflict))
+            {
+                var sure = MessageBox.Show(
+                    "This computer's copy has work that has not gone back to " + HostOf(settings.RemoteUrl) + " yet.\n\n" +
+                    "Using this computer on its own from now on keeps that work here, and " + HostOf(settings.RemoteUrl) +
+                    " will not have it.\n\nSwitch anyway?",
+                    "Corpus", MessageBoxButtons.YesNo, MessageBoxIcon.Warning);
                 if (sure != DialogResult.Yes) return;
             }
 
@@ -949,7 +1410,7 @@ static class Corpus
             settings.RemoteUrl = url2 ?? "";
             settings.Token = token2 ?? "";
             if (!TrySave()) return;
-            Restart(wasRemote);
+            Restart();
         }
     }
 
@@ -960,10 +1421,9 @@ static class Corpus
     }
 
     /** Starts a fresh launcher with the new setting, and gets out of its way. */
-    static void Restart(bool wasRemote)
+    static void Restart()
     {
-        if (wasRemote) { if (tray != null) tray.Visible = false; }
-        else Stop();
+        Stop();
         try
         {
             Process.Start(new ProcessStartInfo
@@ -987,6 +1447,17 @@ static class Corpus
         menu.Items.Add("Open in a browser tab", null, (s, e) => Open(true));
         menu.Items.Add(new ToolStripSeparator());
 
+        if (settings.Remote)
+        {
+            resolveItem = menu.Items.Add("Choose which copy to keep…", null, (s, e) =>
+            {
+                var json = Http("GET", LocalBase() + "/api/sync/follow", null, 10000);
+                ShowConflict(JsonString(json, "message") ?? "");
+            });
+            resolveItem.Visible = false;
+            menu.Items.Add("Sync the copy now", null, (s, e) => { tickNow = true; });
+        }
+
         menu.Items.Add(settings.Remote
             ? "Using " + HostOf(settings.RemoteUrl) + " — change…"
             : "Connect to another Corpus…", null, (s, e) => ShowConnect());
@@ -999,47 +1470,41 @@ static class Corpus
         };
         menu.Items.Add(appWindow);
 
-        if (!settings.Remote)
-        {
-            menu.Items.Add(new ToolStripSeparator());
-            menu.Items.Add("Open the data folder", null, (s, e) =>
-            {
-                var dir = Path.Combine(Root, "data");
-                Directory.CreateDirectory(dir);
-                Process.Start(new ProcessStartInfo { FileName = dir, UseShellExecute = true });
-            });
-            menu.Items.Add("View the server log", null, (s, e) =>
-            {
-                if (File.Exists(LogPath))
-                    Process.Start(new ProcessStartInfo { FileName = "notepad.exe", Arguments = "\"" + LogPath + "\"" });
-                else
-                    Error("No log yet — the server was already running when Corpus started.");
-            });
-        }
-
         menu.Items.Add(new ToolStripSeparator());
-        menu.Items.Add(settings.Remote ? "Quit" : "Quit (stops ingesting)", null, (s, e) =>
+        menu.Items.Add("Open the data folder", null, (s, e) =>
         {
-            if (settings.Remote) { if (tray != null) tray.Visible = false; }
-            else Stop();
-            Application.Exit();
+            var dir = Path.Combine(Root, "data");
+            Directory.CreateDirectory(dir);
+            Process.Start(new ProcessStartInfo { FileName = dir, UseShellExecute = true });
+        });
+        menu.Items.Add("View the server log", null, (s, e) =>
+        {
+            if (File.Exists(LogPath))
+                Process.Start(new ProcessStartInfo { FileName = "notepad.exe", Arguments = "\"" + LogPath + "\"" });
+            else
+                Error("No log yet — the server was already running when Corpus started.");
         });
 
-        string text = settings.Remote
-            ? "Corpus — using " + HostOf(settings.RemoteUrl)
-            : LanWanted()
-                ? "Corpus — on this network, port " + Port + " (token required)"
-                : "Corpus — running on localhost:" + Port;
+        menu.Items.Add(new ToolStripSeparator());
+        menu.Items.Add(settings.Remote ? "Quit (stops this computer's copy)" : "Quit (stops ingesting)", null, (s, e) =>
+        {
+            Stop();
+            Application.Exit();
+        });
 
         var icon = new NotifyIcon
         {
             Icon = LoadIcon(),
-            // The notification area refuses a tooltip over 63 characters.
-            Text = text.Length > 63 ? text.Substring(0, 63) : text,
             ContextMenuStrip = menu,
             Visible = true,
         };
-        icon.DoubleClick += (s, e) => Open(false);
+        icon.DoubleClick += (s, e) =>
+        {
+            if (conflict) ShowConflict("");
+            else Open(false);
+        };
+        tray = icon;
+        UpdateTip();
         return icon;
     }
 
@@ -1059,8 +1524,8 @@ static class Corpus
     {
         if (tray == null) return;
         tray.BalloonTipTitle = "Corpus";
-        tray.BalloonTipText = message;
-        tray.ShowBalloonTip(4000);
+        tray.BalloonTipText = message.Length > 250 ? message.Substring(0, 250) : message;
+        tray.ShowBalloonTip(5000);
     }
 
     static void Error(string message)

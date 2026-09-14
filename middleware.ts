@@ -28,7 +28,14 @@ import {
  * Runs on the Node runtime rather than the edge one because the token lives
  * in data/config.json and the edge sandbox has no filesystem.
  */
-export const config = { runtime: "nodejs" };
+export const config = {
+  runtime: "nodejs",
+  // Everything except the two routes that receive a whole library from a
+  // follower. Next buffers a request body for the middleware and keeps only
+  // the first 10 MB, which would truncate a library in transit; those routes
+  // check the token themselves (requestAllowed in lib/lan.ts).
+  matcher: ["/((?!api/sync/receive).*)"],
+};
 
 const YEAR = 60 * 60 * 24 * 365;
 

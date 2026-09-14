@@ -203,6 +203,45 @@ files, covers and portraits follow. `config.json` — keys, routing, the LAN
 token — stays per machine. If the library on the receiving side has changed
 since the last sync, the page says so and asks before replacing it.
 
+### Working from another computer, with a copy for when it is gone
+
+*Connect to another Corpus* (the tray icon) is the continuous version of the
+above. The window opens on the other computer — the primary — and this computer
+keeps a quiet copy of its library beside it, a *follower*: a second Corpus that
+never runs the worker, so it reads nothing, polls nothing and spends nothing,
+and whose only job is to take a fresh copy of the primary whenever the primary
+has changed, at most every five minutes while both are up.
+
+**When the primary goes down**, every Corpus window served by it shows a red
+bar — *The Corpus server is down; nothing you change here can be saved* — and
+the launcher puts up a warning of its own and offers *Work on this computer*:
+the window moves to the copy, which has everything up to its last copy and
+says so across the top in amber. Work there is ordinary work.
+
+**When it answers again**, the follower compares both libraries with where they
+stood at the last sync, by their contents rather than their files:
+
+- neither changed — nothing to do, and the window goes back to the primary;
+- only the primary changed — the copy takes a fresh copy;
+- only the copy changed — it sends itself back, and the primary installs it
+  (keeping its own library as a backup); then the window goes back;
+- both changed — the launcher asks which to keep. A library is copied whole and
+  two that both changed cannot be merged; whichever is not kept stays as a
+  backup on its own machine, in `data\backups`.
+
+**The primary does its part at start-up.** Before it starts its own worker and
+opens, it waits a few seconds for a follower it has seen before to check in, and
+for as long as it takes once that follower says it is bringing work back — so a
+primary switched on after a day away opens on the work done on the laptop, not
+on the day before.
+
+What the copy does not do while the primary is away is the reading: articles
+kept offline wait in the queue and are read by the primary once they are back
+on it. Both machines need the same version of Corpus, and the primary needs LAN
+mode on. Receiving a library is the one thing that bypasses the middleware —
+Next would cut a large body off at 10 MB while buffering it for the middleware —
+so those two routes check the LAN token themselves.
+
 ## Using more than one service
 
 There are three services, and each is here for a reason: **Gemini** reads, **Claude**
