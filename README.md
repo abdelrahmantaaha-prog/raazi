@@ -116,6 +116,21 @@ and File for one still waiting. The star is on the article rather than the inbox
 item, so keeping, filing or discarding it leaves it starred; a discarded
 article's text is never thrown away.
 
+**Set aside for you.** The inbox learns from what you throw away, and only
+from that. Where every one of the last twenty or forty items sharing a feature
+was discarded — everything from one feed, everything under one section of a
+site, every bill number, every court docket — the next item with that feature
+is set aside before it is fetched, marked *Set aside for you* with the reason in
+your own terms ("you discarded all 45 from GovInfo — bills"), and the poll's
+note says how many. It is a discard like any other: undo puts it back, fetches
+it, and counts as a veto, after which that pattern stops firing until the
+evidence is rebuilt. The words of a headline are never a feature — a subject
+you discard this month is the subject you follow next — and the curator never
+reads its own decisions as evidence. A sweep, the morning you clear a hundred
+items in a minute, weighs a quarter as much per item as a decision made one
+at a time. The Feeds page shows what each feed has taught it. See
+`lib/curator.ts`.
+
 **From the browser.** `extension/` is a small Brave/Chrome/Edge extension
 (load it unpacked from `brave://extensions`). Click it on any article and the
 page goes into the inbox as your browser sees it — signed in, paywall open —
@@ -408,10 +423,27 @@ What happens next depends on why the call failed:
 | 429 with a `retryDelay`, or a per-minute quota | Sleep exactly that long and retry — this is a rate limit, not exhaustion |
 | 429 with no quota detail at all | Assume a short window and wait a minute. Guessing "spent for the day" here used to cost a whole key over a burst |
 | 429 on an explicit per-day quota | Set that key aside for **an hour**, not until tomorrow — see below |
-| 500 / 503 | Exponential backoff, five attempts, then fail that one task and carry on |
+| 503 "high demand" on Gemini | Set that **model** aside for ten minutes and ask the same key for the next model down the ring; only when every model is busy does the call move on to the local model, and a task nothing can serve waits two minutes rather than failing |
+| 500 / 502 / 504 | Exponential backoff, five attempts, then fail that one task and carry on |
+| The local model takes longer than the call allows | Its key rests five minutes and the task waits; a slow last resort is not charged against the task's attempts |
 | `finishReason: MAX_TOKENS` | Split the chunk in half and requeue both halves ahead of the rest |
 | Safety block | Skip that passage with the reason recorded; the book continues |
 | 401 / bad key | Park as `paused_key` until you fix it in Settings |
+
+**A busy model is not a busy provider.** On the afternoon of 15 September 2026
+the head of the Gemini ring answered 503 to every key for hours while the three
+models below it were serving in under a second. The rotation read the 503 as
+"Gemini is down", stepped straight to the local model, which took longer than
+the call allowed, and after five such rounds failed each task for good — the
+queue stood at five hundred tasks with nothing moving. A 503 is now charged to
+the model that answered, like a spent allowance, and the same key asks the next
+one down.
+
+**Failures go back on their own, even on a busy day.** A task that failed over
+the provider's moment — network, 503 — is retried after half an hour, three
+times; that sweep used to run only once the queue was empty, which on a beat is
+never. An output cut short by the model's ceiling is not retried: the same
+evidence asked the same way hits the same ceiling.
 
 **A refused key is never written off for the day.** Providers describe a spent
 minute and a spent day in almost the same words, and getting that wrong is
@@ -457,11 +489,34 @@ articles it finds are fetched into the inbox before the reading carries on — a
 fetch costs no tokens, and the inbox is what is waiting on it. An
 item already in the library — the same story from a second feed, matched on its
 address with the tracking parameters stripped — is recorded and not fetched again.
+So is the same headline from the same outlet inside three days, which is how an
+outlet's three feeds hand out one piece under three addresses. The same headline
+from *another* outlet is an account of the story, and arrives.
+
+**Held back is not lost.** What a feed offers over its daily cap waits, and the
+next poll of that feed takes it before anything newer — a feed unchanged on the
+wire still has yesterday's overflow to offer. An item that waits three days is
+let go, marked as expired unread. The cap counts what the poll actually took,
+whatever the item's state is now.
+
+**A feed's standing.** A feed you have kept nothing from in dozens of decisions
+is capped at three a day, with a line on the Feeds page saying so, until one of
+its items is kept; a feed with fewer than twenty decisions is left alone. It is
+never unsubscribed, and the cap you set is never rewritten.
 
 **Stories** group accounts of one development: six outlets on one wire report is
-one story and six sources. Grouping needs two signals to agree, headline overlap
-and shared entities inside three days, and is one click from corrected — rename a
-story, pin it, or say "not this story" of an account.
+one story and six sources. Grouping needs two signals to agree inside three days,
+and is one click from corrected — rename a story, pin it, or say "not this story"
+of an account. The first signal is headline overlap, with the words about time
+("first time since June", "after three-month absence") left out of it. The second
+is shared entities the pedia knows — or, for an article that has not been read
+yet, the names its first paragraph opens with, minus the dozen that open every
+lede on a beat. A headline that says almost nothing, a column's title or a wire
+slug, cannot group on its own: sixteen instalments of *What in the World?* were
+once one story. And because the second account of an event often arrives before
+the first has been read, a regroup pass runs twice an hour over the last few
+days' stories and folds the ones opened twice — never a story you named or
+pinned.
 
 **The watchlist** is the shortlist the brief is built around: a person, an
 institution, a topic, or a phrase. It is changed at the top of the brief, under
@@ -523,7 +578,8 @@ lib/
   markers.ts         the one citation grammar every reader of an entry agrees on
   sentences.ts       sentence splitting that knows "U.S." is not the end of one
   feeds.ts           feeds, their items, and what has already been read
-  stories.ts         grouping accounts of one development
+  curator.ts         what your discards teach the feeds: standing, patterns, vetoes
+  stories.ts         grouping accounts of one development, and folding stories opened twice
   watchlist.ts       what you follow
   brief.ts           the query the daily brief is made of
   net.ts             outbound fetching that refuses private addresses
@@ -540,9 +596,12 @@ data/                your library, database and keys — gitignored
   your decision is recorded and no later pass will undo it.
 - OCR and media transcription are implemented but have not been exercised against a
   real scanned book or a long recording.
-- Story grouping reads headlines and entities, not text. Two rounds of the same
-  negotiation a week apart are two stories, which is usually what you want and
-  occasionally is not.
+- Story grouping reads headlines, the names in the first paragraph, and
+  entities — not the argument. Two rounds of the same negotiation a week apart
+  are two stories, which is usually what you want and occasionally is not; and
+  a running story can gather the preview written the day before it happened.
+  The names signal reads capitals, so it says nothing for Arabic, where an
+  account waits for extraction to be grouped by entities.
 - The brief covers what your feeds brought in. It cannot tell you about something
   that no feed you follow reported.
 - Claude is metered rather than rationed. Gemini refuses you when the day's

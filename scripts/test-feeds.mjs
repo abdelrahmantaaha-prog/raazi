@@ -250,7 +250,7 @@ section("What arrives twice is recorded once");
     db().prepare("SELECT state FROM feed_items WHERE guid='other-id'").get().state === "duplicate"
   );
 
-  db().prepare("UPDATE feed_items SET state='ready', seen_at=datetime('now','localtime') WHERE guid IN ('g1','g2')").run();
+  db().prepare("UPDATE feed_items SET state='ready', queued_at=datetime('now') WHERE guid IN ('g1','g2')").run();
   check("the daily count sees them", feeds.ingestedToday(feedId) === 2);
 
   const due = feeds.dueFeeds();
@@ -511,6 +511,152 @@ section("Checking the feeds comes before chunking and parsing articles");
 
   db().prepare("DELETE FROM tasks").run();
   db().prepare("DELETE FROM runs").run();
+}
+
+/* ------------------------------------------------------- story compiling */
+
+section("Two accounts of one return are one story");
+{
+  const soon = (hoursAgo) => new Date(Date.now() - hoursAgo * 3600e3).toISOString();
+  const mk = (title, at, outlet, lede) => {
+    const id = Number(
+      db()
+        .prepare("INSERT INTO sources (title, kind, status, outlet, published_at) VALUES (?, 'url', 'chunked', ?, ?)")
+        .run(title, outlet, at).lastInsertRowid
+    );
+    if (lede) {
+      db().prepare("INSERT INTO chunks (source_id, seq, text, locator_json) VALUES (?, 0, ?, '{}')").run(id, lede);
+    }
+    return id;
+  };
+
+  const A = "Mitch McConnell Returns to US Senate for First Time Since June";
+  const B = "Mitch McConnell returns to the Senate after three-month absence";
+  check("the headlines resemble each other", stories.titleSimilarity(A, B) >= 0.42, String(stories.titleSimilarity(A, B)));
+  const a = mk(A, soon(6), "Bloomberg",
+    "Mitch McConnell returned to the Senate on Monday. The Kentucky Republican had been away since June after a fall at his home.");
+  const b = mk(B, soon(4), "The Hill",
+    "Sen. Mitch McConnell was back in the Senate on Monday afternoon. The Kentucky Republican missed three months of votes.");
+  const names = stories.namesIn("Sen. Mitch McConnell was back in the Senate on Monday afternoon. The Kentucky Republican missed votes.");
+  check("names are read from the lede", names.has("mcconnell") && names.has("kentucky"), [...names].join(","));
+  check("but not the ones every lede on the beat carries", !names.has("senate") && !names.has("monday"));
+  check("and not the first word of a sentence", !names.has("sen"));
+  check("unless the text keeps using it", stories.namesIn("Alberta voted on Monday. Alberta had never done so before.").has("alberta"));
+  const s1 = stories.fileSource(a);
+  const s2 = stories.fileSource(b);
+  check("the rewrite joins the story on the names in the ledes", s2.storyId === s1.storyId, JSON.stringify([s1, s2]));
+
+  const C = "Trump says tariffs on Canada will stay";
+  const c = mk(C, soon(3), "CBC", "Donald Trump said on Tuesday that the tariffs on Canada would remain in place. Ottawa has not responded.");
+  check("a different story about a different subject stays apart", stories.fileSource(c).storyId !== s1.storyId);
+}
+
+section("A column is not a story");
+{
+  const soon = (hoursAgo) => new Date(Date.now() - hoursAgo * 3600e3).toISOString();
+  const mk = (title, at, lede) => {
+    const id = Number(
+      db()
+        .prepare("INSERT INTO sources (title, kind, status, outlet, published_at) VALUES (?, 'url', 'chunked', 'Semafor', ?)")
+        .run(title, at).lastInsertRowid
+    );
+    db().prepare("INSERT INTO chunks (source_id, seq, text, locator_json) VALUES (?, 0, ?, '{}')").run(id, lede);
+    return id;
+  };
+  check("a one-word identity cannot group on its own", !stories.titlesAgree("What in the World?", "What in the World?"));
+  check("three words can", stories.titlesAgree("Ottawa resumes tariff talks", "Ottawa resumes tariff talks with Washington"));
+  const w1 = mk("What in the World?", soon(30), "China moved first. Beijing announced new export controls on Tuesday, and Tokyo objected.");
+  const w2 = mk("What in the World?", soon(2), "Brazil voted on Sunday. Lula won a narrow majority in Congress, and Brasília celebrated.");
+  check("two instalments are two stories", stories.fileSource(w1).storyId !== stories.fileSource(w2).storyId);
+}
+
+section("Stories opened twice are folded together");
+{
+  const soon = (hoursAgo) => new Date(Date.now() - hoursAgo * 3600e3).toISOString();
+  const mk = (title, at, outlet) =>
+    Number(
+      db()
+        .prepare("INSERT INTO sources (title, kind, status, outlet, published_at) VALUES (?, 'url', 'chunked', ?, ?)")
+        .run(title, outlet, at).lastInsertRowid
+    );
+  const lede = (id, text) =>
+    db().prepare("INSERT INTO chunks (source_id, seq, text, locator_json) VALUES (?, 0, ?, '{}')").run(id, text);
+
+  // Filed with nothing but headlines — the second opens its own story.
+  const g = mk("Supreme court rejects Trump's mail ballot restrictions for midterms", soon(20), "Guardian");
+  const n = mk("Supreme Court Denies Trump Request to Curb Mail Ballots", soon(18), "NYT");
+  const sg = stories.fileSource(g);
+  const sn = stories.fileSource(n);
+  check("on headlines alone the rewrite opened a second story", sg.storyId !== sn.storyId);
+
+  // Now the articles are in, and their ledes agree.
+  lede(g, "The Supreme Court on Tuesday rejected the Trump administration's request. Officials in Pennsylvania and Wisconsin had challenged the order.");
+  lede(n, "The Supreme Court declined on Tuesday to let the Trump administration restrict mail voting. Officials in Pennsylvania and Wisconsin welcomed the ruling.");
+  const folded = stories.regroupRecent({ hours: 48 });
+  check("the regroup folds them into one", folded >= 1, String(folded));
+  const after = db().prepare("SELECT story_id FROM story_sources WHERE source_id IN (?, ?)").all(g, n);
+  check("and both accounts are in it", after.length === 2 && after[0].story_id === after[1].story_id, JSON.stringify(after));
+  check("a second pass has nothing to do", stories.regroupRecent({ hours: 48 }) === 0);
+}
+
+/* ------------------------------------------------------------- dedupe */
+
+section("Tracking parameters are not part of an address");
+{
+  const { canonicalUrl } = await import("../lib/ingest/meta.ts");
+  check(
+    "the BBC's rss stamp is dropped",
+    canonicalUrl("https://www.bbc.co.uk/news/articles/c0m3neyyzm7o?at_campaign=rss&at_medium=RSS") ===
+      "https://www.bbc.co.uk/news/articles/c0m3neyyzm7o"
+  );
+  check("and the CBC's", canonicalUrl("https://www.cbc.ca/news/politics/x-9.7343922?cmp=rss") === "https://www.cbc.ca/news/politics/x-9.7343922");
+  check("a parameter that is part of the page stays", canonicalUrl("https://x.example/list?page=2&utm_source=rss") === "https://x.example/list?page=2");
+}
+
+section("The same headline from the same outlet is one item");
+{
+  const mkFeed = (url, title, outlet) =>
+    Number(db().prepare("INSERT INTO feeds (url, title, outlet) VALUES (?, ?, ?)").run(url, title, outlet).lastInsertRowid);
+  const politics = mkFeed("https://x.example/politics/rss", "X politics", "X");
+  const world = mkFeed("https://x.example/world/rss", "X world", "X");
+  const other = mkFeed("https://y.example/rss", "Y", "Y");
+  const title = "Ottawa names new ambassador to Mexico after a long delay";
+  const item = (guid, url) => ({ guid, url, title, summary: null, publishedAt: new Date().toISOString() });
+
+  const first = feeds.recordItems(politics, [item("p1", "https://x.example/politics/ambassador?utm_source=rss")], null);
+  check("the first is new", first.length === 1);
+  const second = feeds.recordItems(world, [item("w1", "https://x.example/world/ambassador-mexico")], null);
+  check("the same words from a sister feed are a duplicate", second.length === 0);
+  const row = db().prepare("SELECT state, note FROM feed_items WHERE guid='w1'").get();
+  check("and say so", row.state === "duplicate" && /Same headline already offered by X politics/.test(row.note), JSON.stringify(row));
+  const third = feeds.recordItems(other, [item("y1", "https://y.example/ambassador")], null);
+  check("the same words from another outlet are an account of the story, not a duplicate", third.length === 1);
+}
+
+section("Held back is not lost");
+{
+  const feedId = Number(
+    db().prepare("INSERT INTO feeds (url, title, outlet, daily_cap) VALUES ('https://cap.example/rss', 'Capped', 'Cap', 2)").run().lastInsertRowid
+  );
+  const items = [1, 2, 3, 4, 5].map((n) => ({
+    guid: `c${n}`,
+    url: `https://cap.example/${n}`,
+    title: `Capped item number ${n} of the morning`,
+    summary: null,
+    publishedAt: new Date(Date.now() - n * 3600e3).toISOString(),
+  }));
+  const fresh = feeds.recordItems(feedId, items, null);
+  check("five arrive", fresh.length === 5);
+  const waiting = feeds.heldBack(feedId);
+  check("all five wait, newest first", waiting.length === 5 && waiting[0] === fresh[0], JSON.stringify(waiting));
+  feeds.markQueued(waiting.slice(0, 2));
+  check("taking two counts two against today", feeds.ingestedToday(feedId) === 2);
+  check("and three still wait", feeds.heldBack(feedId).length === 3);
+  db().prepare("UPDATE feed_items SET seen_at = datetime('now', '-4 days') WHERE guid = 'c5'").run();
+  check("one that has waited too long is let go", feeds.expireHeldBack(feedId) === 1);
+  const gone = db().prepare("SELECT state, note FROM feed_items WHERE guid='c5'").get();
+  check("and says why", gone.state === "skipped" && /Expired unread/.test(gone.note), JSON.stringify(gone));
+  check("the other two still wait", feeds.heldBack(feedId).length === 2);
 }
 
 db().close();

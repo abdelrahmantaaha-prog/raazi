@@ -297,6 +297,97 @@ section("A source on the shelf is never read");
   check("and only once", reading.queueUnread(sourceId).queued === 0);
 }
 
+/* ------------------------------------------------------------ the curator */
+
+section("The curator learns from what you throw away");
+{
+  const curator = await import("../lib/curator.ts");
+  const mkFeed = (title, outlet) =>
+    Number(db().prepare("INSERT INTO feeds (url, title, outlet) VALUES (?, ?, ?)").run(`https://${title}.example/rss`, title, outlet).lastInsertRowid);
+
+  // Forty-five bills, discarded one at a time over the last hour.
+  const bills = mkFeed("Bills", "GovInfo");
+  for (let i = 0; i < 45; i++) {
+    db()
+      .prepare(
+        `INSERT INTO feed_items (feed_id, guid, url, title, state, decided_at)
+         VALUES (?, ?, ?, ?, 'discarded', datetime('now', ?))`
+      )
+      .run(bills, `b${i}`, `https://govinfo.example/bills/hr${i}`, `H.R. ${9000 + i} (RH) - An Act of the ${i}th Congress`, `-${i + 1} minutes`);
+  }
+  let t = curator.learn();
+  const standing = curator.standingOf(bills, 40, t);
+  check("a feed you discarded everything from is noise", standing.standing === "noise", JSON.stringify(standing));
+  check("and takes a trickle a day until one is kept", standing.effectiveCap === 3);
+  check("the Feeds page can say so", /kept 0 of 45/.test(curator.explainStanding(standing)));
+  check("its features are counted", curator.featuresOf({ feedId: bills, url: "https://govinfo.example/bills/hr99", title: "H.R. 9999 (RH) - Act" }).includes("shape:bill"));
+  const next = curator.judge({ feedId: bills, url: "https://govinfo.example/bills/hr99", title: "H.R. 9999 (RH) - Another Act" }, t, () => "Bills");
+  check("the next bill is set aside", next.setAside, JSON.stringify(next));
+  check("with the reason in your own terms", /discarded all 45 from Bills/.test(next.reason), next.reason);
+
+  // A few discards from a new feed teach nothing yet.
+  const fresh = mkFeed("Fresh", "Fresh");
+  for (let i = 0; i < 5; i++) {
+    db()
+      .prepare(`INSERT INTO feed_items (feed_id, guid, url, title, state, decided_at) VALUES (?, ?, ?, ?, 'discarded', datetime('now', ?))`)
+      .run(fresh, `f${i}`, `https://fresh.example/news/${i}`, `Something happened in a place, part ${i}`, `-${i + 1} minutes`);
+  }
+  t = curator.learn();
+  check("five discards are not a pattern", curator.standingOf(fresh, 40, t).standing === "quiet");
+  check("and set nothing aside", !curator.judge({ feedId: fresh, url: "https://fresh.example/news/9", title: "Something else happened" }, t).setAside);
+
+  // A sweep — forty-five in one minute — is a tired no, not a verdict.
+  const swept = mkFeed("Swept", "Swept");
+  for (let i = 0; i < 45; i++) {
+    db()
+      .prepare(`INSERT INTO feed_items (feed_id, guid, url, title, state, decided_at) VALUES (?, ?, ?, ?, 'discarded', datetime('now', '-30 minutes'))`)
+      .run(swept, `s${i}`, `https://swept.example/news/${i}`, `Swept headline number ${i} of the morning`);
+  }
+  t = curator.learn();
+  check("a sweep weighs a quarter and is not yet noise", curator.standingOf(swept, 40, t).standing === "quiet", JSON.stringify(curator.standingOf(swept, 40, t)));
+  check("and sets nothing aside", !curator.judge({ feedId: swept, url: "https://swept.example/news/99", title: "Swept headline ninety-nine" }, t).setAside);
+
+  // The curator's own set-asides are not evidence.
+  const echo = mkFeed("Echo", "Echo");
+  for (let i = 0; i < 60; i++) {
+    db()
+      .prepare(`INSERT INTO feed_items (feed_id, guid, url, title, state, decided_at, curated_at) VALUES (?, ?, ?, ?, 'discarded', datetime('now', ?), datetime('now', ?))`)
+      .run(echo, `e${i}`, `https://echo.example/news/${i}`, `Echo headline number ${i}`, `-${i + 1} minutes`, `-${i + 1} minutes`);
+  }
+  t = curator.learn();
+  check("sixty of its own decisions teach it nothing", curator.standingOf(echo, 40, t).standing === "quiet");
+
+  // Putting one back is a veto.
+  db()
+    .prepare(`INSERT INTO feed_items (feed_id, guid, url, title, state, curated_at, vetoed_at) VALUES (?, 'veto', 'https://govinfo.example/bills/hr500', 'H.R. 500 (RH) - The One You Wanted', 'queued', datetime('now'), datetime('now'))`)
+    .run(bills);
+  t = curator.learn();
+  check("after a veto the pattern stops firing", !curator.judge({ feedId: bills, url: "https://govinfo.example/bills/hr501", title: "H.R. 501 (RH) - Act" }, t, () => "Bills").setAside);
+  check("and the feed is no longer noise", curator.standingOf(bills, 40, t).standing !== "noise");
+}
+
+section("Putting back what the curator set aside fetches it");
+{
+  const feed = Number(db().prepare("INSERT INTO feeds (url, title, outlet) VALUES ('https://pb.example/rss', 'Put back', 'PB')").run().lastInsertRowid);
+  const id = Number(
+    db()
+      .prepare(
+        `INSERT INTO feed_items (feed_id, guid, url, title, state, decided_at, curated_at, note)
+         VALUES (?, 'pb1', 'https://pb.example/article', 'An article set aside too soon', 'discarded', datetime('now'), datetime('now'), 'Set aside for you: you discarded all 40 from Put back.')`
+      )
+      .run(feed).lastInsertRowid
+  );
+  const r = triage.undo([id]);
+  check("undo fetches what was never fetched", r.restored === 1 && r.fetching === 1 && r.runId, JSON.stringify(r));
+  const row = db().prepare("SELECT state, vetoed_at, note FROM feed_items WHERE id=?").get(id);
+  check("the item is queued for the fetch", row.state === "queued", JSON.stringify(row));
+  check("and marked as your veto", row.vetoed_at !== null);
+  const task = db().prepare("SELECT kind, payload_json FROM tasks WHERE run_id=?").get(r.runId);
+  check("with a fetch task waiting", task && task.kind === "fetch_item" && JSON.parse(task.payload_json).itemId === id);
+  db().prepare("DELETE FROM tasks").run();
+  db().prepare("DELETE FROM runs").run();
+}
+
 db().close();
 fs.rmSync(SANDBOX, { recursive: true, force: true });
 console.log(`\n${failed === 0 ? "All passed" : "FAILURES PRESENT"}: ${passed} passed, ${failed} failed\n`);

@@ -4,14 +4,19 @@ import { createRun, enqueue, finishTask } from "../queue";
 import { addUrl } from "../ingest";
 import {
   dueFeeds,
+  expireHeldBack,
   feedTags,
   fetchFeed,
   getFeed,
+  heldBack,
   ingestedToday,
   markPolled,
+  markQueued,
   recordItems,
+  setAsideItems,
 } from "../feeds";
-import { fileSource } from "../stories";
+import { judge, learn, standingOf, type Tallies } from "../curator";
+import { fileSource, regroupRecent } from "../stories";
 import { unwrapRedirect } from "../ingest/meta";
 import type { Task } from "../types";
 
@@ -93,29 +98,37 @@ export async function handlePoll(task: Task): Promise<void> {
     return;
   }
 
-  if (result.status === 304 || !result.parsed) {
-    markPolled(feedId, "No change", result.etag, result.lastModified);
-    finishTask(task.id, task.run_id, free, "done", `${feed.title}: nothing new.`);
-    return;
-  }
+  const unchanged = result.status === 304 || !result.parsed;
+  const offered = unchanged ? 0 : result.parsed!.items.length;
+  const fresh = unchanged ? [] : recordItems(feedId, result.parsed!.items, feed.since);
 
-  const fresh = recordItems(feedId, result.parsed.items, feed.since);
-  const room = Math.max(0, feed.daily_cap - ingestedToday(feedId));
-  const take = fresh.slice(0, Math.min(room, PER_POLL_LIMIT));
-  const held = fresh.length - take.length;
+  // What your decisions have taught about this feed and its items — read
+  // once per poll, judged before anything is fetched. See lib/curator.ts.
+  const tallies = learn();
+  const standing = standingOf(feedId, feed.daily_cap, tallies);
+  const asideNow = fresh.length
+    ? judgeNew(fresh, feedId, tallies)
+    : [];
+
+  // A feed unchanged on the wire may still have items waiting for room: what
+  // it offered yesterday over its cap. Those come back before anything else.
+  const expired = expireHeldBack(feedId);
+  const waiting = heldBack(feedId).filter((id) => !asideNow.some((a) => a.id === id));
+  const room = Math.max(0, standing.effectiveCap - ingestedToday(feedId));
+  const take = waiting.slice(0, Math.min(room, PER_POLL_LIMIT));
+  const held = waiting.length - take.length;
 
   tx(() => {
+    setAsideItems(asideNow);
     if (take.length) {
-      db()
-        .prepare(`UPDATE feed_items SET state='queued' WHERE id IN (${take.map(() => "?").join(",")})`)
-        .run(...take);
+      markQueued(take);
       enqueue(
         task.run_id,
         take.map((itemId) => ({ kind: "fetch_item" as const, payload: { itemId } }))
       );
     }
     if (held > 0) {
-      const heldIds = fresh.slice(take.length);
+      const heldIds = waiting.slice(take.length);
       db()
         .prepare(
           `UPDATE feed_items SET note='Held back: this feed has had its fill for today.'
@@ -123,17 +136,69 @@ export async function handlePoll(task: Task): Promise<void> {
         )
         .run(...heldIds);
     }
-    markPolled(feedId, `${result.parsed!.items.length} item(s) offered`, result.etag, result.lastModified);
+    markPolled(
+      feedId,
+      unchanged ? "No change" : `${offered} item(s) offered`,
+      result.etag,
+      result.lastModified
+    );
+    const notes = [
+      asideNow.length ? `${asideNow.length} set aside on your pattern` : "",
+      held ? `${held} held back by the daily cap` : "",
+      expired ? `${expired} let go unread` : "",
+      standing.standing === "noise" ? `capped at ${standing.effectiveCap} a day until one is kept` : "",
+    ].filter(Boolean);
+    const tail = notes.length ? ` (${notes.join(", ")})` : "";
     finishTask(
       task.id,
       task.run_id,
       free,
       "done",
       take.length === 0
-        ? `${feed.title}: nothing new to read${held ? `; ${held} held back by the daily cap` : ""}.`
-        : `${feed.title}: reading ${take.length} new item${take.length === 1 ? "" : "s"}${held ? `, ${held} held back` : ""}.`
+        ? `${feed.title}: nothing new to read${tail}.`
+        : `${feed.title}: reading ${take.length} new item${take.length === 1 ? "" : "s"}${tail}.`
     );
   });
+
+  // Stories opened twice in the last few days are folded together here, once
+  // in a while, because a poll is when new accounts have just arrived.
+  regroupStories();
+}
+
+/** Which of a poll's new items the curator sets aside, with its reasons. */
+function judgeNew(itemIds: number[], feedId: number, tallies: Tallies): { id: number; reason: string }[] {
+  if (!getConfig().feedReview) return [];
+  const rows = db()
+    .prepare(
+      `SELECT id, url, title FROM feed_items WHERE id IN (${itemIds.map(() => "?").join(",")}) AND state = 'new'`
+    )
+    .all(...itemIds) as { id: number; url: string | null; title: string }[];
+  const feedTitle = (id: number) => getFeed(id)?.title ?? `feed ${id}`;
+  const aside: { id: number; reason: string }[] = [];
+  for (const r of rows) {
+    const verdict = judge({ feedId, url: r.url, title: r.title }, tallies, feedTitle);
+    if (verdict.setAside) aside.push({ id: r.id, reason: verdict.reason });
+  }
+  return aside;
+}
+
+/** The regroup is cheap but not free; twice an hour is plenty. */
+const REGROUP_EVERY_MS = 30 * 60_000;
+
+declare global {
+  // eslint-disable-next-line no-var
+  var __corpusRegroupedAt: number | undefined;
+}
+
+function regroupStories(): void {
+  const last = globalThis.__corpusRegroupedAt ?? 0;
+  if (Date.now() - last < REGROUP_EVERY_MS) return;
+  globalThis.__corpusRegroupedAt = Date.now();
+  try {
+    regroupRecent();
+  } catch (err) {
+    console.warn(`[corpus] stories: regroup failed — ${(err as Error).message}`);
+  }
 }
 
 export async function handleFetchItem(task: Task): Promise<void> {

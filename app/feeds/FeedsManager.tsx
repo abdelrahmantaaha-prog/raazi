@@ -20,6 +20,12 @@ interface FeedRow {
   items: number;
   ready: number;
   pending: number;
+  /** What your decisions say about this feed; see lib/curator.ts. */
+  standing: "earning" | "quiet" | "noise";
+  standingNote: string | null;
+  effectiveCap: number;
+  setAside: number;
+  putBack: number;
   tagIds: number[];
 }
 
@@ -306,6 +312,17 @@ export function FeedsManager({
                     {f.lastPolledAt ? `checked ${relativeDate(f.lastPolledAt)}` : "never checked"}
                     {f.lastStatus ? ` — ${f.lastStatus}` : ""}
                   </p>
+                  {f.standingNote || f.setAside ? (
+                    <p
+                      className={`mt-1 text-xs ${f.standing === "noise" ? "text-amber-800" : "text-[var(--color-muted)]"}`}
+                      title="Learned from what you kept and discarded. Keeping one item from this feed, or putting back one that was set aside, changes it."
+                    >
+                      {f.standingNote ?? ""}
+                      {f.setAside
+                        ? `${f.standingNote ? " · " : ""}${f.setAside} set aside on your pattern${f.putBack ? `, ${f.putBack} put back` : ""}`
+                        : ""}
+                    </p>
+                  ) : null}
                   {f.tagIds.length ? (
                     <p className="mt-1 text-xs text-[var(--color-muted)]">
                       Filed under {f.tagIds.map((id) => tags.find((t) => t.id === id)?.name).filter(Boolean).join(", ")}

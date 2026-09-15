@@ -56,7 +56,16 @@ export async function POST(req: Request) {
 
   if (body.action === "undo") {
     const result = undo(ids);
-    return NextResponse.json({ ...result, held: heldCount(), items: listHeld(200, q) });
+    // An item the curator set aside was never fetched; putting it back is a fetch.
+    if (result.fetching) kickWorker();
+    return NextResponse.json({
+      ...result,
+      note: result.fetching
+        ? `${result.fetching === 1 ? "It was" : `${result.fetching} were`} set aside before being fetched — fetching now; ${result.fetching === 1 ? "it" : "they"} will be in the inbox in a moment.`
+        : undefined,
+      held: heldCount(),
+      items: listHeld(200, q),
+    });
   }
 
   if (body.action === "keep") {

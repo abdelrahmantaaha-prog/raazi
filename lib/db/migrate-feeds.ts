@@ -1,4 +1,5 @@
 import type Database from "better-sqlite3";
+import { canonicalUrl } from "../ingest/meta";
 
 function hasColumn(db: Database.Database, table: string, column: string): boolean {
   return (db.prepare(`PRAGMA table_info(${table})`).all() as { name: string }[]).some(
@@ -230,4 +231,43 @@ export function migrateFeeds(db: Database.Database) {
     );
   `);
   db.exec(`CREATE INDEX IF NOT EXISTS idx_feed_items_clipped ON feed_items(clipped_at) WHERE clipped_at IS NOT NULL;`);
+
+  // The curator (2026-09-15), see lib/curator.ts.
+  //
+  // queued_at: when the poll actually took the item, which is what the daily
+  // cap counts. It used to count by state and seen_at, and under review the
+  // states it counted were the two an item passes through in seconds — so
+  // the cap never engaged, and an item held back for "today" had no today
+  // to come back on.
+  addColumn(db, "feed_items", "queued_at", "TEXT");
+  // curated_at: the curator set this item aside, on a pattern of your own
+  // discards. Such an item never counts as evidence for the pattern.
+  addColumn(db, "feed_items", "curated_at", "TEXT");
+  // vetoed_at: you put a curated item back. A veto stops the pattern.
+  addColumn(db, "feed_items", "vetoed_at", "TEXT");
+
+  // Addresses canonicalised before the feeds' own tracking parameters were on
+  // the strip list still carry them, and would not match the same article
+  // arriving clean. Re-tidied once; nothing matches the pattern afterwards.
+  const stale = db
+    .prepare(
+      `SELECT id, canonical_url FROM feed_items
+        WHERE canonical_url LIKE '%?%'
+          AND (canonical_url LIKE '%at_campaign=%' OR canonical_url LIKE '%cmp=%'
+               OR canonical_url LIKE '%smid=%' OR canonical_url LIKE '%srnd=%'
+               OR canonical_url LIKE '%ftag=%' OR canonical_url LIKE '%ns_mchannel=%'
+               OR canonical_url LIKE '%ref=%' OR canonical_url LIKE '%ito=%')`
+    )
+    .all() as { id: number; canonical_url: string }[];
+  if (stale.length) {
+    const update = db.prepare("UPDATE feed_items SET canonical_url = ? WHERE id = ?");
+    const fix = db.transaction(() => {
+      for (const r of stale) {
+        const clean = canonicalUrl(r.canonical_url);
+        if (clean && clean !== r.canonical_url) update.run(clean, r.id);
+      }
+    });
+    fix();
+    console.log(`[corpus] migrated: re-tidied ${stale.length} feed item address(es)`);
+  }
 }

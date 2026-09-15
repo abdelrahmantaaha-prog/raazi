@@ -338,14 +338,16 @@ export async function startWorker(override?: Record<string, Handler>): Promise<v
       // the afternoon. A poll outranks the reading in claimNext, so queueing
       // it here is what puts checking the feeds ahead of parsing articles.
       sweepFeeds();
+      // Failures that have rested long enough go back on their own — an
+      // entry that would not write at three because the provider was out is
+      // not an entry that cannot be written. On every pass, throttled, rather
+      // than only once the queue is empty: with a morning's articles queued
+      // the queue is never empty, and a passage failed at noon over a busy
+      // provider used to stay failed until the evening.
+      sweepFailed();
       const task = claimNext();
 
       if (!task) {
-        // Failures that have rested long enough go back on their own — an
-        // entry that would not write at three because the provider was out is
-        // not an entry that cannot be written. Before anything new is queued,
-        // so the retry is what fills the quiet rather than a re-sweep.
-        if (sweepFailed()) continue;
 
         // The queue is empty. Before standing down, catch any entries left out
         // of date by something other than an ingest — a merge you made by hand,

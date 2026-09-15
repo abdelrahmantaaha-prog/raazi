@@ -4,8 +4,17 @@
  * network and reused by the feed poller when it arrives.
  */
 
-/** Query parameters that identify a click, not a page. */
-const TRACKING_PARAMS = /^(utm_\w+|fbclid|gclid|dclid|gbraid|wbraid|msclkid|mc_cid|mc_eid|igshid|yclid|_hsenc|_hsmi|mkt_tok|ref_src|ref_url|cmpid|s_kwcid|ncid|ocid|oly_enc_id|oly_anon_id|vero_id|_ga|_gl)$/i;
+/**
+ * Query parameters that identify a click, not a page.
+ *
+ * The second row is what the feeds actually carry: the BBC stamps every link
+ * `at_campaign=rss&at_medium=RSS`, the CBC `cmp=rss`, the Times `smid`, the
+ * Guardian `CMP`, Bloomberg `srnd`. Left on the address, the same article
+ * arriving under a fresh guid — which the BBC does after every edit — was a
+ * new item rather than the one already discarded, three times over.
+ */
+export const TRACKING_PARAMS =
+  /^(utm_\w+|fbclid|gclid|dclid|gbraid|wbraid|msclkid|mc_cid|mc_eid|igshid|yclid|_hsenc|_hsmi|mkt_tok|ref_src|ref_url|cmpid|s_kwcid|ncid|ocid|oly_enc_id|oly_anon_id|vero_id|_ga|_gl|at_\w+|cmp|ns_\w+|ito|smid|smtyp|ftag|ref|srnd|taid|partner|sref|xtor|guccounter|guce_referrer\w*|icid|rss|feed|source|src|via|leadSource|lead_source)$/i;
 
 /**
  * The address two feeds carrying the same story are matched on.

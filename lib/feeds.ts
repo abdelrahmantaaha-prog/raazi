@@ -3,6 +3,7 @@ import { JSDOM, VirtualConsole } from "jsdom";
 import { db, tx } from "./db";
 import { safeFetch } from "./net";
 import { canonicalUrl, outletFromUrl, toPublishedAt } from "./ingest/meta";
+import { curatedCounts, explainStanding, learn, SET_ASIDE, standingOf, type Standing } from "./curator";
 /** jsdom shouts every stylesheet it cannot parse to the console — modern CSS it
  *  does not know, whole sheets of it, into the server log on every article
  *  fetched. Nothing here needs the styles. A console with no listeners is quiet. */
@@ -381,8 +382,23 @@ export async function fetchFeed(
 // Storage
 // ---------------------------------------------------------------------------
 
-export function listFeeds(): (Feed & { items: number; ready: number; pending: number })[] {
-  return db()
+export interface FeedListing extends Feed {
+  items: number;
+  ready: number;
+  pending: number;
+  /** What your decisions say about this feed — see lib/curator.ts. */
+  standing: Standing;
+  /** One line explaining the standing, or null when there is nothing to say. */
+  standingNote: string | null;
+  /** The cap the poll actually applies today. */
+  effectiveCap: number;
+  /** Items the curator set aside from this feed, and how many you put back. */
+  setAside: number;
+  putBack: number;
+}
+
+export function listFeeds(): FeedListing[] {
+  const rows = db()
     .prepare(
       `SELECT f.*,
               (SELECT COUNT(*) FROM feed_items i WHERE i.feed_id=f.id) AS items,
@@ -391,6 +407,20 @@ export function listFeeds(): (Feed & { items: number; ready: number; pending: nu
          FROM feeds f ORDER BY f.enabled DESC, f.title`
     )
     .all() as (Feed & { items: number; ready: number; pending: number })[];
+  const tallies = learn();
+  const curated = curatedCounts();
+  return rows.map((f) => {
+    const s = standingOf(f.id, f.daily_cap, tallies);
+    const c = curated.get(f.id);
+    return {
+      ...f,
+      standing: s.standing,
+      standingNote: explainStanding(s),
+      effectiveCap: s.effectiveCap,
+      setAside: c?.aside ?? 0,
+      putBack: c?.back ?? 0,
+    };
+  });
 }
 
 export function getFeed(id: number): Feed | undefined {
@@ -558,16 +588,86 @@ export function nextFeedDueAt(): Date | undefined {
   return Number.isNaN(d.getTime()) ? undefined : d;
 }
 
-/** How many items this feed has turned into sources today. */
+/**
+ * How many items this feed has been allowed to take today.
+ *
+ * Counted by when the poll took them, not by what state they are in now:
+ * under review an item is `queued` for seconds and `held` within the minute,
+ * and counting the states it passed through meant the cap saw nothing and a
+ * feed that offers a hundred an hour was capped only by the per-poll limit.
+ */
 export function ingestedToday(feedId: number): number {
   return (
     db()
       .prepare(
         `SELECT COUNT(*) AS n FROM feed_items
-          WHERE feed_id=? AND state IN ('queued','ready') AND date(seen_at)=date('now','localtime')`
+          WHERE feed_id=? AND queued_at IS NOT NULL
+            AND date(queued_at, 'localtime') = date('now', 'localtime')`
       )
       .get(feedId) as { n: number }
   ).n;
+}
+
+/** How long an item waits for room under the cap before it is let go. */
+export const BACKLOG_DAYS = 3;
+
+/**
+ * What a feed offered that there was no room for yet, newest first.
+ *
+ * Held back used to mean lost: the next poll asked only about what was new
+ * in the feed, and an item recorded on Tuesday with a note saying it would
+ * come back had no path back. Eight hundred and seventy-five of them were
+ * sitting in that state on 15 September 2026.
+ */
+export function heldBack(feedId: number): number[] {
+  return (
+    db()
+      .prepare(
+        `SELECT id FROM feed_items
+          WHERE feed_id = ? AND state = 'new'
+          ORDER BY COALESCE(published_at, seen_at) DESC, id DESC`
+      )
+      .all(feedId) as { id: number }[]
+  ).map((r) => r.id);
+}
+
+/** Lets go of what has waited too long: it is no longer news. Returns how many. */
+export function expireHeldBack(feedId: number, days = BACKLOG_DAYS): number {
+  return db()
+    .prepare(
+      `UPDATE feed_items
+          SET state = 'skipped', note = 'Expired unread: there was no room for it under the daily cap for ${days} days.'
+        WHERE feed_id = ? AND state = 'new'
+          AND seen_at < datetime('now', ?)`
+    )
+    .run(feedId, `-${days} days`).changes;
+}
+
+/** Stamps the items a poll is taking. */
+export function markQueued(itemIds: number[]): void {
+  if (!itemIds.length) return;
+  db()
+    .prepare(
+      `UPDATE feed_items SET state = 'queued', queued_at = datetime('now'), note = NULL
+        WHERE id IN (${itemIds.map(() => "?").join(",")})`
+    )
+    .run(...itemIds);
+}
+
+/**
+ * Sets an item aside before it is fetched, on the curator's word.
+ *
+ * Discarded, with the reason on it and a mark saying whose decision it was,
+ * so the inbox's undo puts it back and the curator never reads it as yours.
+ */
+export function setAsideItems(items: { id: number; reason: string }[]): void {
+  if (!items.length) return;
+  const stmt = db().prepare(
+    `UPDATE feed_items
+        SET state = 'discarded', decided_at = datetime('now'), curated_at = datetime('now'), note = ?
+      WHERE id = ? AND state = 'new'`
+  );
+  for (const it of items) stmt.run(`${SET_ASIDE}${it.reason}.`, it.id);
 }
 
 /**
@@ -624,7 +724,8 @@ export function recordItems(
       // row still matters — it is what stops the archive arriving later.
       const tooOld = since && item.publishedAt && item.publishedAt < since;
       const seen = alreadyHave(canonical, item.url);
-      const state = opts.seed || tooOld ? "skipped" : seen.sourceId || seen.itemId ? "duplicate" : "new";
+      const twin = !opts.seed && !tooOld && !seen.sourceId && !seen.itemId ? sameHeadline(feedId, item.title) : undefined;
+      const state = opts.seed || tooOld ? "skipped" : seen.sourceId || seen.itemId || twin ? "duplicate" : "new";
 
       const info = insert.run(
         feedId,
@@ -636,7 +737,7 @@ export function recordItems(
         item.publishedAt,
         state,
         item.image ?? null,
-        opts.seed ? "On the page when it was added." : null
+        opts.seed ? "On the page when it was added." : twin ? `Same headline already offered by ${twin.feed}.` : null
       );
       if (info.changes === 0) continue; // already known under this guid
 
@@ -649,6 +750,37 @@ export function recordItems(
   });
 
   return fresh;
+}
+
+/** How long one outlet's headline is remembered for. */
+const SAME_HEADLINE_DAYS = 3;
+
+/**
+ * The same headline from the same outlet, lately.
+ *
+ * The address is the identity, and it usually suffices. But an outlet that
+ * runs three feeds — politics, world, the front page — hands the same piece
+ * out under three addresses when its sections carry their own paths, and
+ * one that republishes after an edit hands it out under a new guid at a new
+ * address with a date in it. The same words from the same newsroom inside
+ * three days is one article. Across outlets it is not: six newsrooms on one
+ * wire report are six accounts of a story, which is what stories are for.
+ */
+function sameHeadline(feedId: number, title: string): { feed: string } | undefined {
+  const key = title.replace(/\s+/g, " ").trim().toLowerCase();
+  if (key.length < 20) return undefined;
+  return db()
+    .prepare(
+      `SELECT f.title AS feed FROM feed_items i
+         JOIN feeds f ON f.id = i.feed_id
+         JOIN feeds me ON me.id = ?
+        WHERE (i.feed_id = me.id OR (f.outlet IS NOT NULL AND f.outlet = me.outlet))
+          AND i.state <> 'failed'
+          AND i.seen_at >= datetime('now', '-${SAME_HEADLINE_DAYS} days')
+          AND lower(trim(i.title)) = ?
+        LIMIT 1`
+    )
+    .get(feedId, key) as { feed: string } | undefined;
 }
 
 export function markPolled(feedId: number, status: string, etag?: string, lastModified?: string) {

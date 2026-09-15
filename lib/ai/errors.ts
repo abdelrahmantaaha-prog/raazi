@@ -133,6 +133,23 @@ export function isConnRefused(err: unknown): boolean {
   );
 }
 
+/**
+ * A call this app gave up on because it ran past its own ceiling.
+ *
+ * Kept apart from the network blips it is otherwise grouped with because of
+ * what it means on the local model: a nine-billion-parameter model handed
+ * the extraction schema does not fail, it takes four minutes, and a task that
+ * waited three of them five times over is a task that was failed for good by
+ * a provider that was only ever the last resort.
+ */
+export function isTimeout(err: unknown): boolean {
+  const e = err as { name?: string; cause?: { name?: string } };
+  if (e?.name === "TimeoutError" || e?.name === "AbortError") return true;
+  if (e?.cause?.name === "TimeoutError" || e?.cause?.name === "AbortError") return true;
+  const raw = (err instanceof Error ? err.message : String(err)).toLowerCase();
+  return /operation was aborted|timeouterror|the operation timed out|timed out\b|etimedout/.test(raw);
+}
+
 export class TruncatedOutputError extends Error {
   constructor() {
     super("Model hit its output limit before finishing.");

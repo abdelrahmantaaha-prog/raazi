@@ -251,6 +251,11 @@ export function retryFailedAutomatically(
             AND kind IN (${RETRIABLE.map((k) => `'${k}'`).join(",")})
             AND retries < ?
             AND datetime(updated_at) < datetime('now', ?)
+            -- An output cut short is a verdict on the passage, not the
+            -- afternoon: the same evidence asked the same way hits the same
+            -- ceiling, and an entry that would not fit was retried nine
+            -- times, each a full call, before this line existed.
+            AND COALESCE(last_error, '') NOT LIKE '%Output was truncated%'
         RETURNING run_id`
       )
       .all(limit, `-${minutes} minutes`) as { run_id: number }[];
@@ -274,7 +279,8 @@ export function hasRetryableFailures(limit = AUTO_RETRY_LIMIT): boolean {
       db()
         .prepare(
           `SELECT COUNT(*) AS n FROM tasks WHERE state='failed' AND retries < ?
-              AND kind IN (${RETRIABLE.map((k) => `'${k}'`).join(",")})`
+              AND kind IN (${RETRIABLE.map((k) => `'${k}'`).join(",")})
+              AND COALESCE(last_error, '') NOT LIKE '%Output was truncated%'`
         )
         .get(limit) as { n: number }
     ).n > 0

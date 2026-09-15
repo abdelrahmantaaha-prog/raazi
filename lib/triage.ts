@@ -497,12 +497,26 @@ export function discard(itemIds: number[], reason?: string): { discarded: number
  * pulling one back out of that is a different operation from changing your
  * mind — deleting the source is what does it, and it says what it will take.
  */
-export function undo(itemIds: number[]): { restored: number } {
+export function undo(itemIds: number[]): { restored: number; fetching: number; runId: number | null } {
   const items = pick(itemIds, "discarded");
-  if (!items.length) return { restored: 0 };
+  if (!items.length) return { restored: 0, fetching: 0, runId: null };
 
   return tx(() => {
+    // An item the curator set aside was never fetched, so putting it back
+    // means fetching it now — and telling the curator it was wrong. The veto
+    // is what stops the pattern firing again; see lib/curator.ts.
+    const toFetch: number[] = [];
     for (const item of items) {
+      if (item.curated_at !== null) {
+        db().prepare("UPDATE feed_items SET vetoed_at=datetime('now') WHERE id=?").run(item.id);
+      }
+      if (item.source_id === null && item.url) {
+        db()
+          .prepare("UPDATE feed_items SET state='queued', queued_at=datetime('now'), decided_at=NULL, note=NULL WHERE id=?")
+          .run(item.id);
+        toFetch.push(item.id);
+        continue;
+      }
       db()
         .prepare("UPDATE feed_items SET state='held', decided_at=NULL, note=NULL WHERE id=?")
         .run(item.id);
@@ -510,7 +524,16 @@ export function undo(itemIds: number[]): { restored: number } {
         db().prepare("UPDATE sources SET triage='held' WHERE id=?").run(item.source_id);
       }
     }
-    return { restored: items.length };
+
+    let runId: number | null = null;
+    if (toFetch.length) {
+      runId = createRun({
+        kind: "poll",
+        label: toFetch.length === 1 ? "Fetching an article you put back" : `Fetching ${toFetch.length} articles you put back`,
+      });
+      enqueue(runId, toFetch.map((itemId) => ({ kind: "fetch_item" as const, payload: { itemId } })));
+    }
+    return { restored: items.length, fetching: toFetch.length, runId };
   });
 }
 
@@ -518,6 +541,8 @@ interface PickedItem {
   id: number;
   title: string;
   source_id: number | null;
+  url: string | null;
+  curated_at: string | null;
 }
 
 /** The rows named that really are in the state the caller thinks they are. */
@@ -526,7 +551,7 @@ function pick(itemIds: number[], state: string): PickedItem[] {
   if (!ids.length) return [];
   return db()
     .prepare(
-      `SELECT id, title, source_id FROM feed_items
+      `SELECT id, title, source_id, url, curated_at FROM feed_items
         WHERE state = ? AND id IN (${ids.map(() => "?").join(",")})`
     )
     .all(state, ...ids) as PickedItem[];

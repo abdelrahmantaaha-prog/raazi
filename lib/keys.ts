@@ -246,6 +246,26 @@ export function markModelSpent(provider: ProviderId, model: string, minutes = 60
   console.log(`[corpus] ${model} is out of quota; the ring moves on for ${minutes} minutes`);
 }
 
+/** How long a model that answered "high demand" is left alone. Google's
+ *  spikes are short; a busy model is asked again well within the hour. */
+export const BUSY_MINUTES = 10;
+
+/**
+ * A model that is up but will not serve — a 503 "high demand" — set aside
+ * for a few minutes so the same key asks the next model down.
+ *
+ * The same map as a spent model, and for the same reason: the condition is
+ * the model's, not the key's. On 15 September 2026 the head of the ring
+ * answered 503 to every key for an afternoon while the three models below it
+ * were serving in under a second, and the rotation — which read a 503 as "this
+ * provider is down" and stepped straight to the local model — never asked
+ * them. The whole queue stood behind a model that was busy.
+ */
+export function markModelBusy(provider: ProviderId, model: string, minutes = BUSY_MINUTES): void {
+  spentModels().set(`${provider}:${model}`, Date.now() + minutes * 60_000);
+  console.log(`[corpus] ${model} is busy; the ring moves on for ${minutes} minutes`);
+}
+
 export function modelSpent(provider: ProviderId, model: string): boolean {
   const until = spentModels().get(`${provider}:${model}`);
   if (until === undefined) return false;

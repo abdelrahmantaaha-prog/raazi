@@ -161,6 +161,75 @@ section("The embedding model is a hard pin, and its quota is its own problem");
   check("both name the model and say the keys are fine", /keys themselves are fine/.test(absent.message) && absent.message.includes(EMBED));
 }
 
+// ---------------------------------------------------------------------------
+
+section("A busy model is stepped over, not the whole provider");
+{
+  const { withRotation } = await import("../lib/ai/client.ts");
+  const { ProvidersBusyError } = await import("../lib/ai/errors.ts");
+  reset();
+  const asked = [];
+  const busy = Object.assign(
+    new Error("503 This model is currently experiencing high demand. Spikes in demand are usually temporary."),
+    { status: 503 }
+  );
+  const r = await withRotation(["gemini"], async (k, model) => {
+    asked.push(model);
+    if (model === RING[0] || model === RING[1]) throw busy;
+    return `answered by ${model}`;
+  });
+  check(
+    "the head of the ring answered busy and the same key asked the next one down",
+    asked[0] === RING[0] && asked[1] === RING[1] && asked[2] === RING[2],
+    asked.join(" > ")
+  );
+  check("and the third model answered", r.value === `answered by ${RING[2]}`);
+  check("the busy models are set aside for a while", keys.modelSpent("gemini", RING[0]) && keys.modelSpent("gemini", RING[1]));
+  check("the one that served is not", !keys.modelSpent("gemini", RING[2]));
+  check("the key itself is untouched", keys.usableKeys("gemini").length === 1);
+
+  keys.clearSpentModels();
+  let err;
+  try {
+    await withRotation(["gemini"], async () => {
+      throw busy;
+    });
+  } catch (e) {
+    err = e;
+  }
+  check("with every model busy the services are out, not the task", err instanceof ProvidersBusyError, String(err));
+  check("and such a task waits rather than fails, however many attempts", classify(err, 5).kind === "retry");
+  keys.clearSpentModels();
+}
+
+section("A slow local model is set aside, not charged to the task");
+{
+  const { withRotation } = await import("../lib/ai/client.ts");
+  const { ProvidersBusyError, isTimeout } = await import("../lib/ai/errors.ts");
+  reset();
+  const local = keys.addKey("ollama-any-text-works-here", "local", { provider: "ollama" });
+  const timeout = Object.assign(new Error("The operation was aborted due to timeout"), { name: "TimeoutError" });
+  check("a timeout is recognised as one", isTimeout(timeout));
+  check("a plain failure is not", !isTimeout(new Error("Empty response.")));
+
+  let err;
+  try {
+    await withRotation(["ollama"], async () => {
+      throw timeout;
+    });
+  } catch (e) {
+    err = e;
+  }
+  check("the local model taking too long means it is not there right now", err instanceof ProvidersBusyError, String(err));
+  const after = keys.listKeys().find((k) => k.id === local.id);
+  check("and its key rests for a few minutes", Boolean(after.cooldownUntil) && new Date(after.cooldownUntil) > new Date());
+  check(
+    "a timeout on the cloud is still a blip to retry, and a fifth one a failure",
+    classify(timeout, 1).kind === "retry" && classify(timeout, 5).kind === "fail"
+  );
+  keys.clearSpentModels();
+}
+
 fs.rmSync(SANDBOX, { recursive: true, force: true });
 
 console.log(`\n${failed === 0 ? "All passed" : "FAILURES PRESENT"}: ${passed} passed, ${failed} failed\n`);

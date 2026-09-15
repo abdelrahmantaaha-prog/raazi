@@ -9,6 +9,7 @@ import {
   markCooldown,
   markExhausted,
   markInvalid,
+  markModelBusy,
   markModelSpent,
   markUsed,
   modelFor,
@@ -26,6 +27,7 @@ import {
   SchemaUnsupportedError,
   isConnRefused,
   isProviderUnavailable,
+  isTimeout,
   MissingKeyError,
   ModelExhaustedError,
   NoUsableKeysError,
@@ -278,8 +280,11 @@ export function modelOfCall(k: ApiKey, opts: { model?: string }): string {
  * pool used to sit in front of that check and swallow the lot as "the pool
  * refused"; an oversized passage cost three full calls before the worker
  * learned it should split it.
+ *
+ * Exported for scripts/test-rotation.mjs, which drives it with a stand-in
+ * for the provider call; nothing outside this module should call it.
  */
-async function withRotation<T>(
+export async function withRotation<T>(
   candidates: ProviderId[],
   fn: (key: ApiKey, model: string) => Promise<T>,
   opts: {
@@ -333,13 +338,36 @@ async function withRotation<T>(
           break;
         }
 
-        // Up but busy (a 503 for everyone), or not there at all (a refused
+        // Up but busy — a 503 "high demand". On Gemini that is a fact about
+        // ONE MODEL: every key meets it, and the models below it in the ring
+        // are usually serving in under a second. So the model is set aside
+        // for a few minutes and the same key asks the next one down, exactly
+        // as it does for a spent allowance. Stepping to the next provider
+        // here, as this used to, left three healthy models unasked for an
+        // afternoon and sent the whole queue to the local model.
+        if (isProviderUnavailable(err) && !isConnRefused(err) && spec(provider).kind === "gemini") {
+          markModelBusy(provider, model);
+          const next = pick(key);
+          if (next !== model && !modelSpent(provider, next)) {
+            tried.delete(key.id);
+            continue;
+          }
+        }
+
+        // The local model taking longer than the call allows is the same
+        // news as the local model not being there: it cannot serve this call
+        // now. It is not a network blip to be charged against the task's
+        // attempts — five of those failed the task for good, over a provider
+        // that was only ever the last resort.
+        const localTimeout = provider === "ollama" && isTimeout(err);
+
+        // Busy with nothing left to ask, or not there at all (a refused
         // connection). Either way this provider cannot serve the call right
         // now, and — this is the point — every key on it meets the same wall,
         // so there is nothing to gain by trying its other keys. Step to the
         // next provider; if there is none, fall through to the tail, which now
         // parks the task instead of letting it spin.
-        if (isProviderUnavailable(err) || isConnRefused(err)) {
+        if (isProviderUnavailable(err) || isConnRefused(err) || localTimeout) {
           sawUnavailable = true;
           // A refused connection means the endpoint is not listening — the
           // local model with nothing behind it. Take its key off the ring for
@@ -347,6 +375,8 @@ async function withRotation<T>(
           // 503 is left alone: the key is fine and the model is shared.
           if (isConnRefused(err)) {
             markCooldown(key.id, LOCAL_DOWN_COOLDOWN_MS, "The endpoint did not answer.");
+          } else if (localTimeout) {
+            markCooldown(key.id, LOCAL_DOWN_COOLDOWN_MS, "Took too long to answer.");
           }
           const next = candidates.indexOf(provider) + 1;
           if (next < candidates.length) {

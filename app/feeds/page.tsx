@@ -47,6 +47,11 @@ export default async function FeedsPage() {
         items: f.items,
         ready: f.ready,
         pending: f.pending,
+        standing: f.standing,
+        standingNote: f.standingNote,
+        effectiveCap: f.effectiveCap,
+        setAside: f.setAside,
+        putBack: f.putBack,
         tagIds: feedTags.filter((t) => t.feed_id === f.id).map((t) => t.tag_id),
       }))}
       tags={tags.map((t) => ({ id: t.id, name: t.name }))}
