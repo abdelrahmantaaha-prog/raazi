@@ -221,7 +221,24 @@ export function modelFor(key: ApiKey): string {
     : modelsFor(provider);
 
   const live = ring.filter((m) => !modelSpent(provider, m));
-  return live[0] ?? ring[0] ?? spec(provider).defaultModel;
+  // With every model set aside, ask the one due back soonest rather than
+  // the head of the ring: the head is the busiest model on a busy afternoon,
+  // and asking it for every task while five others were about to come back
+  // was how a spike became an hour.
+  return live[0] ?? soonestBack(provider, ring) ?? ring[0] ?? spec(provider).defaultModel;
+}
+
+function soonestBack(provider: ProviderId, ring: string[]): string | undefined {
+  let best: string | undefined;
+  let at = Infinity;
+  for (const m of ring) {
+    const until = spentModels().get(`${provider}:${m}`);
+    if (until !== undefined && until < at) {
+      at = until;
+      best = m;
+    }
+  }
+  return best;
 }
 
 declare global {
@@ -246,9 +263,14 @@ export function markModelSpent(provider: ProviderId, model: string, minutes = 60
   console.log(`[corpus] ${model} is out of quota; the ring moves on for ${minutes} minutes`);
 }
 
-/** How long a model that answered "high demand" is left alone. Google's
- *  spikes are short; a busy model is asked again well within the hour. */
-export const BUSY_MINUTES = 10;
+/** How long a model that answered "high demand" is left alone.
+ *
+ *  Short, because a 503 is about the request as much as the model: under
+ *  load Google sheds a long verification prompt from a model that is still
+ *  answering short ones, and a mark that outlives the spike leaves the ring
+ *  asking its head model for a task at a time while the models below it
+ *  would have served. Three minutes is a spike; ten was a lull. */
+export const BUSY_MINUTES = 3;
 
 /**
  * A model that is up but will not serve — a 503 "high demand" — set aside
