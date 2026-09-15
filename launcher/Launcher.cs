@@ -21,6 +21,11 @@
 // first, and the window goes back to it after. The choice lives in
 // data\launcher.ini.
 //
+// With Windows. "Start when Windows starts" in the tray menu puts the launcher
+// under the user's Run key with --at-sign-in, and started that way it brings
+// the server (or the follower's copy) up in the tray and opens no window:
+// feeds are polled and parked runs resume before you ask for anything.
+//
 // Compiled with the C# compiler that ships with Windows — see build.ps1. No
 // Electron, no extra runtime, a few dozen KB.
 
@@ -41,6 +46,10 @@ static class Corpus
 {
     const int Port = 5400;
     const string CopyTitle = "Corpus · this computer's copy";
+    const string SignInArg = "--at-sign-in";
+    const string RunKey = @"Software\Microsoft\Windows\CurrentVersion\Run";
+    /** Started by Windows at sign-in: up in the tray, no window until asked. */
+    static bool atSignIn;
     static Process server;
     static NotifyIcon tray;
     static readonly string Root =
@@ -53,6 +62,7 @@ static class Corpus
         // A restart after changing where to connect waits for the old launcher
         // to let go; anything else that finds one running hands over to it.
         bool restarted = Array.IndexOf(args, "--restarted") >= 0;
+        atSignIn = Array.IndexOf(args, SignInArg) >= 0;
         settings = Settings.Load(Path.Combine(Root, "data", "launcher.ini"));
 
         using (var mutex = new Mutex(false, "Corpus.Launcher.SingleInstance"))
@@ -63,6 +73,9 @@ static class Corpus
 
             if (!owned)
             {
+                // Windows starting a launcher you had already opened by hand
+                // asked for nothing to be shown.
+                if (atSignIn) return;
                 // Already running: bring its window forward rather than start
                 // a second of anything. A follower's launcher knows which
                 // window that is; this process does not, so it asks for the
@@ -134,10 +147,19 @@ static class Corpus
         // the one client that is entitled to make it.
         KickWorker();
 
-        Open(false);
-        Notify(alreadyRunning
-            ? "Corpus was already running — opened it for you."
-            : "Corpus is running. It stays up if you close its window; quit from here.");
+        // At sign-in the point is the server — feeds polled and parked runs
+        // resumed before you sit down — not a window you did not ask for.
+        if (atSignIn)
+        {
+            Notify("Corpus started with Windows and is running in the background. Double-click here to open it.");
+        }
+        else
+        {
+            Open(false);
+            Notify(alreadyRunning
+                ? "Corpus was already running — opened it for you."
+                : "Corpus is running. It stays up if you close its window; quit from here.");
+        }
 
         Application.Run();
         Stop();
@@ -171,7 +193,10 @@ static class Corpus
     static void RunRemote()
     {
         tray = BuildTray();
-        if (RemoteHealthy(settings.RemoteUrl))
+        // At sign-in, count the window as already dealt with, so the follower
+        // loop keeps the copy in step without opening one when it first connects.
+        if (atSignIn) windowOpened = true;
+        if (!atSignIn && RemoteHealthy(settings.RemoteUrl))
         {
             Open(false);
             windowOpened = true;
@@ -1470,6 +1495,21 @@ static class Corpus
         };
         menu.Items.Add(appWindow);
 
+        var atStart = new ToolStripMenuItem("Start when Windows starts") { Checked = StartsWithWindows(), CheckOnClick = true };
+        atStart.CheckedChanged += (s, e) =>
+        {
+            if (!SetStartsWithWindows(atStart.Checked))
+            {
+                atStart.Checked = StartsWithWindows();
+                Error("Couldn't change whether Corpus starts with Windows.");
+            }
+            else if (atStart.Checked)
+            {
+                Notify("Corpus will start in the background when you sign in to Windows.");
+            }
+        };
+        menu.Items.Add(atStart);
+
         menu.Items.Add(new ToolStripSeparator());
         menu.Items.Add("Open the data folder", null, (s, e) =>
         {
@@ -1506,6 +1546,47 @@ static class Corpus
         tray = icon;
         UpdateTip();
         return icon;
+    }
+
+    // -- starting with Windows ---------------------------------------------
+    //
+    // A value under the user's Run key, which Windows reads at sign-in. Not a
+    // shortcut in the Startup folder: the Run key is the one place Task
+    // Manager's Startup tab lists and lets you switch off, so turning it off
+    // there and here are the same switch. It names this exe, so a copy moved
+    // or unpacked elsewhere shows unticked until it is ticked from that copy.
+
+    static string SignInCommand()
+    {
+        return "\"" + Application.ExecutablePath + "\" " + SignInArg;
+    }
+
+    static bool StartsWithWindows()
+    {
+        try
+        {
+            using (var key = Registry.CurrentUser.OpenSubKey(RunKey))
+            {
+                var value = key == null ? null : key.GetValue("Corpus") as string;
+                return value != null &&
+                       value.IndexOf(Application.ExecutablePath, StringComparison.OrdinalIgnoreCase) >= 0;
+            }
+        }
+        catch { return false; }
+    }
+
+    static bool SetStartsWithWindows(bool on)
+    {
+        try
+        {
+            using (var key = Registry.CurrentUser.CreateSubKey(RunKey))
+            {
+                if (on) key.SetValue("Corpus", SignInCommand());
+                else key.DeleteValue("Corpus", false);
+            }
+            return true;
+        }
+        catch { return false; }
     }
 
     static Icon LoadIcon()

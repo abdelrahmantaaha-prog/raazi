@@ -32,6 +32,12 @@ opening another. Links to articles open in the browser as usual. Untick *Open in
 own window* in the tray menu to go back to a browser tab. The browser can also
 install it (Brave's menu → *Install Corpus*), which pins it to the taskbar.
 
+**With Windows.** Tick *Start when Windows starts* in the tray menu and Corpus comes
+up when you sign in — the server, or the follower's copy, in the notification area,
+with no window until you double-click the icon. Feeds are polled and parked runs
+resume before you have asked for anything. It is an entry under your user's Run
+key, so Task Manager's *Startup* tab lists it and can switch it off too.
+
 **A Corpus on another computer.** Right-click the tray icon → *Connect to another
 Corpus…*, paste the other machine's address and token from its *Settings → LAN
 mode*, test, and connect. This copy then runs no server of its own and opens that

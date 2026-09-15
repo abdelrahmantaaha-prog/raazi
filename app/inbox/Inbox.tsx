@@ -9,7 +9,6 @@ import {
   IconCheck,
   IconClipboard,
   IconExternal,
-  IconEye,
   IconFeed,
   IconFind,
   IconSelectAll,
@@ -59,6 +58,9 @@ interface Group {
 type PaneView = "text" | "page";
 const VIEW_KEY = "corpus.inbox.view";
 
+/** Where the list and the pane sit side by side; below it the pane is a sheet. */
+const WIDE = "(min-width: 64rem)";
+
 /** The latest moment anything in a group was sent from the browser, or "". */
 const latestClip = (g: Group) =>
   g.items.reduce((last, i) => (i.clipped_at && i.clipped_at > last ? i.clipped_at : last), "");
@@ -75,12 +77,18 @@ const latestClip = (g: Group) =>
  * And a keyboard: J and K move, Enter keeps, D discards, P opens the paste box,
  * so a hundred items is a rhythm rather than a hundred trips to the mouse.
  *
- * On a wide screen the item you click (or move to with J and K) opens in a
- * pane on the right:
- * the text the fetch actually got, with a verdict on whether it is the
- * article or a paywall's stub. That is the question the paste box exists to
- * answer, and it used to be answerable only by keeping the item and finding
- * out. On a phone the same pane opens as a sheet from the eye button.
+ * On a wide screen it is a desk rather than a page: the list and the pane fill
+ * the window beneath the heading and scroll on their own, so the heading, the
+ * search and the buttons never leave, and J and K carry the list along with
+ * them. The page used to scroll as a whole, with rows three hundred pixels
+ * tall beside a pane whose foot started below the window — two articles on
+ * screen, and every decision a scroll. Rows are now a headline, a line of
+ * where from, and two lines of the lede; the reading is the pane's job.
+ *
+ * The pane is the text the fetch actually got, with a verdict on whether it
+ * is the article or a paywall's stub. That is the question the paste box
+ * exists to answer, and it used to be answerable only by keeping the item and
+ * finding out. On a phone the same pane opens as a sheet when a row is tapped.
  *
  * What it deliberately does not do is summarise anything with a model. Judging
  * an article by a machine summary of it is the failure this whole application
@@ -143,8 +151,18 @@ export default function Inbox({
   const [preview, setPreview] = useState<HeldText | null>(null);
   const [previewLoading, setPreviewLoading] = useState(false);
   const previews = useRef(new Map<number, HeldText>());
-  /** On a phone the pane is a sheet, opened on purpose. */
+  /** On a phone the pane is a sheet, opened by tapping a row. */
   const [sheet, setSheet] = useState(false);
+
+  /** Whether the list and the pane sit side by side. False on the server and until the first check. */
+  const [wide, setWide] = useState(false);
+  useEffect(() => {
+    const mq = window.matchMedia(WIDE);
+    const sync = () => setWide(mq.matches);
+    sync();
+    mq.addEventListener("change", sync);
+    return () => mq.removeEventListener("change", sync);
+  }, []);
 
   /**
    * A search of the inbox. `query` is what is typed; `searched` is what the list
@@ -196,8 +214,12 @@ export default function Inbox({
       const t = e.target as HTMLElement | null;
       if (t && (t.tagName === "INPUT" || t.tagName === "TEXTAREA" || t.isContentEditable)) return;
       e.preventDefault();
-      searchBox.current?.focus();
-      searchBox.current?.select();
+      setSelected(new Set());
+      // The box is swapped for the bulk buttons while anything is selected.
+      window.setTimeout(() => {
+        searchBox.current?.focus();
+        searchBox.current?.select();
+      }, 0);
     };
     window.addEventListener("keydown", onSlash);
     return () => window.removeEventListener("keydown", onSlash);
@@ -321,12 +343,49 @@ export default function Inbox({
     }
   }, [flat, cursor]);
 
-  // A new article opens at its top, not wherever the last one was scrolled to.
-  const paneBox = useRef<HTMLElement>(null);
+  // A new article opens at its top, not wherever the last one was scrolled to;
+  // and its row stays in sight in the list, so J and K never walk off the edge.
+  const paneBody = useRef<HTMLDivElement>(null);
+  const listBox = useRef<HTMLDivElement>(null);
   const shownId = current?.id ?? null;
   useEffect(() => {
-    paneBox.current?.scrollTo({ top: 0 });
-  }, [shownId]);
+    paneBody.current?.scrollTo({ top: 0 });
+    if (currentId === null || shownId === null) return;
+    listBox.current?.querySelector(`[data-item="${shownId}"]`)?.scrollIntoView({ block: "nearest" });
+  }, [shownId, currentId]);
+
+  /**
+   * The desk's height: from where it starts down to the foot of the window.
+   *
+   * Measured rather than written as a calc of the heading's height, which
+   * changes with the review warning, a run chip, or the heading wrapping.
+   * offsetTop rather than getBoundingClientRect, because the page's entrance
+   * animation moves the desk a few pixels while this first runs.
+   */
+  const hasDesk = items.length > 0 || Boolean(searched);
+  const desk = useRef<HTMLDivElement>(null);
+  const heading = useRef<HTMLDivElement>(null);
+  const [deskTop, setDeskTop] = useState<number | null>(null);
+  useEffect(() => {
+    const el = desk.current;
+    if (!wide || !el) {
+      setDeskTop(null);
+      return;
+    }
+    const measure = () => {
+      let top = 0;
+      for (let n: HTMLElement | null = el; n; n = n.offsetParent as HTMLElement | null) top += n.offsetTop;
+      setDeskTop(top);
+    };
+    measure();
+    const observer = new ResizeObserver(measure);
+    if (heading.current) observer.observe(heading.current);
+    window.addEventListener("resize", measure);
+    return () => {
+      observer.disconnect();
+      window.removeEventListener("resize", measure);
+    };
+  }, [wide, hasDesk]);
 
   // What the extension sends appears without a reload. The stamp moves only
   // when something is clipped — not when a feed brings in the day's items — so
@@ -377,6 +436,13 @@ export default function Inbox({
       window.removeEventListener("focus", onBack);
     };
   }, []);
+
+  // The undo offer is a toast now, not a button in the bar, so it goes away on its own.
+  useEffect(() => {
+    if (!lastDiscarded.length) return;
+    const timer = window.setTimeout(() => setLastDiscarded([]), 10_000);
+    return () => window.clearTimeout(timer);
+  }, [lastDiscarded]);
 
   const toggle = (id: number) =>
     setSelected((prev) => {
@@ -523,6 +589,8 @@ export default function Inbox({
 
   const selectedIds = [...selected];
   const visibleIds = items.map((i) => i.id);
+  const allChosen = visibleIds.length > 0 && visibleIds.every((id) => selected.has(id));
+  const someChosen = selectedIds.length > 0 && !allChosen;
 
   const pasteBox = (item: Item) => (
     <div className="rounded-lg border border-[var(--color-accent)]/50 bg-white p-3">
@@ -564,219 +632,147 @@ export default function Inbox({
     </div>
   );
 
-  const pane = current ? (
-    <Preview
-      item={current}
-      text={preview?.id === current.id ? preview : null}
-      loading={previewLoading}
-      busy={busy}
-      pasting={pasting === current.id}
-      pasteBox={pasting === current.id ? pasteBox(current) : null}
-      onKeep={() => act("keep", [current.id])}
-      onFile={() => act("file", [current.id])}
-      onDiscard={() => act("discard", [current.id])}
-      starred={Boolean(current.starred)}
-      onStar={() => void star(current)}
-      view={view}
-      onView={chooseView}
-      onPaste={() => {
-        setPasting(pasting === current.id ? null : current.id);
-        setPasted("");
-      }}
-    />
-  ) : (
-    <div className="p-6 text-sm text-[var(--color-muted)]">
-      Click an item, or move along the list with J and K, and what was fetched for it shows here —
-      so you can tell an article from a paywall&apos;s stub before you keep it.
-    </div>
-  );
+  /** The pane's contents; the desk passes the ref its scrolling body needs, the sheet does not. */
+  const pane = (bodyRef?: React.Ref<HTMLDivElement>) =>
+    current ? (
+      <Preview
+        item={current}
+        text={preview?.id === current.id ? preview : null}
+        loading={previewLoading}
+        busy={busy}
+        pasting={pasting === current.id}
+        pasteBox={pasting === current.id ? pasteBox(current) : null}
+        onKeep={() => act("keep", [current.id])}
+        onFile={() => act("file", [current.id])}
+        onDiscard={() => act("discard", [current.id])}
+        starred={Boolean(current.starred)}
+        onStar={() => void star(current)}
+        view={view}
+        onView={chooseView}
+        onPaste={() => {
+          setPasting(pasting === current.id ? null : current.id);
+          setPasted("");
+        }}
+        bodyRef={bodyRef}
+      />
+    ) : (
+      <div className="flex h-full items-center justify-center p-8 text-center text-sm text-[var(--color-muted)]">
+        <p className="max-w-[40ch]">
+          Pick an item, or move along the list with J and K, and what was fetched for it shows here — so
+          you can tell an article from a paywall&apos;s stub before you keep it.
+        </p>
+      </div>
+    );
+
+  const bulkButton =
+    "inline-flex items-center gap-1.5 rounded-full px-3 py-1 text-sm transition disabled:opacity-30";
 
   return (
-    <div className="space-y-5" onKeyDown={onKey} tabIndex={-1}>
-      <header className="flex flex-wrap items-end justify-between gap-4">
-        <div>
-          <div className="flex items-baseline gap-3">
+    <div className="space-y-4" onKeyDown={onKey} tabIndex={-1}>
+      <div ref={heading} className="space-y-3">
+        <header className="flex flex-wrap items-center justify-between gap-x-4 gap-y-2">
+          <div className="flex min-w-0 items-baseline gap-3">
             <h1 className="font-serif text-3xl font-semibold">Inbox</h1>
             {count > 0 ? (
               <span className="rounded-full bg-[var(--color-accent)] px-2.5 py-0.5 text-sm font-medium text-white">
                 {count}
               </span>
             ) : null}
+            <p className="hidden min-w-0 truncate text-sm text-[var(--color-muted)] md:block">
+              {count === 0
+                ? "Nothing waiting. Everything the feeds brought in has been through you."
+                : "Pulled in and unread — nothing here has cost a token yet. Keeping one is what starts the reading."}
+            </p>
           </div>
-          <p className="mt-1 max-w-[62ch] text-sm text-[var(--color-muted)]">
-            {count === 0
-              ? "Nothing waiting. Everything the feeds brought in has been through you."
-              : "Pulled in and unread — nothing here has cost a token yet. Keeping one is what starts the reading."}
-          </p>
-        </div>
-        <div className="flex flex-wrap items-center gap-2">
-          {runId ? (
-            <RunChip
-              runId={runId}
-              onDone={() => {
-                setRunId(null);
-                router.refresh();
-              }}
-            />
-          ) : null}
-          <Link
-            href="/write?tab=starred"
-            className="inline-flex items-center gap-1.5 rounded-full border border-[var(--color-rule)] px-3 py-1.5 text-sm transition hover:border-[var(--color-accent)]"
-          >
-            <IconStar /> Starred
-          </Link>
-          <Link
-            href="/week"
-            className="inline-flex items-center gap-1.5 rounded-full border border-[var(--color-rule)] px-3 py-1.5 text-sm transition hover:border-[var(--color-accent)]"
-          >
-            <IconWeek /> This week
-          </Link>
-          <Link
-            href="/feeds"
-            className="inline-flex items-center gap-1.5 rounded-full border border-[var(--color-rule)] px-3 py-1.5 text-sm transition hover:border-[var(--color-accent)]"
-          >
-            <IconFeed /> Feeds
-          </Link>
-        </div>
-      </header>
+          <div className="flex flex-wrap items-center gap-2">
+            {runId ? (
+              <RunChip
+                runId={runId}
+                onDone={() => {
+                  setRunId(null);
+                  router.refresh();
+                }}
+              />
+            ) : null}
+            <Link
+              href="/write?tab=starred"
+              className="inline-flex items-center gap-1.5 rounded-full border border-[var(--color-rule)] px-3 py-1 text-sm transition hover:border-[var(--color-accent)]"
+            >
+              <IconStar /> Starred
+            </Link>
+            <Link
+              href="/week"
+              className="inline-flex items-center gap-1.5 rounded-full border border-[var(--color-rule)] px-3 py-1 text-sm transition hover:border-[var(--color-accent)]"
+            >
+              <IconWeek /> This week
+            </Link>
+            <Link
+              href="/feeds"
+              className="inline-flex items-center gap-1.5 rounded-full border border-[var(--color-rule)] px-3 py-1 text-sm transition hover:border-[var(--color-accent)]"
+            >
+              <IconFeed /> Feeds
+            </Link>
+          </div>
+        </header>
 
-      {!reviewOn ? (
-        <p className="rounded-lg border border-amber-300 bg-amber-50 px-3 py-2 text-sm text-amber-900">
-          Review is switched off in Settings, so feeds are reading everything they find straight away.
-          Anything below arrived before that was turned off.
-        </p>
-      ) : null}
+        {!reviewOn ? (
+          <p className="rounded-lg border border-amber-300 bg-amber-50 px-3 py-2 text-sm text-amber-900">
+            Review is switched off in Settings, so feeds are reading everything they find straight away.
+            Anything below arrived before that was turned off.
+          </p>
+        ) : null}
+      </div>
 
       {/* Out of the page's flow: a message arriving or clearing used to push
           the whole list up or down under the pointer. */}
-      {error ? (
-        <div
-          role="status"
-          className="fixed bottom-5 left-1/2 z-40 flex w-max max-w-[calc(100vw-2rem)] -translate-x-1/2 items-start gap-3 rounded-lg border border-red-300 bg-red-50 px-4 py-2.5 text-sm text-red-900 shadow-lg sm:max-w-xl"
-        >
-          <span>{error}</span>
-          <button
-            type="button"
-            onClick={() => setError(null)}
-            aria-label="Dismiss"
-            className="mt-0.5 shrink-0 opacity-60 transition hover:opacity-100"
-          >
-            <IconX size={14} />
-          </button>
-        </div>
-      ) : null}
-
-      {items.length > 0 || searched ? (
-        <>
-          {/* The action bar follows you down the page. The outlet chips that
-              sat above it are gone: a chip vanishing when its last item was
-              decided reflowed the row and moved the list. */}
-          <div className="sticky top-0 z-20 -mx-2 flex flex-wrap items-center gap-2 rounded-lg border border-[var(--color-rule)] bg-white/85 px-3 py-2 backdrop-blur">
-            <label className="relative flex min-w-[12rem] flex-1 basis-56 items-center sm:max-w-xs">
-              <IconFind size={14} className="pointer-events-none absolute start-2.5 text-[var(--color-muted)]" />
-              <input
-                ref={searchBox}
-                type="search"
-                value={query}
-                onChange={(e) => setQuery(e.target.value)}
-                onKeyDown={(e) => {
-                  if (e.key === "Escape") {
-                    setQuery("");
-                    e.currentTarget.blur();
-                  }
-                }}
-                placeholder="Search the inbox"
-                aria-label="Search the inbox — headlines, outlets and article text"
-                title="Headlines, outlets and the article text. / to jump here, Esc to clear."
-                className="w-full rounded-full border border-[var(--color-rule)] bg-white py-1 pe-20 ps-7 text-sm outline-none focus:border-[var(--color-accent)]"
-              />
-              {query.trim() ? (
-                <span className="pointer-events-none absolute end-3 text-[11px] text-[var(--color-muted)]">
-                  {searching || query.trim() !== searched
-                    ? "searching…"
-                    : `${items.length}${items.length >= 200 ? "+" : ""} found`}
-                </span>
-              ) : null}
-            </label>
-            <button
-              type="button"
-              disabled={busy || !selectedIds.length}
-              onClick={() => act("keep", selectedIds)}
-              className="inline-flex items-center gap-1.5 rounded-full bg-[var(--color-accent)] px-4 py-1.5 text-sm font-medium text-white transition disabled:opacity-30"
+      {error || lastDiscarded.length ? (
+        <div className="fixed bottom-5 left-1/2 z-40 flex w-max max-w-[calc(100vw-2rem)] -translate-x-1/2 flex-col items-center gap-2 sm:max-w-xl">
+          {lastDiscarded.length ? (
+            <div
+              role="status"
+              className="flex items-center gap-3 rounded-full bg-[var(--color-ink)] py-2 pe-3 ps-4 text-sm text-white shadow-lg"
             >
-              <IconCheck /> Keep{selectedIds.length ? ` ${selectedIds.length}` : ""}
-            </button>
-            <button
-              type="button"
-              disabled={busy || !selectedIds.length}
-              onClick={() => act("file", selectedIds)}
-              title="Read into the library, but leave out of the brief"
-              className="inline-flex items-center gap-1.5 rounded-full border border-[var(--color-accent)]/50 px-4 py-1.5 text-sm text-[var(--color-accent)] transition hover:bg-[var(--color-accent-soft)] disabled:opacity-30"
-            >
-              <IconShelf /> File{selectedIds.length ? ` ${selectedIds.length}` : ""}
-            </button>
-            <button
-              type="button"
-              disabled={busy || !selectedIds.length}
-              onClick={() => act("discard", selectedIds)}
-              className="inline-flex items-center gap-1.5 rounded-full border border-[var(--color-rule)] px-4 py-1.5 text-sm transition hover:border-red-400 hover:text-red-700 disabled:opacity-30"
-            >
-              <IconX /> Discard{selectedIds.length ? ` ${selectedIds.length}` : ""}
-            </button>
-            <span className="mx-1 h-4 w-px bg-[var(--color-rule)]" />
-            <button
-              type="button"
-              onClick={() => setSelected(new Set(visibleIds))}
-              className="inline-flex items-center gap-1 text-xs text-[var(--color-muted)] transition hover:text-[var(--color-accent)]"
-            >
-              <IconSelectAll size={14} /> Select all{searched ? " found" : ""}
-            </button>
-            {selectedIds.length ? (
-              <button
-                type="button"
-                onClick={() => setSelected(new Set())}
-                className="text-xs text-[var(--color-muted)] transition hover:text-[var(--color-accent)]"
-              >
-                Clear
-              </button>
-            ) : null}
-            {lastDiscarded.length ? (
+              <span>
+                Discarded {lastDiscarded.length === 1 ? "one" : lastDiscarded.length}
+              </span>
               <button
                 type="button"
                 disabled={busy}
                 onClick={() => act("undo", lastDiscarded)}
-                className="inline-flex items-center gap-1 text-xs text-[var(--color-accent)] hover:underline"
+                className="inline-flex items-center gap-1 font-medium text-amber-200 hover:underline disabled:opacity-50"
               >
-                <IconUndo size={14} /> Undo {lastDiscarded.length}
+                <IconUndo size={14} /> Undo
               </button>
-            ) : null}
-            <span className="ml-auto hidden text-xs text-[var(--color-muted)] sm:inline">
-              <kbd className="rounded border border-[var(--color-rule)] px-1">/</kbd> search ·{" "}
-              <kbd className="rounded border border-[var(--color-rule)] px-1">j</kbd>{" "}
-              <kbd className="rounded border border-[var(--color-rule)] px-1">k</kbd> move ·{" "}
-              <kbd className="rounded border border-[var(--color-rule)] px-1">↵</kbd> keep ·{" "}
-              <kbd className="rounded border border-[var(--color-rule)] px-1">f</kbd> file ·{" "}
-              <kbd className="rounded border border-[var(--color-rule)] px-1">d</kbd> discard ·{" "}
-              <kbd className="rounded border border-[var(--color-rule)] px-1">s</kbd> star ·{" "}
-              <kbd className="rounded border border-[var(--color-rule)] px-1">p</kbd> paste ·{" "}
-              <kbd className="rounded border border-[var(--color-rule)] px-1">v</kbd> page ·{" "}
-              <kbd className="rounded border border-[var(--color-rule)] px-1">o</kbd> open
-            </span>
-          </div>
-        </>
+              <button
+                type="button"
+                onClick={() => setLastDiscarded([])}
+                aria-label="Dismiss"
+                className="opacity-60 transition hover:opacity-100"
+              >
+                <IconX size={14} />
+              </button>
+            </div>
+          ) : null}
+          {error ? (
+            <div
+              role="status"
+              className="flex items-start gap-3 rounded-lg border border-red-300 bg-red-50 px-4 py-2.5 text-sm text-red-900 shadow-lg"
+            >
+              <span>{error}</span>
+              <button
+                type="button"
+                onClick={() => setError(null)}
+                aria-label="Dismiss"
+                className="mt-0.5 shrink-0 opacity-60 transition hover:opacity-100"
+              >
+                <IconX size={14} />
+              </button>
+            </div>
+          ) : null}
+        </div>
       ) : null}
 
-      {items.length === 0 && searched ? (
-        <div className="rounded-xl border border-dashed border-[var(--color-rule)] px-6 py-16 text-center">
-          <p className="font-serif text-xl">Nothing in the inbox matches “{searched}”</p>
-          <p className="mx-auto mt-2 max-w-[46ch] text-sm text-[var(--color-muted)]">
-            Headlines, outlets and the text of every article waiting here were searched.{" "}
-            <button type="button" onClick={() => setQuery("")} className="underline hover:text-[var(--color-accent)]">
-              Clear the search
-            </button>
-          </p>
-        </div>
-      ) : items.length === 0 ? (
+      {!hasDesk ? (
         <div className="rounded-xl border border-dashed border-[var(--color-rule)] px-6 py-16 text-center">
           <p className="font-serif text-xl">Nothing waiting</p>
           <p className="mx-auto mt-2 max-w-[46ch] text-sm text-[var(--color-muted)]">
@@ -785,249 +781,275 @@ export default function Inbox({
           </p>
         </div>
       ) : (
-        // Half and half once there is room for it: the pane is where an item is
-        // actually read, and a 24rem column made that a scroll through a narrow
-        // strip. Below xl the page leaves under 800px beside the sidebar, and
-        // halving that squeezes the rows until their buttons wrap, so the list
-        // keeps the larger share there.
-        <div className="lg:grid lg:grid-cols-[minmax(0,1fr)_minmax(19rem,24rem)] lg:items-start lg:gap-5 xl:grid-cols-2">
-          <div className="space-y-3">
-            {groups.map((group) => {
-              const many = group.items.length > 1;
-              return (
-                <section
-                  key={group.key}
-                  className={`overflow-hidden rounded-xl border transition ${
-                    many ? "border-[var(--color-accent)]/40 bg-[var(--color-accent-soft)]/20" : "border-[var(--color-rule)]"
-                  }`}
-                >
-                  {many ? (
-                    <div className="flex flex-wrap items-center gap-2 border-b border-[var(--color-rule)] bg-[var(--color-accent-soft)]/40 px-4 py-2">
-                      <span className="text-sm font-medium">
-                        {group.storyId ? (
-                          <Link href={`/stories/${group.storyId}`} className="hover:text-[var(--color-accent)]">
-                            {group.title}
-                          </Link>
-                        ) : (
-                          group.title
-                        )}
-                      </span>
-                      <span className="text-xs text-[var(--color-muted)]">
-                        {group.items.length} accounts of one story
-                        {group.items[0].story_accounts > group.items.length
-                          ? `, ${group.items[0].story_accounts - group.items.length} already kept`
-                          : ""}
-                      </span>
-                      <button
-                        type="button"
-                        onClick={() => selectGroup(group)}
-                        className="ml-auto inline-flex items-center gap-1 text-xs text-[var(--color-muted)] transition hover:text-[var(--color-accent)]"
-                      >
-                        <IconSelectAll size={14} /> Select all
-                      </button>
-                    </div>
+        // The list takes the smaller share now that its rows are compact; the
+        // pane is where an item is actually read.
+        <div
+          ref={desk}
+          style={deskTop !== null ? { height: `max(30rem, calc(100dvh - ${deskTop}px - 2rem - 1px))` } : undefined}
+          className="lg:grid lg:grid-cols-[minmax(20rem,5fr)_minmax(0,7fr)] lg:grid-rows-[minmax(0,1fr)] lg:gap-4"
+        >
+          <div className="lg:flex lg:min-h-0 lg:flex-col lg:overflow-hidden lg:rounded-xl lg:border lg:border-[var(--color-rule)] lg:bg-white">
+            {/* One bar, two states: search while nothing is selected, and what
+                to do with the selection once something is. On a phone it
+                follows you down the page; on the desk it simply stays put. */}
+            <div className="sticky top-0 z-20 flex min-h-[2.9rem] items-center gap-2.5 rounded-lg border border-[var(--color-rule)] bg-white/90 px-3 py-1.5 backdrop-blur lg:static lg:rounded-none lg:border-0 lg:border-b lg:bg-white lg:backdrop-blur-none">
+              <input
+                type="checkbox"
+                ref={(el) => {
+                  if (el) el.indeterminate = someChosen;
+                }}
+                checked={allChosen}
+                disabled={!visibleIds.length}
+                onChange={() => setSelected(allChosen || someChosen ? new Set() : new Set(visibleIds))}
+                title={allChosen || someChosen ? "Clear the selection" : searched ? "Select all found" : "Select all"}
+                aria-label={searched ? "Select all found" : "Select all"}
+                className="h-4 w-4 shrink-0 accent-[var(--color-accent)]"
+              />
+              {selectedIds.length ? (
+                <div className="flex min-w-0 flex-1 flex-wrap items-center gap-2">
+                  <span className="me-1 text-sm font-medium">{selectedIds.length} selected</span>
+                  <button
+                    type="button"
+                    disabled={busy}
+                    onClick={() => act("keep", selectedIds)}
+                    className={`${bulkButton} bg-[var(--color-accent)] font-medium text-white`}
+                  >
+                    <IconCheck /> Keep
+                  </button>
+                  <button
+                    type="button"
+                    disabled={busy}
+                    onClick={() => act("file", selectedIds)}
+                    title="Read into the library, but leave out of the brief"
+                    className={`${bulkButton} border border-[var(--color-accent)]/50 text-[var(--color-accent)] hover:bg-[var(--color-accent-soft)]`}
+                  >
+                    <IconShelf /> File
+                  </button>
+                  <button
+                    type="button"
+                    disabled={busy}
+                    onClick={() => act("discard", selectedIds)}
+                    className={`${bulkButton} border border-[var(--color-rule)] hover:border-red-400 hover:text-red-700`}
+                  >
+                    <IconX /> Discard
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => setSelected(new Set())}
+                    className="ms-auto text-xs text-[var(--color-muted)] transition hover:text-[var(--color-accent)]"
+                  >
+                    Clear
+                  </button>
+                </div>
+              ) : (
+                <label className="relative flex min-w-0 flex-1 items-center">
+                  <IconFind size={14} className="pointer-events-none absolute start-2.5 text-[var(--color-muted)]" />
+                  <input
+                    ref={searchBox}
+                    type="search"
+                    value={query}
+                    onChange={(e) => setQuery(e.target.value)}
+                    onKeyDown={(e) => {
+                      if (e.key === "Escape") {
+                        setQuery("");
+                        e.currentTarget.blur();
+                      }
+                    }}
+                    placeholder="Search the inbox"
+                    aria-label="Search the inbox — headlines, outlets and article text"
+                    title="Headlines, outlets and the article text. / to jump here, Esc to clear."
+                    className="w-full rounded-full border border-[var(--color-rule)] bg-white py-1 pe-20 ps-7 text-sm outline-none focus:border-[var(--color-accent)]"
+                  />
+                  {query.trim() ? (
+                    <span className="pointer-events-none absolute end-3 text-[11px] text-[var(--color-muted)]">
+                      {searching || query.trim() !== searched
+                        ? "searching…"
+                        : `${items.length}${items.length >= 200 ? "+" : ""} found`}
+                    </span>
                   ) : null}
+                </label>
+              )}
+            </div>
 
-                  <ul className="divide-y divide-[var(--color-rule)]">
-                    {group.items.map((item) => {
-                      const isCursor = current?.id === item.id;
-                      const chosen = selected.has(item.id);
-                      // Not "did the fetch return something" but "is there an
-                      // article here": a paywalled piece arrives as its headline
-                      // and a sentence, which is a citation that opens on nothing.
-                      const thin = item.chars < ENOUGH_TO_READ;
-                      return (
-                        <li
-                          key={item.id}
-                          // A click on the row, not a hover: the pane used to
-                          // follow the mouse, which meant reading it while
-                          // moving to a button changed what it showed. The
-                          // row's own links, buttons and checkbox keep their
-                          // clicks; anywhere else on the row picks the item.
-                          onClick={(e) => {
-                            if ((e.target as HTMLElement).closest("a, button, input, textarea, label")) return;
-                            setCurrentId(item.id);
-                          }}
-                          className={`group relative cursor-pointer px-4 py-3 transition ${
-                            chosen ? "bg-[var(--color-accent-soft)]/60" : "hover:bg-[var(--color-accent-soft)]/25"
-                          }`}
-                        >
-                          {isCursor ? (
-                            <span className="absolute inset-y-0 left-0 w-[3px] bg-[var(--color-accent)]" />
-                          ) : null}
+            <div
+              ref={listBox}
+              className="mt-3 overflow-hidden rounded-xl border border-[var(--color-rule)] bg-white lg:mt-0 lg:min-h-0 lg:flex-1 lg:overflow-y-auto lg:overscroll-contain lg:rounded-none lg:border-0"
+            >
+              {items.length === 0 ? (
+                <div className="px-6 py-16 text-center">
+                  <p className="font-serif text-xl">Nothing in the inbox matches “{searched}”</p>
+                  <p className="mx-auto mt-2 max-w-[46ch] text-sm text-[var(--color-muted)]">
+                    Headlines, outlets and the text of every article waiting here were searched.{" "}
+                    <button type="button" onClick={() => setQuery("")} className="underline hover:text-[var(--color-accent)]">
+                      Clear the search
+                    </button>
+                  </p>
+                </div>
+              ) : (
+                groups.map((group) => {
+                  const many = group.items.length > 1;
+                  return (
+                    <section key={group.key} className="border-b border-[var(--color-rule)] last:border-b-0">
+                      {many ? (
+                        <div className="flex items-center gap-2 bg-[var(--color-accent-soft)]/45 px-3 py-1.5 text-xs">
+                          <span className="min-w-0 truncate font-medium text-[var(--color-ink)]">
+                            {group.storyId ? (
+                              <Link href={`/stories/${group.storyId}`} className="hover:text-[var(--color-accent)]">
+                                {group.title}
+                              </Link>
+                            ) : (
+                              group.title
+                            )}
+                          </span>
+                          <span className="shrink-0 text-[var(--color-muted)]">
+                            {group.items.length} accounts
+                            {group.items[0].story_accounts > group.items.length
+                              ? ` · ${group.items[0].story_accounts - group.items.length} kept`
+                              : ""}
+                          </span>
+                          <button
+                            type="button"
+                            onClick={() => selectGroup(group)}
+                            className="ms-auto inline-flex shrink-0 items-center gap-1 text-[var(--color-muted)] transition hover:text-[var(--color-accent)]"
+                          >
+                            <IconSelectAll size={14} /> Select
+                          </button>
+                        </div>
+                      ) : null}
 
-                          <div className="flex gap-3">
-                            <input
-                              type="checkbox"
-                              checked={chosen}
-                              onChange={() => toggle(item.id)}
-                              className="mt-1.5 h-4 w-4 shrink-0 accent-[var(--color-accent)]"
-                              aria-label={`Select ${item.title}`}
-                            />
+                      <ul
+                        className={`divide-y divide-[var(--color-rule)]/70 ${
+                          many ? "border-s-2 border-[var(--color-accent)]/35" : ""
+                        }`}
+                      >
+                        {group.items.map((item) => {
+                          const isCursor = current?.id === item.id;
+                          const chosen = selected.has(item.id);
+                          // Not "did the fetch return something" but "is there an
+                          // article here": a paywalled piece arrives as its headline
+                          // and a sentence, which is a citation that opens on nothing.
+                          const thin = item.chars < ENOUGH_TO_READ;
+                          const picture = pictureOf(item);
+                          const lede =
+                            item.lede ??
+                            (item.summary
+                              ? item.summary.replace(/<[^>]+>/g, " ").replace(/\s+/g, " ").trim().slice(0, 400)
+                              : "The page would not open — paste the article in and it becomes a real source.");
+                          return (
+                            <li
+                              key={item.id}
+                              data-item={item.id}
+                              // A click on the row, not a hover: the pane used to
+                              // follow the mouse, which meant reading it while
+                              // moving to a button changed what it showed. The
+                              // checkbox keeps its click; anywhere else on the row
+                              // picks the item, and on a phone opens it.
+                              onClick={(e) => {
+                                if ((e.target as HTMLElement).closest("a, button, input, textarea, label")) return;
+                                setCurrentId(item.id);
+                                if (!wide) setSheet(true);
+                              }}
+                              className={`relative flex scroll-mt-16 cursor-pointer gap-3 px-3 py-2.5 transition ${
+                                isCursor
+                                  ? "bg-[var(--color-accent-soft)]/55"
+                                  : chosen
+                                    ? "bg-[var(--color-accent-soft)]/30"
+                                    : "hover:bg-[var(--color-accent-soft)]/20"
+                              }`}
+                            >
+                              {isCursor ? (
+                                <span className="absolute inset-y-0 start-0 w-[3px] bg-[var(--color-accent)]" />
+                              ) : null}
 
-                            <div className="min-w-0 flex-1">
-                              <div className="flex flex-wrap items-baseline gap-x-2">
-                                <h2 className="font-medium leading-snug">
-                                  {item.url ? (
-                                    <a
-                                      href={item.url}
-                                      target="_blank"
-                                      rel="noreferrer"
-                                      className="transition hover:text-[var(--color-accent)]"
-                                      title="Open it on the outlet's own site"
-                                    >
-                                      {item.title}
-                                    </a>
-                                  ) : (
-                                    item.title
-                                  )}
+                              <input
+                                type="checkbox"
+                                checked={chosen}
+                                onChange={() => toggle(item.id)}
+                                className="mt-1 h-4 w-4 shrink-0 accent-[var(--color-accent)]"
+                                aria-label={`Select ${item.title}`}
+                              />
+
+                              <div className="min-w-0 flex-1">
+                                <h2 dir={dirOf(item.title)} className="line-clamp-2 text-[0.95rem] font-medium leading-snug">
+                                  {item.title}
+                                  {item.starred ? (
+                                    <span title="Starred — on the Write page's Starred tab" className="ms-1.5 inline-block align-[-1px] text-amber-500">
+                                      <IconStar size={12} fill="currentColor" />
+                                    </span>
+                                  ) : null}
                                 </h2>
-                                {item.starred ? (
-                                  <span title="Starred — on the Write page's Starred tab" className="self-center text-amber-500">
-                                    <IconStar size={13} fill="currentColor" />
-                                  </span>
-                                ) : null}
-                                <span className="text-xs text-[var(--color-muted)]">
-                                  {item.outlet ?? item.feed_title}
-                                  {item.published_at ? ` · ${relativeDate(item.published_at)}` : ""}
-                                </span>
-                                {foundInText(item) ? (
-                                  <span
-                                    title="The words are in the article's text rather than the headline"
-                                    className="rounded-full bg-sky-50 px-2 py-0.5 text-[11px] text-sky-800"
-                                  >
-                                    found in the text
-                                  </span>
-                                ) : null}
-                                {thin ? (
-                                  <span className="rounded-full bg-amber-100 px-2 py-0.5 text-[11px] text-amber-800">
-                                    paste the article to keep it
-                                  </span>
-                                ) : null}
-                                {item.note === "Full text pasted in." || item.note === "Full text clipped from the browser." ? (
-                                  <span className="rounded-full bg-emerald-100 px-2 py-0.5 text-[11px] text-emerald-800">
-                                    full text
-                                  </span>
-                                ) : null}
+
+                                <div className="mt-0.5 flex flex-wrap items-center gap-x-1.5 gap-y-1 text-xs text-[var(--color-muted)]">
+                                  <span className="max-w-[16rem] truncate">{item.outlet ?? item.feed_title}</span>
+                                  {item.published_at ? <span>· {relativeDate(item.published_at)}</span> : null}
+                                  {foundInText(item) ? (
+                                    <span
+                                      title="The words are in the article's text rather than the headline"
+                                      className="rounded-full bg-sky-50 px-1.5 py-px text-[11px] text-sky-800"
+                                    >
+                                      found in the text
+                                    </span>
+                                  ) : null}
+                                  {thin ? (
+                                    <span
+                                      title="There is no article behind this yet — paste it in to keep it"
+                                      className="rounded-full bg-amber-100 px-1.5 py-px text-[11px] text-amber-800"
+                                    >
+                                      paste to keep
+                                    </span>
+                                  ) : null}
+                                  {item.note === "Full text pasted in." || item.note === "Full text clipped from the browser." ? (
+                                    <span className="rounded-full bg-emerald-100 px-1.5 py-px text-[11px] text-emerald-800">
+                                      full text
+                                    </span>
+                                  ) : null}
+                                </div>
+
+                                <p
+                                  dir={dirOf(lede)}
+                                  className="mt-1 line-clamp-2 text-[0.8rem] leading-snug text-[var(--color-muted)]"
+                                >
+                                  {lede}
+                                </p>
                               </div>
 
-                              <p className="mt-1 text-sm leading-relaxed text-[var(--color-muted)]">
-                                {item.lede ??
-                                  (item.summary
-                                    ? item.summary.replace(/<[^>]+>/g, " ").replace(/\s+/g, " ").trim().slice(0, 400)
-                                    : "The page would not open — paste the article in and it becomes a real source.")}
-                              </p>
+                              {picture ? <Thumb src={picture} /> : null}
+                            </li>
+                          );
+                        })}
+                      </ul>
+                    </section>
+                  );
+                })
+              )}
+            </div>
 
-                              {pasting === item.id ? <div className="mt-3 lg:hidden">{pasteBox(item)}</div> : null}
-
-                              <div className="mt-1.5 flex flex-wrap items-center gap-x-3 gap-y-1 text-xs text-[var(--color-muted)]">
-                                <span title={formatDateTime(item.seen_at)}>pulled {relativeDate(item.seen_at)}</span>
-                                {item.chunks > 0 ? (
-                                  <span>
-                                    {item.chunks} passage{item.chunks === 1 ? "" : "s"}
-                                  </span>
-                                ) : null}
-                                {item.reliability ? <span className="italic">{item.reliability}</span> : null}
-
-                                <span className="ms-auto flex items-center gap-2.5 opacity-0 transition group-hover:opacity-100 focus-within:opacity-100">
-                                  <button
-                                    type="button"
-                                    onClick={() => {
-                                      setCurrentId(item.id);
-                                      setSheet(true);
-                                    }}
-                                    title="See what was fetched"
-                                    className="inline-flex items-center gap-1 transition hover:text-[var(--color-accent)] lg:hidden"
-                                  >
-                                    <IconEye /> Preview
-                                  </button>
-                                  <button
-                                    type="button"
-                                    disabled={busy}
-                                    onClick={() => {
-                                      setPasting(pasting === item.id ? null : item.id);
-                                      setPasted("");
-                                    }}
-                                    title="Replace the text with the article, pasted from where you are signed in"
-                                    className="inline-flex items-center gap-1 transition hover:text-[var(--color-accent)]"
-                                  >
-                                    <IconClipboard /> Paste text
-                                  </button>
-                                  <button
-                                    type="button"
-                                    disabled={item.source_id === null}
-                                    onClick={() => void star(item)}
-                                    title={item.starred ? "Unstar" : "Star it for a closer look — listed on the Write page"}
-                                    className={`inline-flex items-center gap-1 transition hover:text-amber-600 disabled:opacity-30 ${
-                                      item.starred ? "text-amber-600" : ""
-                                    }`}
-                                  >
-                                    <IconStar fill={item.starred ? "currentColor" : "none"} /> {item.starred ? "Starred" : "Star"}
-                                  </button>
-                                  <button
-                                    type="button"
-                                    disabled={busy}
-                                    onClick={() => act("discard", [item.id])}
-                                    title="Not worth reading"
-                                    className="inline-flex items-center gap-1 transition hover:text-red-700"
-                                  >
-                                    <IconX /> Discard
-                                  </button>
-                                  <button
-                                    type="button"
-                                    disabled={busy || thin}
-                                    onClick={() => act("file", [item.id])}
-                                    title={
-                                      thin
-                                        ? "There is no article behind this yet — paste it in first"
-                                        : "Read it into the library, but keep it out of the brief"
-                                    }
-                                    className="inline-flex items-center gap-1 transition hover:text-[var(--color-accent)] disabled:opacity-30"
-                                  >
-                                    <IconShelf /> File
-                                  </button>
-                                  <button
-                                    type="button"
-                                    disabled={busy || thin}
-                                    title={
-                                      thin
-                                        ? "There is no article behind this yet — paste it in first"
-                                        : "Read it into the pedia"
-                                    }
-                                    onClick={() => act("keep", [item.id])}
-                                    className="inline-flex items-center gap-1 rounded-full bg-[var(--color-accent)] px-3 py-1 font-medium text-white transition disabled:opacity-30"
-                                  >
-                                    <IconCheck /> Keep
-                                  </button>
-                                </span>
-                              </div>
-                            </div>
-
-                            {pictureOf(item) ? <Thumb src={pictureOf(item)!} /> : null}
-                          </div>
-                        </li>
-                      );
-                    })}
-                  </ul>
-                </section>
-              );
-            })}
+            {/* One line, whatever the width: the rest are in the buttons' tooltips. */}
+            <p
+              title="J/K move · Enter keep · F file · D discard · S star · X select · P paste · V page · O open · / search"
+              className="hidden shrink-0 overflow-hidden text-ellipsis whitespace-nowrap border-t border-[var(--color-rule)] px-3 py-1.5 text-[11px] text-[var(--color-muted)] lg:block"
+            >
+              <kbd className="rounded border border-[var(--color-rule)] px-1">j</kbd>{" "}
+              <kbd className="rounded border border-[var(--color-rule)] px-1">k</kbd> move ·{" "}
+              <kbd className="rounded border border-[var(--color-rule)] px-1">↵</kbd> keep ·{" "}
+              <kbd className="rounded border border-[var(--color-rule)] px-1">f</kbd> file ·{" "}
+              <kbd className="rounded border border-[var(--color-rule)] px-1">d</kbd> discard ·{" "}
+              <kbd className="rounded border border-[var(--color-rule)] px-1">s</kbd> star ·{" "}
+              <kbd className="rounded border border-[var(--color-rule)] px-1">p</kbd> paste ·{" "}
+              <kbd className="rounded border border-[var(--color-rule)] px-1">v</kbd> page
+            </p>
           </div>
 
-          {/* The pane. Sticky under the action bar; scrolls on its own. One
-              fixed height, so it does not shrink and regrow between articles. */}
-          <aside
-            ref={paneBox}
-            className="sticky top-14 hidden h-[calc(100vh-4.5rem)] overflow-y-auto rounded-xl border border-[var(--color-rule)] bg-white lg:block"
-          >
-            {pane}
+          {/* The pane. Its heading and buttons hold still; only the article scrolls. */}
+          <aside className="hidden min-h-0 overflow-hidden rounded-xl border border-[var(--color-rule)] bg-white lg:block">
+            {pane(paneBody)}
           </aside>
         </div>
       )}
 
-      {sheet && current ? (
+      {sheet && current && !wide ? (
         <Modal label={current.title} onClose={() => setSheet(false)} width="max-w-2xl" className="max-h-[85vh] overflow-y-auto !p-0">
-          {pane}
+          {pane()}
         </Modal>
       ) : null}
     </div>
@@ -1066,19 +1088,22 @@ function pictureOf(item: Item): string | null {
  *
  * The sandbox leaves out top navigation, so a page that tries to break out of
  * its frame cannot carry Corpus away with it.
+ *
+ * On the desk the frame fills whatever the pane has below its heading; in the
+ * phone's sheet, which has no height of its own, it takes most of the screen.
  */
 function PageView({ url }: { url: string }) {
   return (
-    <div className="space-y-1.5 border-t border-[var(--color-rule)] pt-3">
+    <div className="flex min-h-0 flex-1 flex-col gap-1.5">
       <iframe
         key={url}
         src={url}
         title="The article's own page"
         sandbox="allow-scripts allow-same-origin allow-forms allow-popups allow-popups-to-escape-sandbox allow-storage-access-by-user-activation"
         referrerPolicy="no-referrer"
-        className="h-[calc(100vh-17rem)] min-h-[24rem] w-full rounded-lg border border-[var(--color-rule)] bg-white"
+        className="min-h-[60vh] w-full flex-1 rounded-lg border border-[var(--color-rule)] bg-white lg:min-h-[16rem]"
       />
-      <p className="text-[11px] leading-snug text-[var(--color-muted)]">
+      <p className="shrink-0 text-[11px] leading-snug text-[var(--color-muted)]">
         Blank? The site refuses to be shown inside another page — the Corpus Inbox extension lifts that from
         version 0.3.0 — or{" "}
         <a href={url} target="_blank" rel="noreferrer" className="underline hover:text-[var(--color-accent)]">
@@ -1108,8 +1133,8 @@ function Thumb({ src, large = false }: { src: string; large?: boolean }) {
           ? // A fixed height rather than a ratio: the space is held before the
             // picture arrives, so the text does not drop when it loads, and at
             // half the page a 16:9 picture stood over 300px tall.
-            "h-56 w-full object-cover"
-          : "h-[4.5rem] w-28 shrink-0 self-start rounded-md object-cover ring-1 ring-black/10"
+            "mb-4 h-48 w-full rounded-lg object-cover"
+          : "h-14 w-20 shrink-0 self-start rounded-md bg-[var(--color-accent-soft)]/40 object-cover ring-1 ring-black/10"
       }
     />
   );
@@ -1120,6 +1145,11 @@ function Thumb({ src, large = false }: { src: string; large?: boolean }) {
  *
  * The verdict comes from the server under the same rule keep() applies, so
  * the pane can never say "enough" about something the keep would refuse.
+ *
+ * Two parts: a heading that holds still — what it is, where from, the verdict
+ * and the buttons — and the article under it, which is all that scrolls. The
+ * buttons used to sit under a picture and the verdict, most of a screen down
+ * from where the article's title was clicked.
  */
 function Preview({
   item,
@@ -1136,6 +1166,7 @@ function Preview({
   onStar,
   view,
   onView,
+  bodyRef,
 }: {
   item: Item;
   text: HeldText | null;
@@ -1151,76 +1182,63 @@ function Preview({
   onStar: () => void;
   view: PaneView;
   onView: (view: PaneView) => void;
+  bodyRef?: React.Ref<HTMLDivElement>;
 }) {
   const verdict = text?.verdict ?? (item.chars < ENOUGH_TO_READ ? "thin" : "enough");
   const body = text ? text.passages.map((p) => p.text).join("\n\n") : "";
+  const showPage = view === "page" && Boolean(item.url);
+  const meta = [
+    item.outlet ?? item.feed_title,
+    item.published_at ? formatDateTime(item.published_at) : null,
+    `pulled ${relativeDate(item.seen_at)}`,
+    item.reliability,
+  ].filter(Boolean);
+  const button = "inline-flex items-center gap-1.5 rounded-full px-3 py-1 text-sm transition disabled:opacity-30";
+
   return (
-    <div>
-      {view === "text" && pictureOf(item) ? <Thumb src={pictureOf(item)!} large /> : null}
-      <div className="space-y-3 p-4">
+    <div className="flex h-full min-h-0 flex-col">
+      <div className="shrink-0 space-y-2.5 border-b border-[var(--color-rule)] p-4 pb-3">
         <div>
-          <h2 className="font-serif text-lg font-semibold leading-snug">
+          <h2 dir={dirOf(item.title)} className="font-serif text-lg font-semibold leading-snug">
             {item.url ? (
-              <a href={item.url} target="_blank" rel="noreferrer" className="hover:text-[var(--color-accent)]">
+              <a href={item.url} target="_blank" rel="noreferrer" className="hover:text-[var(--color-accent)]" title="Open it on the outlet's own site (O)">
                 {item.title} <IconExternal size={14} className="inline align-baseline opacity-60" />
               </a>
             ) : (
               item.title
             )}
           </h2>
-          <p className="mt-0.5 text-xs text-[var(--color-muted)]">
-            {item.outlet ?? item.feed_title}
-            {item.published_at ? ` · ${formatDateTime(item.published_at)}` : ""}
-          </p>
-        </div>
-
-        {item.url ? (
-          <div role="tablist" aria-label="What the pane shows" className="inline-flex rounded-full border border-[var(--color-rule)] p-0.5 text-xs">
-            {(["text", "page"] as const).map((v) => (
-              <button
-                key={v}
-                type="button"
-                role="tab"
-                aria-selected={view === v}
-                onClick={() => onView(v)}
-                title={v === "text" ? "The text Corpus fetched (V)" : "The article's own page, live, inside Corpus (V)"}
-                className={`rounded-full px-3 py-1 transition ${
-                  view === v ? "bg-[var(--color-ink)] text-white" : "text-[var(--color-muted)] hover:text-[var(--color-ink)]"
-                }`}
-              >
-                {v === "text" ? "Fetched text" : "Page"}
-              </button>
-            ))}
+          <div className="mt-1 flex flex-wrap items-center justify-between gap-2">
+            <p className="min-w-0 text-xs text-[var(--color-muted)]">{meta.join(" · ")}</p>
+            {item.url ? (
+              <div role="tablist" aria-label="What the pane shows" className="inline-flex shrink-0 rounded-full border border-[var(--color-rule)] p-0.5 text-xs">
+                {(["text", "page"] as const).map((v) => (
+                  <button
+                    key={v}
+                    type="button"
+                    role="tab"
+                    aria-selected={view === v}
+                    onClick={() => onView(v)}
+                    title={v === "text" ? "The text Corpus fetched (V)" : "The article's own page, live, inside Corpus (V)"}
+                    className={`rounded-full px-2.5 py-0.5 transition ${
+                      view === v ? "bg-[var(--color-ink)] text-white" : "text-[var(--color-muted)] hover:text-[var(--color-ink)]"
+                    }`}
+                  >
+                    {v === "text" ? "Fetched text" : "Page"}
+                  </button>
+                ))}
+              </div>
+            ) : null}
           </div>
-        ) : null}
-
-        {verdict === "enough" ? (
-          <p className="rounded-lg border border-emerald-200 bg-emerald-50 px-3 py-2 text-sm text-emerald-900">
-            <IconCheck className="mr-1 inline align-[-2px]" />
-            Enough to read
-            {text ? ` — ${text.words.toLocaleString()} words in ${text.passages.length} passage${text.passages.length === 1 ? "" : "s"}` : ""}
-            . Keeping it reads all of this.
-          </p>
-        ) : verdict === "summary" ? (
-          <p className="rounded-lg border border-amber-300 bg-amber-50 px-3 py-2 text-sm text-amber-900">
-            <IconText className="mr-1 inline align-[-2px]" />
-            Only the feed&apos;s summary is here — the page would not open. Paste the article to keep
-            it.
-          </p>
-        ) : (
-          <p className="rounded-lg border border-amber-300 bg-amber-50 px-3 py-2 text-sm text-amber-900">
-            <IconText className="mr-1 inline align-[-2px]" />
-            Too little to be an article
-            {text ? ` — ${text.words.toLocaleString()} words` : ""}. Paste the article to keep it.
-          </p>
-        )}
+        </div>
 
         <div className="flex flex-wrap items-center gap-2">
           <button
             type="button"
             disabled={busy || verdict !== "enough"}
             onClick={onKeep}
-            className="inline-flex items-center gap-1.5 rounded-full bg-[var(--color-accent)] px-3 py-1.5 text-sm font-medium text-white transition disabled:opacity-30"
+            title="Read it into the pedia and the brief (Enter)"
+            className={`${button} bg-[var(--color-accent)] font-medium text-white`}
           >
             <IconCheck /> Keep
           </button>
@@ -1228,8 +1246,8 @@ function Preview({
             type="button"
             disabled={busy || verdict !== "enough"}
             onClick={onFile}
-            title="Read it into the library, but keep it out of the brief — for the piece that belongs in the pedia and not in the morning"
-            className="inline-flex items-center gap-1.5 rounded-full border border-[var(--color-accent)]/50 px-3 py-1.5 text-sm text-[var(--color-accent)] transition hover:bg-[var(--color-accent-soft)] disabled:opacity-30"
+            title="Read it into the library, but keep it out of the brief — for the piece that belongs in the pedia and not in the morning (F)"
+            className={`${button} border border-[var(--color-accent)]/50 text-[var(--color-accent)] hover:bg-[var(--color-accent-soft)]`}
           >
             <IconShelf /> File
           </button>
@@ -1237,7 +1255,8 @@ function Preview({
             type="button"
             disabled={busy}
             onClick={onDiscard}
-            className="inline-flex items-center gap-1.5 rounded-full border border-[var(--color-rule)] px-3 py-1.5 text-sm transition hover:border-red-400 hover:text-red-700 disabled:opacity-30"
+            title="Not worth reading (D)"
+            className={`${button} border border-[var(--color-rule)] hover:border-red-400 hover:text-red-700`}
           >
             <IconX /> Discard
           </button>
@@ -1245,8 +1264,8 @@ function Preview({
             type="button"
             disabled={item.source_id === null}
             onClick={onStar}
-            title={starred ? "Unstar" : "Star it for a closer look — listed on the Write page, whatever you decide here"}
-            className={`inline-flex items-center gap-1.5 rounded-full border px-3 py-1.5 text-sm transition disabled:opacity-30 ${
+            title={starred ? "Unstar (S)" : "Star it for a closer look — listed on the Write page, whatever you decide here (S)"}
+            className={`${button} border ${
               starred
                 ? "border-amber-400 bg-amber-50 text-amber-700"
                 : "border-[var(--color-rule)] hover:border-amber-400 hover:text-amber-700"
@@ -1258,7 +1277,8 @@ function Preview({
             type="button"
             disabled={busy}
             onClick={onPaste}
-            className={`inline-flex items-center gap-1.5 rounded-full border px-3 py-1.5 text-sm transition disabled:opacity-30 ${
+            title="Replace the text with the article, pasted from where you are signed in (P)"
+            className={`${button} border ${
               pasting ? "border-[var(--color-accent)] text-[var(--color-accent)]" : "border-[var(--color-rule)] hover:border-[var(--color-accent)]"
             }`}
           >
@@ -1266,22 +1286,48 @@ function Preview({
           </button>
         </div>
 
-        {pasteBox ? <div className="hidden lg:block">{pasteBox}</div> : null}
+        {verdict === "enough" ? (
+          <p className="flex items-center gap-1.5 text-xs text-emerald-800">
+            <IconCheck size={14} />
+            <span>
+              Enough to read
+              {text
+                ? ` — ${text.words.toLocaleString()} words in ${text.passages.length} passage${text.passages.length === 1 ? "" : "s"}`
+                : ""}
+              . Keeping it reads all of this.
+            </span>
+          </p>
+        ) : (
+          <p className="flex items-center gap-1.5 rounded-md bg-amber-50 px-2 py-1 text-xs text-amber-900">
+            <IconText size={14} className="shrink-0" />
+            <span>
+              {verdict === "summary"
+                ? "Only the feed's summary is here — the page would not open."
+                : `Too little to be an article${text ? ` — ${text.words.toLocaleString()} words` : ""}.`}{" "}
+              Paste the article to keep it.
+            </span>
+          </p>
+        )}
+      </div>
 
-        {text?.source_note ? (
-          <p className="text-xs italic text-[var(--color-muted)]">{text.source_note}</p>
-        ) : null}
+      <div
+        ref={bodyRef}
+        className={`min-h-0 flex-1 space-y-3 overflow-y-auto p-4 ${showPage ? "flex flex-col space-y-0 gap-3" : ""}`}
+      >
+        {pasteBox}
 
-        {view === "page" && item.url ? (
-          <PageView url={item.url} />
+        {text?.source_note ? <p className="text-xs italic text-[var(--color-muted)]">{text.source_note}</p> : null}
+
+        {showPage ? (
+          <PageView url={item.url!} />
         ) : loading && !text ? (
           <p className="text-sm text-[var(--color-muted)]">Opening…</p>
         ) : body ? (
-          <div
-            dir={dirOf(body)}
-            className="whitespace-pre-wrap border-t border-[var(--color-rule)] pt-3 font-serif text-[0.95rem] leading-relaxed"
-          >
-            {body}
+          <div>
+            {pictureOf(item) ? <Thumb src={pictureOf(item)!} large /> : null}
+            <div dir={dirOf(body)} className="whitespace-pre-wrap font-serif text-[0.95rem] leading-relaxed">
+              {body}
+            </div>
           </div>
         ) : text ? (
           <p className="text-sm text-[var(--color-muted)]">Nothing was fetched for this item.</p>

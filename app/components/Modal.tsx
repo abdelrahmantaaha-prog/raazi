@@ -1,6 +1,7 @@
 "use client";
 
-import { useEffect, useRef, type ReactNode } from "react";
+import { useEffect, useRef, useState, type ReactNode } from "react";
+import { createPortal } from "react-dom";
 
 /**
  * A dialog that behaves like one.
@@ -14,6 +15,13 @@ import { useEffect, useRef, type ReactNode } from "react";
  * Escape is caught in the capture phase and stopped there, because the reader
  * underneath listens for the same key on the window and would otherwise close
  * itself along with the dialog.
+ *
+ * Rendered into the body, not where it is written. The page wrapper's
+ * entrance animation stays applied once it finishes, and an element with an
+ * opacity animation is a stacking context: a dialog inside it, z-50 or not,
+ * could only ever stack as high as the page — under the z-30 rail, which on a
+ * phone covered the left of the inbox's sheet. React events still bubble
+ * through the component tree, so a page's own key handlers see the dialog's keys.
  */
 export function Modal({
   label,
@@ -32,8 +40,12 @@ export function Modal({
   const panel = useRef<HTMLDivElement>(null);
   const closer = useRef(onClose);
   closer.current = onClose;
+  /** The body exists only in the browser; a dialog open on the server's render arrives a moment later. */
+  const [mounted, setMounted] = useState(false);
+  useEffect(() => setMounted(true), []);
 
   useEffect(() => {
+    if (!mounted) return;
     const before = document.activeElement as HTMLElement | null;
     const el = panel.current;
     // The first control if there is one, otherwise the panel itself.
@@ -53,9 +65,11 @@ export function Modal({
       window.removeEventListener("keydown", onKey, true);
       before?.focus?.();
     };
-  }, []);
+  }, [mounted]);
 
-  return (
+  if (!mounted) return null;
+
+  return createPortal(
     <div
       className="fixed inset-0 z-50 flex items-start justify-center overflow-y-auto bg-black/25 p-4 pt-16 sm:p-6 sm:pt-24"
       onMouseDown={(e) => {
@@ -73,6 +87,7 @@ export function Modal({
       >
         {children}
       </div>
-    </div>
+    </div>,
+    document.body
   );
 }
