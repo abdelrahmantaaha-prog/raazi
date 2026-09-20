@@ -133,8 +133,10 @@ export function deleteDraft(id: number): void {
  */
 export function citationForSource(sourceId: number, chunkId?: number | null): string | null {
   const s = db()
-    .prepare("SELECT title, author, year FROM sources WHERE id=?")
-    .get(sourceId) as { title: string; author: string | null; year: string | null } | undefined;
+    .prepare("SELECT title, author, year, outlet FROM sources WHERE id=?")
+    .get(sourceId) as
+    | { title: string; author: string | null; year: string | null; outlet: string | null }
+    | undefined;
   if (!s) return null;
   let locator = "";
   if (chunkId) {
@@ -152,7 +154,7 @@ export function citationForSource(sourceId: number, chunkId?: number | null): st
       }
     }
   }
-  return formatCitation({ author: s.author, title: s.title, year: s.year, locator });
+  return formatCitation({ author: s.author, title: s.title, year: s.year, outlet: s.outlet, locator });
 }
 
 export function notesFor(draftId: number): DraftNote[] {
@@ -402,6 +404,7 @@ export interface DraftCitation {
   title: string | null;
   year: string | null;
   locator: string | null;
+  outlet: string | null;
   url: string | null;
   quote: string | null;
   source_id: number | null;
@@ -449,33 +452,57 @@ export function addCitation(
         .get(draftId) as { m: number }
     ).m ?? -1) + 1;
 
-  // A citation of a source from the library carries the source's own address
-  // when it has one, whether or not the caller passed it: the exported
-  // footnote becomes a link a reader can follow, which for an article is the
-  // whole difference between a citation and a claim.
-  let url = c.url?.trim() || null;
-  if (!url && c.source_id) {
-    const s = db().prepare("SELECT url FROM sources WHERE id=?").get(c.source_id) as { url: string | null } | undefined;
-    if (s?.url && /^https?:\/\//i.test(s.url)) url = s.url;
-  }
+  // A citation of something in the library is completed from the source
+  // itself, whatever the caller happened to pass.
+  //
+  // There are four buttons that cite — the library search (a source and a
+  // passage), the shelf beside the draft, and a mention in the reader — and
+  // each used to send a different subset of the fields. The shelf sent only
+  // the rendered text and a source id, so every reference made from it landed
+  // with author, title, year and outlet all null; the reference list had
+  // nothing to show but a string, and nothing to re-render when the citation
+  // style changed. Filling the gaps from `source_id` here means one rule
+  // instead of four, and a reference that knows what it refers to.
+  const s = c.source_id
+    ? (db()
+        .prepare("SELECT title, author, year, outlet, url FROM sources WHERE id=?")
+        .get(c.source_id) as
+        | { title: string; author: string | null; year: string | null; outlet: string | null; url: string | null }
+        | undefined)
+    : undefined;
 
-  const text = c.text?.trim() || renderCitation({ ...c, url });
+  const author = c.author?.trim() || s?.author?.trim() || null;
+  const title = c.title?.trim() || s?.title?.trim() || null;
+  const year = c.year?.trim() || s?.year?.trim() || null;
+  const outlet = c.outlet?.trim() || s?.outlet?.trim() || null;
+  const locator = c.locator?.trim() || null;
+
+  // The source's own address, so the exported footnote becomes a link a reader
+  // can follow — which for an article is the whole difference between a
+  // citation and a claim.
+  let url = c.url?.trim() || null;
+  if (!url && s?.url && /^https?:\/\//i.test(s.url)) url = s.url;
+
+  const text =
+    c.text?.trim() ||
+    (title ? formatCitation({ author, title, year, outlet, locator }) : renderCitation({ author, year, locator, url }));
   if (!text) return citationsFor(draftId);
 
   db()
     .prepare(
       `INSERT INTO draft_citations
-         (draft_id, origin, text, author, title, year, locator, url, quote, source_id, mention_id, seq)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
+         (draft_id, origin, text, author, title, year, locator, outlet, url, quote, source_id, mention_id, seq)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
     )
     .run(
       draftId,
       c.origin ?? "library",
       text,
-      c.author ?? null,
-      c.title ?? null,
-      c.year ?? null,
-      c.locator ?? null,
+      author,
+      title,
+      year,
+      locator,
+      outlet,
       url,
       c.quote ?? null,
       c.source_id ?? null,
@@ -497,12 +524,26 @@ export function updateCitation(
   if (!current) return citationsFor(draftId);
 
   const merged = { ...current, ...patch };
-  const text = patch.text?.trim() || renderCitation(merged);
+  // The same rule addCitation uses. These two disagreed: adding a reference
+  // rendered "Author, Title, Year", editing one rendered the same with the
+  // address appended to the end of the sentence, so correcting a typo in a
+  // title silently changed the shape of the reference.
+  const text =
+    patch.text?.trim() ||
+    (merged.title
+      ? formatCitation({
+          author: merged.author,
+          title: merged.title,
+          year: merged.year,
+          outlet: merged.outlet,
+          locator: merged.locator,
+        })
+      : renderCitation(merged));
 
   db()
     .prepare(
       `UPDATE draft_citations
-          SET text=?, author=?, title=?, year=?, locator=?, url=?
+          SET text=?, author=?, title=?, year=?, locator=?, outlet=?, url=?
         WHERE id=? AND draft_id=?`
     )
     .run(
@@ -511,6 +552,7 @@ export function updateCitation(
       merged.title ?? null,
       merged.year ?? null,
       merged.locator ?? null,
+      merged.outlet ?? null,
       merged.url ?? null,
       id,
       draftId

@@ -1,6 +1,6 @@
 "use client";
 
-import { useCallback, useEffect, useRef } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { citationMarker } from "./citations";
 
 export interface CitationRef {
@@ -79,13 +79,74 @@ export function Editor({
     onChange(el.innerHTML);
   }, [onChange]);
 
+  /**
+   * What the caret is standing in, so the toolbar can show it.
+   *
+   * Every other set of tabs and toggles in Corpus says which one you are on;
+   * this row of six did not, so the only way to find out whether a paragraph
+   * was a heading — or whether the words you were about to type would come
+   * out bold — was to type them and look. `selectionchange` is on the
+   * document rather than the element, because moving the caret with the
+   * keyboard fires nothing on the box itself.
+   */
+  const [active, setActive] = useState<{ block: string; bold: boolean; italic: boolean; ul: boolean; ol: boolean }>({
+    block: "",
+    bold: false,
+    italic: false,
+    ul: false,
+    ol: false,
+  });
+
+  useEffect(() => {
+    const read = () => {
+      const el = box.current;
+      const sel = document.getSelection();
+      // Only when the caret is actually in this editor; otherwise the answers
+      // describe whatever else has focus.
+      if (!el || !sel?.anchorNode || !el.contains(sel.anchorNode)) return;
+      try {
+        setActive({
+          block: (document.queryCommandValue("formatBlock") || "").toLowerCase(),
+          bold: document.queryCommandState("bold"),
+          italic: document.queryCommandState("italic"),
+          ul: document.queryCommandState("insertUnorderedList"),
+          ol: document.queryCommandState("insertOrderedList"),
+        });
+      } catch {
+        /* an engine that will not answer; the toolbar simply shows nothing */
+      }
+    };
+    document.addEventListener("selectionchange", read);
+    return () => document.removeEventListener("selectionchange", read);
+  }, []);
+
   const run = useCallback(
     (command: string, value?: string) => {
       box.current?.focus();
       document.execCommand(command, false, value);
       emit();
+      // execCommand does not fire selectionchange, so re-read the state the
+      // command just changed or the button would stay unlit until you moved.
+      try {
+        setActive({
+          block: (document.queryCommandValue("formatBlock") || "").toLowerCase(),
+          bold: document.queryCommandState("bold"),
+          italic: document.queryCommandState("italic"),
+          ul: document.queryCommandState("insertUnorderedList"),
+          ol: document.queryCommandState("insertOrderedList"),
+        });
+      } catch {
+        /* as above */
+      }
     },
     [emit]
+  );
+
+  /** A heading button returns the line to body text when it is already that
+   *  heading, which is what a toggle that looks like a toggle has to do. */
+  const block = useCallback(
+    (tag: string) => run("formatBlock", active.block === tag ? "<p>" : `<${tag}>`),
+    [run, active.block]
   );
 
   /** Puts a citation marker where the caret is. */
@@ -106,13 +167,38 @@ export function Editor({
   // Paste as plain text. Pasting from a web page otherwise drags in fonts,
   // colours and background images, and a document that changes appearance
   // depending on where a paragraph came from is not a document.
+  //
+  // As *paragraphs*, though, not as one block of text with the line breaks
+  // left in. `insertText` turns every newline into a `<br>`, and a `<br>` is
+  // the one piece of markup the screen and the Word export disagree about:
+  // tight on screen, a full paragraph in the exported file, because
+  // htmlToDocx has to end the block at one. Two pages pasted out of a PDF
+  // arrived looking like prose and exported as sixty paragraphs.
+  //
+  // So a blank line starts a new paragraph, and a single newline — which in
+  // pasted text is almost always a wrapped line rather than a break the
+  // author meant — closes up into a space.
   useEffect(() => {
     const el = box.current;
     if (!el) return;
     const onPaste = (e: ClipboardEvent) => {
       e.preventDefault();
       const text = e.clipboardData?.getData("text/plain") ?? "";
-      document.execCommand("insertText", false, text);
+      const paragraphs = text
+        .replace(/\r\n?/g, "\n")
+        .split(/\n\s*\n+/)
+        .map((p) => p.replace(/\n+/g, " ").trim())
+        .filter(Boolean);
+
+      if (paragraphs.length <= 1) {
+        document.execCommand("insertText", false, paragraphs[0] ?? "");
+      } else {
+        document.execCommand(
+          "insertHTML",
+          false,
+          paragraphs.map((p) => `<p>${escapeHtml(p)}</p>`).join("")
+        );
+      }
       emit();
     };
     el.addEventListener("paste", onPaste);
@@ -126,21 +212,31 @@ export function Editor({
           the sentence that needed them. */}
       <div className="sticky top-0 z-10 flex flex-wrap items-center gap-0.5 rounded-t-lg border-b border-[var(--color-rule)] bg-white/95 px-2 py-1.5 backdrop-blur">
         <Group>
-          <Tool label="H1" title="Heading" onClick={() => run("formatBlock", "<h1>")} />
-          <Tool label="H2" title="Subheading" onClick={() => run("formatBlock", "<h2>")} />
-          <Tool label="H3" title="Sub-subheading" onClick={() => run("formatBlock", "<h3>")} />
-          <Tool label="¶" title="Body text" onClick={() => run("formatBlock", "<p>")} />
+          <Tool label="H1" title="Heading" on={active.block === "h1"} onClick={() => block("h1")} />
+          <Tool label="H2" title="Subheading" on={active.block === "h2"} onClick={() => block("h2")} />
+          <Tool label="H3" title="Sub-subheading" on={active.block === "h3"} onClick={() => block("h3")} />
+          <Tool
+            label="¶"
+            title="Body text"
+            on={active.block === "p" || active.block === "div" || active.block === ""}
+            onClick={() => run("formatBlock", "<p>")}
+          />
         </Group>
         <Divider />
         <Group>
-          <Tool label="B" title="Bold (Ctrl+B)" bold onClick={() => run("bold")} />
-          <Tool label="I" title="Italic (Ctrl+I)" italic onClick={() => run("italic")} />
+          <Tool label="B" title="Bold (Ctrl+B)" bold on={active.bold} onClick={() => run("bold")} />
+          <Tool label="I" title="Italic (Ctrl+I)" italic on={active.italic} onClick={() => run("italic")} />
         </Group>
         <Divider />
         <Group>
-          <Tool label="“ ”" title="Block quote" onClick={() => run("formatBlock", "<blockquote>")} />
-          <Tool label="•" title="Bulleted list" onClick={() => run("insertUnorderedList")} />
-          <Tool label="1." title="Numbered list" onClick={() => run("insertOrderedList")} />
+          <Tool
+            label="“ ”"
+            title="Block quote"
+            on={active.block === "blockquote"}
+            onClick={() => block("blockquote")}
+          />
+          <Tool label="•" title="Bulleted list" on={active.ul} onClick={() => run("insertUnorderedList")} />
+          <Tool label="1." title="Numbered list" on={active.ol} onClick={() => run("insertOrderedList")} />
         </Group>
         <Divider />
         <button
@@ -219,12 +315,15 @@ function Tool({
   onClick,
   bold,
   italic,
+  on,
 }: {
   label: string;
   title: string;
   onClick: () => void;
   bold?: boolean;
   italic?: boolean;
+  /** Whether the caret is currently inside what this button applies. */
+  on?: boolean;
 }) {
   return (
     <button
@@ -233,11 +332,23 @@ function Tool({
       onMouseDown={(e) => e.preventDefault()}
       onClick={onClick}
       title={title}
-      className={`min-w-[1.9rem] rounded px-1.5 py-1 text-xs hover:bg-[var(--color-accent-soft)] ${
-        bold ? "font-bold" : ""
-      } ${italic ? "italic" : ""}`}
+      aria-pressed={on ?? false}
+      className={`min-w-[1.9rem] rounded px-1.5 py-1 text-xs transition hover:bg-[var(--color-accent-soft)] ${
+        on
+          ? "bg-[var(--color-ink)] text-white hover:bg-[var(--color-ink)]"
+          : "text-[var(--color-ink)]"
+      } ${bold ? "font-bold" : ""} ${italic ? "italic" : ""}`}
     >
       {label}
     </button>
   );
+}
+
+/** For text pasted in: it becomes markup, so it must not be able to be markup. */
+function escapeHtml(s: string): string {
+  return s
+    .replace(/&/g, "&amp;")
+    .replace(/</g, "&lt;")
+    .replace(/>/g, "&gt;")
+    .replace(/"/g, "&quot;");
 }

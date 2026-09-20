@@ -17,6 +17,7 @@ import { MatchCover } from "./MatchCover";
 import { guessShelf } from "@/lib/shelves";
 import type { ReadMode } from "@/lib/reading";
 import { formatDate, formatDateTime, relativeDate } from "@/lib/dates";
+import { ArticleLink } from "../../components/ArticleLink";
 
 interface SourceMeta {
   id: number;
@@ -274,14 +275,11 @@ export function SourceView({
               {position.progress > 0.005 ? "Resume reading" : "Read"}
             </Button>
             {source.url && (
-              <a
-                href={source.url}
-                target="_blank"
-                rel="noreferrer"
+              <ArticleLink href={source.url}
                 className="rounded border border-[var(--color-rule)] bg-white px-3 py-1.5 text-sm font-medium hover:bg-[var(--color-accent-soft)]"
               >
                 Open original
-              </a>
+              </ArticleLink>
             )}
             <Button
               onClick={enhance}

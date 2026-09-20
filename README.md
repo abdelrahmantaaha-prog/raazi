@@ -202,8 +202,40 @@ choose where the cursor was: a whole source, or a passage as the sentence it
 was found by, which can also be set into the draft as a block quote. It finds
 passages the pane's search cannot, since that one reads only what extraction
 tied to a person or an institution. Like the rest of the desk it matches words;
-no model is involved. The toolbar stays pinned to the top of the window while a
-long draft scrolls under it.
+no model is involved.
+
+Write is a desk rather than a page: the draft and the shelf beside it each fill
+the window and scroll on their own, so reaching the foot of the gathered quotes
+does not carry the draft away with it, and the title, the toolbar and the word
+count stay where they are. The toolbar also shows what the cursor is standing
+in — which heading, whether the next word will be bold — and a heading button
+pressed twice puts the line back to body text.
+
+A reference names the publication as well as the byline, and carries the
+source's own address as a link you can follow from the reference list. Every
+reference is completed from the source it came from, so it reads the same
+whichever of the four Cite buttons made it, and exports to a Word footnote
+that ends in the link.
+
+Text pasted into a draft arrives as plain paragraphs: a blank line starts a new
+one, a wrapped line closes up. Nothing else comes with it — no fonts, no
+colours — because a document that changes appearance depending on where a
+paragraph came from is not a document.
+
+## One window for the originals
+
+Every link out of Corpus — an article in the inbox, a source's original, a feed's
+own address, a reference's link — opens in the same window, named for the
+purpose. Open forty articles over a morning's triage and there is one window to
+look at, showing the one you are reading, rather than forty unlabelled tabs with
+Corpus lost somewhere among them. Middle-click still opens a tab of its own when
+that is what you meant.
+
+The link goes by way of `/read`, which drops the opener before forwarding.
+A named window and `rel="noopener"` cannot both be had — a browser told not to
+share an opener stops honouring the window name — so the page severs its own
+opener instead, and it stays severed across the navigation that follows. Only
+`http` and `https` addresses are forwarded.
 
 ## Two laptops, one library
 
@@ -548,7 +580,7 @@ writes it again; *Hide expanded* folds it away.
 npm test
 ```
 
-1,420 assertions across 25 suites, no API key needed. `test-resume.mjs` drives the real worker against
+2,195 assertions across 36 suites, no API key needed. `test-resume.mjs` drives the real worker against
 a scratch database with injected handlers, including a simulated kill mid-run and a
 real Gemini quota-error payload. `test-tags.mjs` covers the property that matters
 most — an entity in two topics stays one entity — plus derivation, overrides and

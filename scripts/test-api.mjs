@@ -288,7 +288,11 @@ section("LAN mode: bound to everything means asking for a token");
   check("and nothing is read from a bare request", tokenFrom(bareReq) === null);
 
   check("the right token matches", tokenMatches(token, token));
-  check("a wrong one does not", !tokenMatches(`${token.slice(0, -1)}0`, token));
+  // The last character is changed to something it is not. Writing a literal
+  // "0" here made this fail once every sixteen runs, on the tokens that
+  // already ended in one: the "wrong" token was the right token.
+  const wrong = `${token.slice(0, -1)}${token.endsWith("0") ? "1" : "0"}`;
+  check("a wrong one does not", !tokenMatches(wrong, token));
   check("a short one does not", !tokenMatches("abc", token));
   check("an empty one does not", !tokenMatches("", token));
   check("and neither does one against no token", !tokenMatches(token, null));

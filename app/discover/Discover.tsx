@@ -5,6 +5,7 @@ import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { Empty, inputClass } from "../components/ui";
 import { relativeDate } from "@/lib/dates";
+import { ArticleLink } from "../components/ArticleLink";
 
 interface Result {
   title: string;
@@ -201,9 +202,9 @@ export default function Discover() {
                       <div className="flex flex-wrap items-baseline gap-x-2">
                         <h2 className="font-medium">
                           {r.url ? (
-                            <a href={r.url} target="_blank" rel="noreferrer" className="hover:text-[var(--color-accent)]">
+                            <ArticleLink href={r.url} className="hover:text-[var(--color-accent)]">
                               {r.title}
-                            </a>
+                            </ArticleLink>
                           ) : (
                             r.title
                           )}

@@ -5,6 +5,7 @@ import { migrateWatch } from "./migrate-watch";
 import { migrateCalendar } from "./migrate-calendar";
 import { migrateLessons } from "./migrate-lessons";
 import { migrateEscapes } from "./migrate-escapes";
+import { migrateCitations } from "./migrate-citations";
 import { migrateBundles } from "./migrate-bundles";
 
 /**
@@ -486,6 +487,7 @@ export function migrate(db: Database.Database) {
   migrateLessons(db);
   migrateBundles(db);
   migrateEscapes(db);
+  migrateCitations(db);
 }
 
 /**

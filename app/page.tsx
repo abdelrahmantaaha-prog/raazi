@@ -7,6 +7,7 @@ import { AddSource } from "./components/AddSource";
 import { SourceCover } from "./components/SourceCover";
 import { READING_STATES, readingStateOf, shelfOf } from "@/lib/shelves";
 import { formatDate, formatDateTime, parseDate, relativeDate } from "@/lib/dates";
+import { ArticleLink } from "./components/ArticleLink";
 
 interface Run {
   id: number;
@@ -690,15 +691,12 @@ function ArticleRow({ s, onRemove }: { s: SourceRow; onRemove: (id: number, t: s
         {(s.progress ?? 0) > 0.005 ? `${Math.round((s.progress ?? 0) * 100)}%` : extractionNote(s)}
       </span>
       {s.url && (
-        <a
-          href={s.url}
-          target="_blank"
-          rel="noreferrer"
+        <ArticleLink href={s.url}
           className="shrink-0 text-xs text-[var(--color-muted)] hover:text-[var(--color-accent)]"
           title="Open the original"
         >
           ↗
-        </a>
+        </ArticleLink>
       )}
       <button
         onClick={() => onRemove(s.id, s.title)}

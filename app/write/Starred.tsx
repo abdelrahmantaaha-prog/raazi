@@ -7,6 +7,7 @@ import { formatDateTime, relativeDate } from "@/lib/dates";
 import { dirOf } from "@/lib/dir";
 // Types only — erased at compile time, so the database module stays out of the bundle.
 import type { StarredArticle } from "@/lib/starred";
+import { ArticleLink } from "../components/ArticleLink";
 
 /** Matches ENOUGH_TO_READ in lib/triage.ts: below this an item cannot be kept. */
 const ENOUGH_TO_READ = 1_000;
@@ -116,14 +117,11 @@ export function Starred({ initial }: { initial: StarredArticle[] }) {
                       Read
                     </Link>
                     {a.url ? (
-                      <a
-                        href={a.url}
-                        target="_blank"
-                        rel="noreferrer"
+                      <ArticleLink href={a.url}
                         className="inline-flex items-center gap-1 transition hover:text-[var(--color-accent)]"
                       >
                         <IconExternal size={13} /> Original
-                      </a>
+                      </ArticleLink>
                     ) : null}
                     {waiting ? (
                       <>

@@ -10,6 +10,8 @@ import { Editor } from "./Editor";
 import { citationMarker, renumberDom, renumberHtml } from "./citations";
 import { LibraryCite, type LibraryPick } from "./LibraryCite";
 import type { CitablePassage } from "@/lib/cite-search";
+import { ArticleLink, hostOf } from "../components/ArticleLink";
+import { useDeskHeight } from "../components/desk";
 
 interface Reference {
   id: number;
@@ -19,6 +21,7 @@ interface Reference {
   title: string | null;
   year: string | null;
   locator: string | null;
+  outlet: string | null;
   url: string | null;
 }
 
@@ -127,6 +130,21 @@ export function WritingDesk({
   const [checking, setChecking] = useState(false);
   const [checkError, setCheckError] = useState<string | null>(null);
   const [pane, setPane] = useState<"sources" | "check">("sources");
+
+  /**
+   * The desk fills the window and its two columns scroll on their own, so the
+   * draft does not carry the shelf down with it and neither disappears off the
+   * top. Below a wide screen they stack and the page scrolls as before.
+   */
+  const [wide, setWide] = useState(false);
+  useEffect(() => {
+    const mq = window.matchMedia("(min-width: 64rem)");
+    const sync = () => setWide(mq.matches);
+    sync();
+    mq.addEventListener("change", sync);
+    return () => mq.removeEventListener("change", sync);
+  }, []);
+  const desk = useDeskHeight(wide, { min: "34rem" });
 
   // ---- logging a quote by hand -------------------------------------------
   //
@@ -713,10 +731,14 @@ export function WritingDesk({
           </div>
         </div>
       ) : (
-        <div className="grid gap-5 lg:grid-cols-[minmax(0,1fr)_23rem]">
+        <div
+          ref={desk.ref}
+          style={desk.style}
+          className="grid gap-5 lg:grid-cols-[minmax(0,1fr)_23rem] lg:grid-rows-[minmax(0,1fr)]"
+        >
           {/* ---------------- the draft ---------------- */}
-          <div className="space-y-2">
-            <div className="flex items-center gap-3">
+          <div className="flex min-h-0 flex-col gap-2 lg:overflow-hidden">
+            <div className="flex shrink-0 items-center gap-3">
               <input
                 value={title}
                 onChange={(e) => setTitle(e.target.value)}
@@ -740,6 +762,9 @@ export function WritingDesk({
                 Delete
               </button>
             </div>
+            {/* The draft itself scrolls, under a title that stays put and a
+                toolbar that sticks to the top of this box. */}
+            <div className="min-h-0 flex-1 space-y-2 lg:overflow-y-auto lg:overscroll-contain lg:pe-1">
 
             <Editor
               html={body}
@@ -803,6 +828,23 @@ export function WritingDesk({
                       <span className="tabular-nums text-[var(--color-muted)]">[{i + 1}]</span>
                       <span className="min-w-0 flex-1" dir={dirOf(r.text)}>
                         {r.text}
+                        {/* The address the reference rests on, as a link you
+                            can actually follow. It was stored all along and
+                            shown nowhere, so checking a citation meant going
+                            to find the source by hand. Opens in the one
+                            article window, like every other outside link. */}
+                        {r.url && (
+                          <>
+                            {" "}
+                            <ArticleLink
+                              href={r.url}
+                              className="text-xs text-[var(--color-accent)] hover:underline"
+                              title={r.url}
+                            >
+                              {hostOf(r.url)} ↗
+                            </ArticleLink>
+                          </>
+                        )}
                         {r.origin === "outside" && (
                           <span className="ml-1.5 text-xs text-[var(--color-muted)]">
                             · not in your library
@@ -825,10 +867,11 @@ export function WritingDesk({
                 </p>
               </div>
             )}
+            </div>
           </div>
 
           {/* ---------------- the pane ---------------- */}
-          <div className="space-y-3">
+          <div className="flex min-h-0 flex-col gap-3 lg:overflow-hidden">
             <div className="flex overflow-hidden rounded border border-[var(--color-rule)] text-sm">
               {(["sources", "check"] as const).map((p) => (
                 <button
@@ -844,6 +887,10 @@ export function WritingDesk({
                 </button>
               ))}
             </div>
+            {/* Everything gathered — the quotes on the shelf, the search,
+                the check — scrolls here, on its own. Reaching the foot of
+                the shelf used to take the draft down with it. */}
+            <div className="min-h-0 flex-1 space-y-3 lg:overflow-y-auto lg:overscroll-contain lg:pe-1">
 
             {pane === "sources" && (
               <>
@@ -1176,6 +1223,7 @@ export function WritingDesk({
                 )}
               </div>
             )}
+            </div>
           </div>
         </div>
       )}

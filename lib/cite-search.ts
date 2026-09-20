@@ -104,7 +104,7 @@ export function searchCitable(
           LIMIT @limit`
       )
       .all(params) as Omit<CitableSource, "citation">[]
-  ).map((s) => ({ ...s, citation: formatCitation({ author: s.author, title: s.title, year: s.year, locator: "" }) }));
+  ).map((s) => ({ ...s, citation: formatCitation({ author: s.author, title: s.title, year: s.year, outlet: s.outlet, locator: "" }) }));
 
   // Passages by their text: every word, the last as a prefix, best match first.
   const match = ftsMatch(words);
@@ -159,7 +159,7 @@ export function searchCitable(
           url: r.url,
           locator,
           quote,
-          citation: formatCitation({ author: r.author, title: r.title, year: r.year, locator }),
+          citation: formatCitation({ author: r.author, title: r.title, year: r.year, outlet: r.outlet, locator }),
         });
       }
     } catch {

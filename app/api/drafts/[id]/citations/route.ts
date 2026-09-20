@@ -18,7 +18,7 @@ import {
 
 export const dynamic = "force-dynamic";
 
-const TEXT_FIELDS = ["text", "author", "title", "year", "locator", "url", "quote"] as const;
+const TEXT_FIELDS = ["text", "author", "title", "year", "locator", "outlet", "url", "quote"] as const;
 type TextField = (typeof TEXT_FIELDS)[number];
 
 /** The text fields of a body, checked to be strings (or null, to clear). */

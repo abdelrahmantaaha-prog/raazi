@@ -4,6 +4,7 @@ import { useMemo, useState } from "react";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { formatDateTime, relativeDate } from "@/lib/dates";
+import { ArticleLink } from "../components/ArticleLink";
 
 interface FeedRow {
   id: number;
@@ -299,14 +300,11 @@ export function FeedsManager({
                     ) : null}
                     <span className="text-xs text-[var(--color-muted)]">{f.kind}</span>
                   </div>
-                  <a
-                    href={f.url}
-                    target="_blank"
-                    rel="noreferrer"
+                  <ArticleLink href={f.url}
                     className="block truncate text-xs text-[var(--color-muted)] hover:text-[var(--color-accent)]"
                   >
                     {f.url}
-                  </a>
+                  </ArticleLink>
                   <p className="mt-1 text-xs text-[var(--color-muted)]">
                     {f.ready} read, {f.pending} waiting, {f.items} offered ·{" "}
                     {f.lastPolledAt ? `checked ${relativeDate(f.lastPolledAt)}` : "never checked"}

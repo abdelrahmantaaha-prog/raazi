@@ -4,6 +4,7 @@ import { useState } from "react";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { inputClass } from "../components/ui";
+import { ArticleLink } from "../components/ArticleLink";
 
 interface Work {
   kind: "paper" | "book";
@@ -244,9 +245,9 @@ export default function Scholar() {
                         </span>
                         <h2 className="font-medium leading-snug">
                           {w.url ? (
-                            <a href={w.url} target="_blank" rel="noreferrer" className="hover:text-[var(--color-accent)]">
+                            <ArticleLink href={w.url} className="hover:text-[var(--color-accent)]">
                               {w.title}
-                            </a>
+                            </ArticleLink>
                           ) : (
                             w.title
                           )}

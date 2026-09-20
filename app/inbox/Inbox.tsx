@@ -22,6 +22,8 @@ import {
 import { formatDateTime, relativeDate } from "@/lib/dates";
 import { dirOf } from "@/lib/dir";
 import type { HeldText } from "@/lib/triage";
+import { ArticleLink, articleHref, ARTICLE_WINDOW } from "../components/ArticleLink";
+import { useDeskHeight } from "../components/desk";
 
 interface Item {
   id: number;
@@ -419,29 +421,10 @@ export default function Inbox({
    * animation moves the desk a few pixels while this first runs.
    */
   const hasDesk = items.length > 0 || Boolean(searched);
-  const desk = useRef<HTMLDivElement>(null);
-  const heading = useRef<HTMLDivElement>(null);
-  const [deskTop, setDeskTop] = useState<number | null>(null);
-  useEffect(() => {
-    const el = desk.current;
-    if (!wide || !el) {
-      setDeskTop(null);
-      return;
-    }
-    const measure = () => {
-      let top = 0;
-      for (let n: HTMLElement | null = el; n; n = n.offsetParent as HTMLElement | null) top += n.offsetTop;
-      setDeskTop(top);
-    };
-    measure();
-    const observer = new ResizeObserver(measure);
-    if (heading.current) observer.observe(heading.current);
-    window.addEventListener("resize", measure);
-    return () => {
-      observer.disconnect();
-      window.removeEventListener("resize", measure);
-    };
-  }, [wide, hasDesk]);
+  // The measurement itself lives in useDeskHeight, which the writing desk
+  // uses too — it was copied there once and the two drifted immediately.
+  const desk = useDeskHeight(wide && hasDesk);
+  const heading = desk.headingRef;
 
   // What the extension sends appears without a reload. The stamp moves only
   // when something is clipped — not when a feed brings in the day's items — so
@@ -665,7 +648,10 @@ export default function Inbox({
       setPasting(here.id);
       setPasted("");
     } else if (e.key === "x" && here) toggle(here.id);
-    else if (e.key === "o" && here?.url) window.open(here.url, "_blank", "noopener");
+    // Into the one article window, like every link — see ArticleLink. The
+    // bounce page drops the opener, so "noopener" (which would defeat the
+    // window name and open a fresh one each time) is not wanted here.
+    else if (e.key === "o" && here?.url) window.open(articleHref(here.url), ARTICLE_WINDOW);
     else return;
     e.preventDefault();
   }
@@ -752,7 +738,7 @@ export default function Inbox({
 
   return (
     <div className="space-y-4" onKeyDown={onKey} tabIndex={-1}>
-      <div ref={heading} className="space-y-3">
+      <div ref={heading as React.RefObject<HTMLDivElement>} className="space-y-3">
         <header className="flex flex-wrap items-center justify-between gap-x-4 gap-y-2">
           <div className="flex min-w-0 items-baseline gap-3">
             <h1 className="font-serif text-3xl font-semibold">Inbox</h1>
@@ -867,8 +853,8 @@ export default function Inbox({
         // The list takes the smaller share now that its rows are compact; the
         // pane is where an item is actually read.
         <div
-          ref={desk}
-          style={deskTop !== null ? { height: `max(30rem, calc(100dvh - ${deskTop}px - 2rem - 1px))` } : undefined}
+          ref={desk.ref}
+          style={desk.style}
           className="lg:grid lg:grid-cols-[minmax(20rem,5fr)_minmax(0,7fr)] lg:grid-rows-[minmax(0,1fr)] lg:gap-4"
         >
           <div className="lg:flex lg:min-h-0 lg:flex-col lg:overflow-hidden lg:rounded-xl lg:border lg:border-[var(--color-rule)] lg:bg-white">
@@ -1232,9 +1218,9 @@ function PageView({ url }: { url: string }) {
       <p className="shrink-0 text-[11px] leading-snug text-[var(--color-muted)]">
         Blank? The site refuses to be shown inside another page — the Corpus Inbox extension lifts that from
         version 0.3.0 — or{" "}
-        <a href={url} target="_blank" rel="noreferrer" className="underline hover:text-[var(--color-accent)]">
-          open it in a tab
-        </a>
+        <ArticleLink href={url} className="underline hover:text-[var(--color-accent)]">
+          open it in the article window
+        </ArticleLink>
         . Signed out? Brave keeps your logins from pages inside another site; allow cross-site cookies for
         Corpus in Shields. The extension&apos;s icon sends the article shown here.
       </p>
@@ -1327,9 +1313,9 @@ function Preview({
         <div>
           <h2 dir={dirOf(item.title)} className="font-serif text-lg font-semibold leading-snug">
             {item.url ? (
-              <a href={item.url} target="_blank" rel="noreferrer" className="hover:text-[var(--color-accent)]" title="Open it on the outlet's own site (O)">
+              <ArticleLink href={item.url} className="hover:text-[var(--color-accent)]" title="Open it on the outlet's own site, in the one article window (O)">
                 {item.title} <IconExternal size={14} className="inline align-baseline opacity-60" />
-              </a>
+              </ArticleLink>
             ) : (
               item.title
             )}
