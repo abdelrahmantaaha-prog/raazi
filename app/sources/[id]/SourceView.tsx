@@ -18,6 +18,8 @@ import { guessShelf } from "@/lib/shelves";
 import type { ReadMode } from "@/lib/reading";
 import { formatDate, formatDateTime, relativeDate } from "@/lib/dates";
 import { ArticleLink } from "../../components/ArticleLink";
+import { Translations } from "./Translations";
+import type { TranslationSummary } from "@/lib/translations";
 
 interface SourceMeta {
   id: number;
@@ -46,6 +48,8 @@ export function SourceView({
   position,
   marks,
   initialChunk = null,
+  translations,
+  original,
 }: {
   source: SourceMeta;
   passages: Passage[];
@@ -56,6 +60,10 @@ export function SourceView({
   marks: Mark[];
   /** A passage the URL asked for: the reader opens straight away, at it. */
   initialChunk?: number | null;
+  /** The translations paired with this book, when it is an original. */
+  translations: TranslationSummary[];
+  /** The book this one translates, when it is a translation. */
+  original: { id: number; title: string } | null;
 }) {
   const router = useRouter();
   const [reading, setReading] = useState(initialChunk !== null);
@@ -267,6 +275,24 @@ export function SourceView({
                   </Link>
                 ))}
               </div>
+            )}
+
+            {original ? (
+              <p className="text-sm text-[var(--color-muted)]">
+                A translation of{" "}
+                <Link href={`/sources/${original.id}`} className="text-[var(--color-ink)] hover:underline">
+                  {original.title}
+                </Link>{" "}
+                ·{" "}
+                <Link
+                  href={`/sources/${original.id}/bilingual?with=${source.id}`}
+                  className="font-medium text-[var(--color-accent)] hover:underline"
+                >
+                  Read them side by side
+                </Link>
+              </p>
+            ) : (
+              <Translations sourceId={source.id} initial={translations} />
             )}
           </div>
 

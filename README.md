@@ -329,6 +329,33 @@ deliberate: ingesting a book takes hundreds of calls over a long stretch, and th
 background worker has to keep going with no tab open, so it needs to reach the key
 on its own. `GEMINI_API_KEY` in `.env.local` overrides the stored one.
 
+## A book beside its translation
+
+Add the translation to the library the way you add any book, then pair it from
+the original's page: **Add a translation**, find it by title, and Corpus works
+out which passage answers to which. **Read bilingually** then gives you the two
+texts as matched rows — the passage on one side, its rendering on the other,
+however many paragraphs each side needed.
+
+The matching is the one Mutarjim arrived at and no model reads either text.
+Rare tokens that survive translation untouched — years, figures, names kept in
+Latin script — pin a monotone skeleton of correspondences, and between those
+anchors Gale–Church aligns by character length, which is what produces the
+joins, splits and omissions a real translator makes. A whole book matches in
+under a second and costs nothing.
+
+What it cannot settle it says so about. A row the matcher was unsure of is
+marked rather than hidden, because a silent mismatch in a bilingual text is
+worse than a marked one, and a passage with no counterpart keeps its place with
+an empty half rather than vanishing and shifting everything below it out of
+step. The header reports how much of the book found a partner at all.
+
+One caution worth knowing: this aligns, it does not verify. It assumes the two
+texts really are a translation pair and will happily match two unrelated books
+by length alone — pairing a history of the United States with an Arabic book
+about the early Church matched 58% of it. Coverage tells you how much found *a*
+partner, not whether the partner is right.
+
 ## What it does with a source
 
 | Stage | Cost | What happens |

@@ -6,6 +6,7 @@ import { tagsForSource } from "@/lib/tags";
 import type { EntityType, Locator } from "@/lib/types";
 import { readModeOf, readPassages } from "@/lib/reading";
 import { SourceView } from "./SourceView";
+import { originalOf, translationsOf } from "@/lib/translations";
 import type { Mark, Passage } from "./Reader";
 
 export const dynamic = "force-dynamic";
@@ -124,6 +125,8 @@ export default async function SourcePage({
       entities={listEntities({ sourceId: id, limit: 80 })}
       tags={tagsForSource(id)}
       unread={unread}
+      translations={translationsOf(id)}
+      original={originalOf(id)}
     />
   );
 }
