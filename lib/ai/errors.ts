@@ -9,8 +9,12 @@
  */
 
 export type Disposition =
-  /** Transient. Sleep `delayMs`, then retry the same task. */
-  | { kind: "retry"; delayMs: number; reason: string }
+  /** Transient. Sleep `delayMs`, then retry the same task.
+   *
+   *  `free` means the wait says nothing about this task — the ring was busy,
+   *  or a rate limit was in force — so it must not be charged against the
+   *  task's attempts. See refundAttempt in lib/queue.ts. */
+  | { kind: "retry"; delayMs: number; reason: string; free?: boolean }
   /** The key is out of quota for the day. Park the run until `resumeAt`. */
   | { kind: "pause_quota"; resumeAt: Date; reason: string }
   /** The key is bad or absent. Park the run; only the user can fix it. */
@@ -383,7 +387,7 @@ export function classify(err: unknown, attempts: number): Disposition {
   // burn through its attempts, and never spinning, so an outage cannot become
   // the request storm that used to crash the worker.
   if (err instanceof ProvidersBusyError) {
-    return { kind: "retry", delayMs: PROVIDERS_BUSY_DELAY_MS, reason: err.message };
+    return { kind: "retry", delayMs: PROVIDERS_BUSY_DELAY_MS, reason: err.message, free: true };
   }
   if (err instanceof NoUsableKeysError) {
     return { kind: "pause_key", reason: err.message };
@@ -413,7 +417,7 @@ export function classify(err: unknown, attempts: number): Disposition {
   // whose 429 clears in seconds — matched by name so this module keeps no
   // dependency on the one that raises it.
   if (err instanceof Error && err.name === "RateLimited") {
-    return { kind: "retry", delayMs: 60_000, reason: err.message };
+    return { kind: "retry", delayMs: 60_000, reason: err.message, free: true };
   }
 
   const status = statusOf(err);
@@ -448,6 +452,7 @@ export function classify(err: unknown, attempts: number): Disposition {
         kind: "retry",
         delayMs: delay ?? 30_000,
         reason: "Rate limited; waiting for the window to clear.",
+        free: true,
       };
     }
     // Reached only when a quota error surfaces outside the key ring's own

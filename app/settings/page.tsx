@@ -5,6 +5,7 @@ import { Button, Card, Field, inputClass } from "../components/ui";
 import { PROVIDERS, PROVIDER_IDS, STAGES, STAGE_LABEL, STAGE_NOTE, type ProviderId, type Stage } from "@/lib/providers";
 import { formatDateTime, relativeDate } from "@/lib/dates";
 import { CorrectionsCard } from "./Corrections";
+import { LessonsCard } from "./Lessons";
 import { LanCard, SyncCard } from "./SyncCard";
 
 /** The languages entries can be written in. Quotes stay in their own. */
@@ -520,6 +521,7 @@ export default function SettingsPage() {
       <SyncCard />
 
       <CorrectionsCard />
+      <LessonsCard />
 
       {message && <p className="text-sm text-emerald-700">{message}</p>}
       {error && <p className="text-sm text-red-700">{error}</p>}

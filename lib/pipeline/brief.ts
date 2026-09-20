@@ -12,7 +12,10 @@ import {
   todayKey,
   type BriefMaterial,
   type BriefPassage,
+  type DatedEvent,
+  type PassageWhen,
 } from "../brief";
+import { formatDate, formatDateTime } from "../dates";
 import { describeWeek, isWeekKey, weekKey, weekRange } from "../week";
 import { normaliseMarkers } from "../markers";
 import { logCalendar } from "../calendar";
@@ -78,9 +81,31 @@ ABSOLUTE RULES
   several agree, and name them. Never merge two outlets' numbers into one
   figure — give the range and say who said which.
 - Where the passages disagree, that IS the item. Lead with the disagreement,
-  give both sides with their citations, and do not adjudicate.
+  give both sides with their citations, and do not adjudicate. A disagreement
+  is two outlets asserting incompatible things about the same fact. Earlier
+  reporting overtaken by later reporting is a sequence, not a disagreement;
+  two passages from one article are never a disagreement; a claim and its
+  denial are one item ("X said, Y denied"), written as such.
 - No speculation, no "this suggests", no analysis of what it means. What was
   said, by whom, when, and where they differ.
+
+WHEN IT HAPPENED
+
+- The brief reports what happened in the WINDOW. Every passage carries a
+  "when" line: IN THIS WINDOW, STILL TO COME, BEFORE THIS WINDOW, or undated.
+- A passage marked BEFORE THIS WINDOW is background: what the article
+  reminded its readers of. Background may support a subordinate clause
+  ("...the war, now in its seventh month") and never more. Never its own
+  sentence, never an item, never the headline, never "X reported that Y
+  happened" as though it were news. An order signed last year, a hearing in
+  July, a primary lost in June, a ruling in February are not developments in
+  a September brief, whatever the article's date.
+- An undated passage is judged by its words: "told a hearing in July",
+  "in a 2024 interview", "on his first day in office" are background too.
+- Lead every item with the development inside the window, and say the day
+  when a passage fixes it ("on Monday", "late on Sunday"). Something scheduled
+  or expected is written as still to come, with its date.
+- If nothing under a heading happened in the window, write nothing under it.
 
 SHAPE
 
@@ -89,15 +114,25 @@ with nothing in it rather than announcing that it is empty. Inside a section:
 
 - One item per thing that happened, not one per passage. Several passages about
   the same development are one item carrying several markers.
-- Newest first within an item; say when something happened when the passages
-  date it.
+- Within a heading, the most widely carried development first: the story line
+  on a passage says how many outlets ran it. Then by recency.
 - Two or three sentences an item. This is a brief; the entry is where the
   detail lives.
 - Under "On your beat", the headings are topics rather than people. Write each
   as what happened in that area of coverage, not as a profile of anyone. Every
   passage has already been assigned to exactly one heading — never repeat an
-  item under a second topic because it also touches that one.
-- A one-line item is fine. Padding a thin day is worse than a thin brief.
+  item under a second topic because it also touches that one, and never cite
+  a marker under any heading but the one it was listed under. A heading left
+  with nothing of its own is dropped, not filled from another's passages.
+- The sections you write are "On your beat", "Also arrived" and, if the
+  passages support it, "Sources disagree". The lists after them — running
+  stories, entries that changed, what did not come in — are appended by the
+  application; do not write them.
+- The headline names the most widely carried development that happened in
+  the window, and nothing that is background.
+- A one-line item is fine. Padding a thin day is worse than a thin brief. A
+  passage that is only a credit, a byline, a programme note or a
+  publisher's boilerplate gets no line at all.
 
 Write in the language you are told to use. Quote in the source's own language
 where you quote at all, which should be rarely and only for words that matter.`;
@@ -132,7 +167,20 @@ ABSOLUTE RULES
 - Say when only one outlet has something, and say when several agree and who.
   Never merge two outlets' numbers into one figure.
 - Where the passages disagree, that IS the item. Lead with the disagreement,
-  give both sides with their citations, and do not adjudicate.
+  give both sides with their citations, and do not adjudicate. A disagreement
+  is two outlets asserting incompatible things about the same fact; earlier
+  reporting overtaken by later reporting is movement, not disagreement.
+
+WHEN IT HAPPENED
+
+- Every passage carries a "when" line: IN THIS WINDOW, STILL TO COME, BEFORE
+  THIS WINDOW, or undated. A passage marked BEFORE THIS WINDOW is background
+  the article was reminding its readers of. It may set up where a
+  development stood at the start of the week, in a subordinate clause; it is
+  never itself something that moved, never an item under "New this week",
+  never in the opening paragraph as though it happened this week.
+- Say the day when a passage fixes it. Something scheduled is still to come,
+  with its date.
 
 SHAPE — this is a week, not a day
 
@@ -155,12 +203,36 @@ SHAPE — this is a week, not a day
 Write in the language you are told to use. Quote in the source's own language
 where you quote at all, and rarely.`;
 
-/** Passages, as the writer sees them: dated, attributed, from a named outlet. */
+/** How a passage's place in time is put to the writer. */
+const WHEN_LABEL: Record<PassageWhen, string> = {
+  within: "IN THIS WINDOW",
+  ahead: "STILL TO COME",
+  before: "BEFORE THIS WINDOW — background, not news",
+  undated: "undated",
+};
+
+/** "2025 ('last year')", "14 Sep 2026 ('Monday')": the date as filed and as worded. */
+function describeDated(d: DatedEvent): string {
+  const iso = d.iso ?? "";
+  const shown =
+    /^\d{4}-\d{2}-\d{2}$/.test(iso) ? formatDate(iso) : /^--/.test(iso) ? `every ${iso.slice(2)}` : iso || "no date";
+  return `${shown}${d.text ? ` ("${d.text}")` : ""}: ${d.summary}`;
+}
+
+/**
+ * Passages, as the writer sees them: dated, attributed, from a named outlet.
+ *
+ * The "when" line is the one that stops background being written as news.
+ * An article about a space-weapons announcement reminds its readers that
+ * the president signed an order last year; without a date on the passage
+ * the writer reported the order as Monday's development, and did, in every
+ * brief until this line existed.
+ */
 export function renderPassages(rows: BriefPassage[]): string {
   return rows
     .map((p) => {
-      const when = (p.published_at ?? "").slice(0, 16).replace("T", " ");
-      const where = [p.outlet, p.author, when].filter(Boolean).join(", ");
+      const when = formatDateTime(p.published_at);
+      const where = [p.outlet, p.author, when ? `published ${when}` : ""].filter(Boolean).join(", ");
       const lines = [
         `[[m:${p.mention_id}]] on ${p.entity} (${p.entity_type})${where ? ` — ${where}` : ""}${
           p.story_title ? ` — story: "${p.story_title}"` : ""
@@ -169,6 +241,10 @@ export function renderPassages(rows: BriefPassage[]): string {
       ];
       if (p.claim) lines.push(`   claim: ${p.claim}`);
       if (p.context) lines.push(`   in context: ${p.context}`);
+      if (p.when) {
+        const dated = (p.dated ?? []).slice(0, 3).map(describeDated);
+        lines.push(`   when: ${WHEN_LABEL[p.when]}${dated.length ? ` — ${dated.join(" | ")}` : ""}`);
+      }
       if (p.attribution && p.attribution !== "source") lines.push(`   attributed to: ${p.attribution}`);
       if (p.claim_kind && p.claim_kind !== "fact") lines.push(`   kind: ${p.claim_kind}`);
       if (p.reliability) lines.push(`   about this outlet: ${p.reliability}`);
@@ -182,11 +258,13 @@ function material(m: BriefMaterial): string[] {
 
   if (m.watched.length) {
     parts.push(
-      `SECTION "On your beat" — one sub-heading per topic below, in this order:\n\n` +
+      `SECTION "On your beat" — one sub-heading per topic below, in this order. Each article was filed under exactly one topic, so a passage's topic is the one it appears under:\n\n` +
         m.watched
           .map(
             (w) =>
-              `### ${w.label}${w.kind === "topic" ? " (topic)" : w.kind === "phrase" ? " (phrase watch)" : ""}\n${renderPassages(w.passages)}`
+              `### ${w.label}${w.kind === "topic" ? " (topic)" : w.kind === "phrase" ? " (phrase watch)" : ""} — ${
+                w.sources
+              } article${w.sources === 1 ? "" : "s"} kept\n${renderPassages(w.passages)}`
           )
           .join("\n\n")
     );
@@ -194,21 +272,22 @@ function material(m: BriefMaterial): string[] {
 
   if (m.stories.length) {
     parts.push(
-      `SECTION "Running stories" — these accounts were grouped as one story each. Say how many outlets carried it and name them:\n` +
+      `RUNNING STORIES (context, not evidence, and not a section for you to write — it is appended after your text): each is one event that several outlets carried; "kept" is how many of those accounts the journalist read, and the passages above come from those. Use it to judge how widely a development was carried, and say so in the prose:\n` +
         m.stories
           .map(
             (s) =>
-              `- "${s.title}" — ${s.accounts} account${s.accounts === 1 ? "" : "s"}${
+              `- "${s.title}" — kept ${s.kept} of ${s.accounts} account${s.accounts === 1 ? "" : "s"}${
                 s.outlets.length ? ` (${s.outlets.join(", ")})` : ""
-              }, first seen ${s.first_seen.slice(0, 16)}`
+              }`
           )
-          .join("\n") +
-        `\n(Cite the passages above and below; this list is context, not evidence.)`
+          .join("\n")
     );
   }
 
   if (m.other.length) {
-    parts.push(`SECTION "Also arrived" — everything else worth a line:\n${renderPassages(m.other)}`);
+    parts.push(
+      `SECTION "Also arrived" — one line per article at most, and only for what happened in the window:\n${renderPassages(m.other)}`
+    );
   }
 
   if (m.contradictions.length) {
@@ -225,21 +304,69 @@ function material(m: BriefMaterial): string[] {
     );
   }
 
-  if (m.revised.length) {
-    parts.push(
-      `SECTION "Entries that changed" — the pedia rewrote these overnight. One line each, no citations needed:\n` +
-        m.revised.map((r) => `- ${r.entity}: ${(r.changelog ?? "").replace(/\s+/g, " ").slice(0, 300)}`).join("\n")
-    );
-  }
-
-  if (m.problems.length) {
-    parts.push(
-      `SECTION "Did not come in" — list these plainly at the end so they can be chased by hand:\n` +
-        m.problems.map((p) => `- "${p.title}" from ${p.feed}: ${p.note ?? "failed"}`).join("\n")
-    );
-  }
-
   return parts;
+}
+
+/**
+ * The sections that are lists rather than prose, written by the app.
+ *
+ * "Running stories", "Entries that changed" and "Did not come in" are rows,
+ * and asking the writer to copy rows out was paying for a transcription
+ * the writer then skipped: the first brief written under the tightened
+ * prompt dropped all three. Appended after the model's text, they are
+ * always there, always complete, and cost nothing.
+ */
+/** A trim the reader can see is a trim, rather than a sentence that stops. */
+function trimTo(text: string, limit: number): string {
+  if (text.length <= limit) return text;
+  const cut = text.slice(0, limit);
+  const lastSpace = cut.lastIndexOf(" ");
+  return (lastSpace > limit - 40 ? cut.slice(0, lastSpace) : cut).trimEnd() + "…";
+}
+
+export function fixedSections(m: BriefMaterial): string {
+  const out: string[] = [];
+  if (m.stories.length) {
+    out.push(
+      `## Running stories\n\n` +
+        m.stories
+          .map(
+            (s) =>
+              `- **${s.title.replace(/\s+/g, " ").trim()}** — kept ${s.kept} of ${s.accounts} account${
+                s.accounts === 1 ? "" : "s"
+              }${s.outlets.length ? ` (${s.outlets.join(", ")})` : ""}`
+          )
+          .join("\n")
+    );
+  }
+  if (m.revised.length) {
+    out.push(
+      `## Entries that changed\n\n` +
+        m.revised
+          .map((r) => {
+            // Split on a literal \n as well as a real one. A changelog that
+            // came back double-escaped carries no line break to find, so the
+            // whole list became "line one" and the trim below cut it
+            // mid-word — "…as i" and "…for Chinese wor", both published on
+            // 19 September. unescapeModelJson now repairs this on the way
+            // in; the guard stays because a brief is assembled from rows
+            // written long before it, and the old ones are still there.
+            const first = (r.changelog ?? "")
+              .split(/\r?\n|\\n/)
+              .map((l) => l.replace(/^\s*[-*•]\s*/, "").trim())
+              .filter(Boolean)[0];
+            return `- ${r.entity}${first ? `: ${trimTo(first, 220)}` : ""}`;
+          })
+          .join("\n")
+    );
+  }
+  if (m.problems.length) {
+    out.push(
+      `## Did not come in\n\n` +
+        m.problems.map((p) => `- "${p.title.replace(/\s+/g, " ").trim()}" from ${p.feed}: ${p.note ?? "failed"}`).join("\n")
+    );
+  }
+  return out.join("\n\n");
 }
 
 export const LANGUAGE_NAMES: Record<string, string> = {
@@ -290,9 +417,9 @@ export async function handleBrief(task: Task): Promise<void> {
             WHERE day=?`
         )
         .run(
-          `Nothing came in between ${m.from.slice(0, 16).replace("T", " ")} and ${m.to
-            .slice(0, 16)
-            .replace("T", " ")}. No feed had anything new about the subjects you follow.`,
+          `Nothing came in between ${formatDateTime(m.from)} and ${formatDateTime(
+            m.to
+          )}. No feed had anything new about the subjects you follow.`,
           m.from,
           m.to,
           JSON.stringify(m.counts),
@@ -306,9 +433,9 @@ export async function handleBrief(task: Task): Promise<void> {
   const language = getConfig().entryLanguage || "en";
   const parts = [
     week
-      ? `WINDOW: the week of ${describeWeek(key)}, ${m.from.slice(0, 10)} to ${m.to.slice(0, 10)}`
-      : `WINDOW: ${m.from.slice(0, 16).replace("T", " ")} to ${m.to.slice(0, 16).replace("T", " ")}`,
-    `WHAT ARRIVED: ${m.counts.sources} source(s), ${m.counts.passages} passage(s), ${m.counts.entities} subject(s), ${m.counts.stories} new stor${m.counts.stories === 1 ? "y" : "ies"}.`,
+      ? `WINDOW: the week of ${describeWeek(key)}, ${formatDate(m.from)} to ${formatDate(m.to)}`
+      : `WINDOW: ${formatDateTime(m.from)} to ${formatDateTime(m.to)} (local time; every date below is local time)`,
+    `WHAT ARRIVED: ${m.counts.sources} article(s) kept, ${m.counts.passages} passage(s), ${m.counts.entities} subject(s), touching ${m.counts.stories} running stor${m.counts.stories === 1 ? "y" : "ies"}.`,
     ...material(m),
   ];
 
@@ -336,6 +463,7 @@ export async function handleBrief(task: Task): Promise<void> {
   const full = [
     data.headline?.trim() ? `**${data.headline.trim()}**` : "",
     body.trim(),
+    fixedSections(m),
     (data.questions ?? []).length
       ? `## Worth chasing\n\n${(data.questions ?? []).map((q) => `- ${q}`).join("\n")}`
       : "",

@@ -4,7 +4,10 @@
  * which read as clutter on screen.
  */
 const HARAKAT = /[ً-ْٰـ]/g;
-const PAUSE = /^\s*[.،,؟?!؛:]/;
+const PAUSE = /^\s*[.،,؟?!؛:|]/;
+
+/** A `|` in a script breaks the caption there; the voice never sees it. */
+export const spoken = (script) => script.replace(/\s*\|\s*/g, " ");
 
 /** Phrases break at the script's punctuation; long ones split into even parts. */
 export function sceneCues(words, script, offset, maxWords = 7) {

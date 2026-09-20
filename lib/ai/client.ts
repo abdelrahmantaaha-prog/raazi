@@ -12,6 +12,7 @@ import {
   markModelBusy,
   markModelSpent,
   markUsed,
+  isLiteModel,
   modelFor,
   modelSpent,
   nextKey,
@@ -20,6 +21,8 @@ import {
   type ApiKey,
 } from "../keys";
 import { spec, type ProviderId, type Stage } from "../providers";
+import { unescapeModelJson } from "./escapes";
+import { withLessons } from "../lessons";
 import { chatJson, chatText, validateOpenAiKey } from "./openai";
 import { anthropicJson, anthropicText, validateAnthropicKey, EFFORT } from "./anthropic";
 import {
@@ -141,7 +144,18 @@ export const CALL_TIMEOUT_MS = 180_000;
  * to succeed.
  */
 const LONG_TIMEOUT_MS = 420_000;
-const LONG_STAGES = new Set(["entry"]);
+const LONG_STAGES = new Set(["entry", "brief"]);
+
+/**
+ * The stages whose output is kept and read, as opposed to the stages that
+ * read: an entry stands until its evidence changes, a brief is the morning's
+ * record. Neither may be written by the lite tail of the model ring or by
+ * the local model; when nothing better is free, the task waits.
+ */
+const QUALITY_STAGES = new Set<Stage>(["entry", "brief"]);
+
+/** The stages whose work is small and forgiving, asked of the cheapest model first. */
+const CHEAP_STAGES = new Set<Stage>(["group"]);
 export const MEDIA_TIMEOUT_MS = 600_000;
 
 function timeoutFor(need: Need, explicit?: number, stage?: Stage): number {
@@ -257,10 +271,11 @@ const MAX_INVALID_PER_CALL = 2;
  * The other providers do not meter per model, so there the caller's model
  * simply stands.
  */
-export function modelOfCall(k: ApiKey, opts: { model?: string }): string {
+export function modelOfCall(k: ApiKey, opts: { model?: string }, quality = false, cheap = false): string {
   const provider = k.provider ?? "gemini";
-  if (spec(provider).kind !== "gemini") return k.model?.trim() || opts.model || modelFor(k);
-  return opts.model && !modelSpent(provider, opts.model) ? opts.model : modelFor(k);
+  if (spec(provider).kind !== "gemini") return k.model?.trim() || opts.model || modelFor(k, { quality, cheap });
+  const wanted = opts.model && !(quality && isLiteModel(opts.model)) ? opts.model : undefined;
+  return wanted && !modelSpent(provider, wanted) ? wanted : modelFor(k, { quality, cheap });
 }
 
 /**
@@ -301,9 +316,17 @@ export async function withRotation<T>(
      * that refuses stops there, with the ring untouched.
      */
     hardPin?: boolean;
+    /**
+     * This call writes something that is kept — an entry, a brief — and must
+     * not be served by a lite model or by the local one. `modelOf` already
+     * refuses the lite tail of the ring; this makes the loop wait for a real
+     * model when every one of them is spent or busy, instead of taking the
+     * first thing that answers.
+     */
+    quality?: boolean;
   } = {}
 ): Promise<{ value: T; key: ApiKey }> {
-  const pick = opts.modelOf ?? modelFor;
+  const pick = opts.modelOf ?? ((k: ApiKey) => modelFor(k, { quality: opts.quality }));
   const tried = new Set<string>();
   let lastError: unknown;
   let invalidInARow = 0;
@@ -319,8 +342,16 @@ export async function withRotation<T>(
       if (!key) break; // this provider is spent; try the next one
 
       tried.add(key.id);
-      await pace(key.id);
       const model = pick(key);
+
+      // Every model a quality call may use is set aside: wait for one to
+      // come back rather than ask a spent one and burn the key on the
+      // refusal, and rather than step down to what is left.
+      if (opts.quality && modelSpent(provider, model)) {
+        sawUnavailable = true;
+        break;
+      }
+      await pace(key.id);
 
       try {
         const value = await fn(key, model);
@@ -424,6 +455,12 @@ export async function withRotation<T>(
           if (next !== model && !modelSpent(provider, next)) {
             tried.delete(key.id);
             continue;
+          }
+          // A quality call with nothing real left to ask waits; the key is
+          // fine and is not set aside for a wall that belongs to the model.
+          if (opts.quality) {
+            sawUnavailable = true;
+            break;
           }
           markExhausted(key.id, failure.reason, minutes);
           console.log(`[corpus] key "${key.label}" has nothing left to ask; trying the next one`);
@@ -650,7 +687,15 @@ export async function generateJson<T>(opts: {
   /** Ceiling on one attempt, in ms. Defaults to three minutes. */
   timeoutMs?: number;
 }): Promise<CallResult<T>> {
-  const candidates = opts.provider ? [opts.provider] : providersFor(opts.stage);
+  const quality = Boolean(opts.stage && QUALITY_STAGES.has(opts.stage));
+  const cheap = Boolean(opts.stage && CHEAP_STAGES.has(opts.stage));
+  // The stage's lessons ride on every call, in the researcher's words.
+  const system = withLessons(opts.system, opts.stage);
+  // What a quality call writes is kept for months; the local model is a last
+  // resort for reading, never for that.
+  const candidates = (opts.provider ? [opts.provider] : providersFor(opts.stage)).filter(
+    (p) => !quality || p !== "ollama" || opts.provider === "ollama"
+  );
   const timeoutMs = timeoutFor(undefined, opts.timeoutMs, opts.stage);
 
   const { value, key } = await withRotation(candidates, async (k, model): Promise<CallResult<T>> => {
@@ -662,7 +707,7 @@ export async function generateJson<T>(opts: {
         apiKey: k.key,
         model,
         baseUrl: k.baseUrl,
-        system: opts.system,
+        system,
         prompt: partsToPrompt(opts.parts),
         schema: opts.schema,
         temperature: opts.temperature,
@@ -678,7 +723,7 @@ export async function generateJson<T>(opts: {
         apiKey: k.key,
         model,
         baseUrl: k.baseUrl,
-        system: opts.system,
+        system,
         prompt: partsToPrompt(opts.parts),
         schema: opts.schema,
         effort: EFFORT[opts.stage ?? ""],
@@ -694,7 +739,7 @@ export async function generateJson<T>(opts: {
         responseMimeType: "application/json",
         responseSchema: opts.schema,
         temperature: opts.temperature ?? 0.1,
-        ...(opts.system ? { systemInstruction: opts.system } : {}),
+        ...(system ? { systemInstruction: system } : {}),
       },
     });
 
@@ -704,11 +749,11 @@ export async function generateJson<T>(opts: {
     if (!res.text) throw new Error("Empty response.");
 
     try {
-      return { data: JSON.parse(res.text) as T, usage, model: answered };
+      return { data: unescapeModelJson(JSON.parse(res.text) as T), usage, model: answered };
     } catch {
       throw new TruncatedOutputError();
     }
-  }, { modelOf: (k) => modelOfCall(k, opts) });
+  }, { modelOf: (k) => modelOfCall(k, opts, quality, cheap), quality });
 
   bill(key.id, value.usage);
   noteModel(value.model);

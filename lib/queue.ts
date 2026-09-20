@@ -163,6 +163,29 @@ export function noteTaskModel(taskId: number, model: string) {
   db().prepare("UPDATE tasks SET model=? WHERE id=?").run(model.slice(0, 120), taskId);
 }
 
+/**
+ * Gives back the attempt that claimNext charged for a turn the task never
+ * got to take.
+ *
+ * claimNext counts every claim, and classify() reads that count as the
+ * task's retry budget: two strikes fail an unrecognised error outright,
+ * five fail a 5xx or a network blip. But a task set aside because every
+ * model was busy, or because the ring was rate limited, has not tried
+ * anything — and under the quality floor that wait is the normal state of
+ * the entry stage. By 20 September 2026 entry tasks were being claimed an
+ * average of 30 times each, to a maximum of 97, every one of them arriving
+ * at its first real error with the whole budget already spent.
+ *
+ * So a wait that was the ring's fault hands the attempt back, and the
+ * count means again what classify() thinks it means: how many times this
+ * task has genuinely been tried.
+ */
+export function refundAttempt(taskId: number) {
+  db()
+    .prepare("UPDATE tasks SET attempts = MAX(attempts - 1, 0) WHERE id = ?")
+    .run(taskId);
+}
+
 export function failTask(taskId: number, error: string) {
   db()
     .prepare(

@@ -21,6 +21,17 @@ import type { Locator } from "./types";
  * in Tuesday's brief as news.
  */
 
+/** Where a passage's dated events fall against the brief's window. */
+export type PassageWhen = "within" | "ahead" | "before" | "undated";
+
+export interface DatedEvent {
+  iso: string | null;
+  text: string | null;
+  precision: string | null;
+  summary: string;
+  when: PassageWhen;
+}
+
 export interface BriefPassage {
   mention_id: number;
   quote: string;
@@ -39,21 +50,47 @@ export interface BriefPassage {
   reliability: string | null;
   story_id: number | null;
   story_title: string | null;
+  /**
+   * The events extraction dated from this passage, and where each falls
+   * against the window. Filled by `gather`; rows read elsewhere by the same
+   * column list will not carry it, and the renderer says nothing then.
+   */
+  dated?: DatedEvent[];
+  /**
+   * The passage's own place in time: "within" when something in it happened
+   * in the window, "ahead" when it names something still to come, "before"
+   * when everything it dates is older than the window — background the
+   * article was reminding its readers of, which the writer must not report
+   * as news — and "undated" when extraction fixed no date at all.
+   */
+  when?: PassageWhen;
 }
 
 export interface BriefStory {
   id: number;
   title: string;
+  /** Every account grouped into it, kept or not: how widely it was carried. */
   accounts: number;
+  /** The accounts you actually kept in this window — the ones with passages. */
+  kept: number;
   outlets: string[];
   first_seen: string;
   passages: number;
 }
 
+export interface BriefSection {
+  label: string;
+  kind: string;
+  entityId: number | null;
+  /** How many kept articles were filed under this topic in the window, used or not. */
+  sources: number;
+  passages: BriefPassage[];
+}
+
 export interface BriefMaterial {
   from: string;
   to: string;
-  watched: { label: string; kind: string; entityId: number | null; passages: BriefPassage[] }[];
+  watched: BriefSection[];
   stories: BriefStory[];
   other: BriefPassage[];
   contradictions: {
@@ -105,12 +142,148 @@ const IN_WINDOW = `COALESCE(s.kept_at, s.published_at, s.added_at) >= @from
  */
 export const WORTH_READING = `(m.claim IS NOT NULL OR m.context IS NOT NULL)`;
 
-export function gather(from: Date, to: Date, opts: { perWatch?: number; maxOther?: number } = {}): BriefMaterial {
-  const params = { from: from.toISOString(), to: to.toISOString() };
-  const perWatch = opts.perWatch ?? 12;
+/**
+ * How many passages one article may contribute to one heading.
+ *
+ * The 15 September brief is why this exists. A topic took its twelve newest
+ * passages, newest first, so every heading was the last one or two articles
+ * filed under it: the whole of "Elections" was the tail of a 105-passage
+ * think-tank paper, credits included ("web development by Martin Tenev"),
+ * while the Supreme Court's mail-ballot ruling, carried by thirty outlets
+ * that morning, appeared under no heading at all. A cap per article, filled
+ * round-robin across the articles that matter most, is what makes a heading
+ * read as the day on that beat rather than as one piece from it.
+ */
+export const PER_SOURCE_CAP = 4;
 
-  const watched: BriefMaterial["watched"] = [];
-  const seen = new Set<number>();
+/** And in "Also arrived", where one line per article is the whole point. */
+const OTHER_PER_SOURCE_CAP = 2;
+/** So one much-named subject does not fill the section by himself. */
+const OTHER_PER_ENTITY_CAP = 3;
+
+interface Row extends BriefPassage {
+  confidence: number;
+  /** Accounts in this passage's story, kept or not: how widely it was carried. */
+  accounts: number;
+}
+
+/**
+ * Which of a source's topics it is filed under in the brief.
+ *
+ * A source is tagged on more than one axis, "Iran; Trump administration;
+ * US-Iran War", and the brief prints each passage once, so one heading has
+ * to claim it. Headings used to claim in order of how much they had arrived,
+ * broadest first, which is how a report on munitions shortages in the Iran
+ * war ended up under "Trump administration" and a Canadian investment
+ * summit under "Economics". The most specific heading claims instead: a
+ * running story before a region, a region before a theme, an
+ * administration last of all, because an administration's name is on
+ * everything it does. Ties go to the tag with fewer sources in the library.
+ */
+const FACET_RANK: Record<string, number> = { story: 0, region: 1, theme: 2, actor: 4 };
+
+export function facetOf(description: string | null | undefined): string | null {
+  const m = /^\s*(story|region|theme|actor)\s*:/i.exec(description ?? "");
+  return m ? m[1].toLowerCase() : null;
+}
+
+function specificity(tag: { description: string | null; sources: number }): [number, number] {
+  const facet = facetOf(tag.description);
+  return [facet ? FACET_RANK[facet] : 3, tag.sources];
+}
+
+/** Where a sortable date falls against a window, at the precision it carries. */
+export function whenOf(iso: string | null | undefined, from: string, to: string): PassageWhen {
+  if (!iso) return "undated";
+  if (/^--/.test(iso)) return "undated";
+  const width = iso.length; // 4, 7 or 10
+  const lo = from.slice(0, width);
+  const hi = to.slice(0, width);
+  if (iso < lo) return "before";
+  if (iso > hi) return "ahead";
+  return "within";
+}
+
+/** Attaches every dated event to the passage it came from, and settles the passage's own tense. */
+function attachDates(rows: Row[], from: string, to: string): void {
+  if (!rows.length) return;
+  const byMention = new Map<number, Row>();
+  for (const r of rows) {
+    r.dated = [];
+    byMention.set(r.mention_id, r);
+  }
+  const ids = [...byMention.keys()];
+  for (let i = 0; i < ids.length; i += 500) {
+    const slice = ids.slice(i, i + 500);
+    const events = db()
+      .prepare(
+        `SELECT mention_id, date_iso, date_text, precision, summary
+           FROM events WHERE mention_id IN (${slice.map(() => "?").join(",")})
+          ORDER BY id`
+      )
+      .all(...slice) as {
+      mention_id: number;
+      date_iso: string | null;
+      date_text: string | null;
+      precision: string | null;
+      summary: string;
+    }[];
+    for (const ev of events) {
+      byMention.get(ev.mention_id)?.dated?.push({
+        iso: ev.date_iso,
+        text: ev.date_text,
+        precision: ev.precision,
+        summary: ev.summary,
+        when: whenOf(ev.date_iso, from, to),
+      });
+    }
+  }
+  for (const r of rows) {
+    const whens = new Set((r.dated ?? []).map((d) => d.when));
+    r.when = whens.has("within") ? "within" : whens.has("ahead") ? "ahead" : whens.has("before") ? "before" : "undated";
+  }
+}
+
+/** Background last, then the surer reading, then document order: the lede first. */
+const WHEN_RANK: Record<PassageWhen, number> = { within: 0, ahead: 1, undated: 2, before: 3 };
+function byUsefulness(a: Row, b: Row): number {
+  return (
+    WHEN_RANK[a.when ?? "undated"] - WHEN_RANK[b.when ?? "undated"] ||
+    b.confidence - a.confidence ||
+    a.mention_id - b.mention_id
+  );
+}
+
+/**
+ * Takes passages from a ranked list of sources, one from each in turn,
+ * until the budget is spent or every source has given its cap. Round-robin
+ * rather than source by source so the fourth article on a beat still gets a
+ * line when the first three were long. Returns the passages grouped by
+ * source, in source order.
+ */
+export function roundRobin<T>(sources: T[][], budget: number, cap: number): T[] {
+  const taken: T[][] = sources.map(() => []);
+  let left = budget;
+  for (let round = 0; round < cap && left > 0; round++) {
+    for (let i = 0; i < sources.length && left > 0; i++) {
+      const next = sources[i][round];
+      if (next === undefined) continue;
+      taken[i].push(next);
+      left--;
+    }
+  }
+  return taken.flat();
+}
+
+export function gather(
+  from: Date,
+  to: Date,
+  opts: { perWatch?: number; maxOther?: number; perSource?: number } = {}
+): BriefMaterial {
+  const params = { from: from.toISOString(), to: to.toISOString() };
+  const perWatch = opts.perWatch ?? 16;
+  const perSource = opts.perSource ?? PER_SOURCE_CAP;
+  const maxOther = opts.maxOther ?? 60;
 
   /**
    * The watched sections, and why they are topics.
@@ -120,77 +293,209 @@ export function gather(from: Date, to: Date, opts: { perWatch?: number; maxOther
    * the president is evidence about Donald Trump, the Trump administration, the
    * White House and the United States, so the same passage was printed four
    * times under four headings. A topic covers all four in one, and says
-   * something a reader can act on — "Trade policy", not "Donald Trump".
+   * something a reader can act on: "Trade policy", not "Donald Trump".
    *
    * Entity watches still exist and still do their other work: they decide which
    * entries are kept current first, and the star on an entry is how you say a
    * subject matters. They no longer carve up the brief.
    *
-   * A passage is used once. The first section to claim it keeps it, and the
-   * rest of the brief — including "everything else" — will not repeat it.
+   * A passage is used once, and so is an article: it is filed under the most
+   * specific topic it carries, and the rest of the brief, "everything else"
+   * included, will not repeat it.
    */
-  for (const w of listWatchlist()) {
-    let rows: BriefPassage[] = [];
+  const watches = listWatchlist().filter((w) => w.kind !== "entity");
+  const topicWatches = watches.filter((w) => w.kind === "topic" && w.tag_id);
+  const tagIds = topicWatches.map((w) => w.tag_id as number);
 
-    if (w.kind === "entity") {
-      continue;
-    } else if (w.kind === "topic" && w.tag_id) {
-      rows = db()
-        .prepare(
-          `SELECT ${PASSAGE_COLUMNS} ${PASSAGE_JOINS}
-             JOIN source_tags stg ON stg.source_id = s.id AND stg.tag_id = @tagId
-            WHERE ${IN_WINDOW} AND ${WORTH_READING}
-            ORDER BY COALESCE(s.published_at, s.added_at) DESC, m.id DESC
-            LIMIT @limit`
-        )
-        .all({ ...params, tagId: w.tag_id, limit: perWatch }) as BriefPassage[];
-    } else if (w.phrase) {
-      try {
-        rows = db()
-          .prepare(
-            `SELECT ${PASSAGE_COLUMNS} ${PASSAGE_JOINS}
-              WHERE m.chunk_id IN (SELECT rowid FROM chunks_fts WHERE chunks_fts MATCH @match)
-                AND ${IN_WINDOW} AND ${WORTH_READING}
-              ORDER BY COALESCE(s.published_at, s.added_at) DESC, m.id DESC
-              LIMIT @limit`
-          )
-          .all({ ...params, match: `"${w.phrase.replace(/"/g, "")}"`, limit: perWatch }) as BriefPassage[];
-      } catch {
-        rows = [];
-      }
-    }
-
-    const fresh = rows.filter((r) => !seen.has(r.mention_id));
-    if (fresh.length) {
-      for (const r of fresh) seen.add(r.mention_id);
-      watched.push({ label: w.label, kind: w.kind, entityId: w.entity_id, passages: fresh });
+  const tagInfo = new Map<number, { description: string | null; sources: number }>();
+  if (tagIds.length) {
+    for (const t of db()
+      .prepare(
+        `SELECT t.id, t.description, (SELECT COUNT(*) FROM source_tags st WHERE st.tag_id = t.id) AS sources
+           FROM tags t WHERE t.id IN (${tagIds.map(() => "?").join(",")})`
+      )
+      .all(...tagIds) as { id: number; description: string | null; sources: number }[]) {
+      tagInfo.set(t.id, { description: t.description, sources: t.sources });
     }
   }
+  const order = new Map(tagIds.map((id, i) => [id, i]));
+  const moreSpecific = (a: number, b: number) => {
+    const [fa, na] = specificity(tagInfo.get(a) ?? { description: null, sources: 0 });
+    const [fb, nb] = specificity(tagInfo.get(b) ?? { description: null, sources: 0 });
+    return fa - fb || na - nb || (order.get(a) ?? 0) - (order.get(b) ?? 0);
+  };
 
-  // Everything else that arrived, so a brief is still useful before you have
-  // built a watchlist — and so something important that is not on it can still
-  // reach you. Ranked by how well documented the entity is, which is a decent
-  // proxy for "this is one of your subjects" without asking.
-  const other = (
+  // Every kept source in the window that carries a watched topic, filed
+  // under the one topic that claims it.
+  const filedUnder = new Map<number, number>(); // source -> tag
+  if (tagIds.length) {
+    const rows = db()
+      .prepare(
+        `SELECT s.id AS source_id, st.tag_id
+           FROM sources s JOIN source_tags st ON st.source_id = s.id
+          WHERE ${IN_WINDOW} AND st.tag_id IN (${tagIds.map((id) => Number(id)).join(",")})`
+      )
+      .all(params) as { source_id: number; tag_id: number }[];
+    const options = new Map<number, number[]>();
+    for (const r of rows) options.set(r.source_id, [...(options.get(r.source_id) ?? []), r.tag_id]);
+    for (const [sourceId, tags] of options) filedUnder.set(sourceId, [...tags].sort(moreSpecific)[0]);
+  }
+
+  // All the readable passages of those sources, once, with the width of
+  // their story alongside: how many outlets carried the same event is the
+  // best cheap signal of what mattered that morning.
+  const passagesOf = new Map<number, Row[]>();
+  const readRows = (ids: number[]): Row[] =>
+    ids.length
+      ? (db()
+          .prepare(
+            `SELECT ${PASSAGE_COLUMNS}, m.confidence,
+                    (SELECT COUNT(*) FROM story_sources x WHERE x.story_id = st.story_id) AS accounts
+             ${PASSAGE_JOINS}
+              WHERE s.id IN (${ids.map(() => "?").join(",")}) AND ${WORTH_READING}
+              ORDER BY m.id`
+          )
+          .all(...ids) as Row[])
+      : [];
+  const load = (ids: number[]) => {
+    const fresh = ids.filter((id) => !passagesOf.has(id));
+    if (!fresh.length) return;
+    const rows = readRows(fresh);
+    attachDates(rows, params.from, params.to);
+    for (const id of fresh) passagesOf.set(id, []);
+    for (const r of rows) passagesOf.get(r.source_id)!.push(r);
+    for (const id of fresh) passagesOf.get(id)!.sort(byUsefulness);
+  };
+  load([...filedUnder.keys()]);
+
+  const seen = new Set<number>();
+  const usedSources = new Set<number>();
+  const watched: BriefSection[] = [];
+
+  const rankSources = (ids: number[]): number[] =>
+    ids
+      .filter((id) => (passagesOf.get(id) ?? []).length > 0)
+      .sort((a, b) => {
+        const pa = passagesOf.get(a)![0];
+        const pb = passagesOf.get(b)![0];
+        return (
+          (pb.accounts ?? 0) - (pa.accounts ?? 0) ||
+          String(pb.published_at ?? "").localeCompare(String(pa.published_at ?? "")) ||
+          a - b
+        );
+      });
+
+  // A heading's budget grows with the articles under it, to a point: a beat
+  // with nineteen articles is not told in sixteen one-line passages.
+  const budgetFor = (articles: number) => Math.min(2 * perWatch, Math.max(perWatch, 2 * articles));
+
+  for (const w of topicWatches) {
+    const mine = rankSources([...filedUnder.keys()].filter((id) => filedUnder.get(id) === w.tag_id));
+    if (!mine.length) continue;
+    const picked = roundRobin(
+      mine.map((id) => passagesOf.get(id)!.filter((r) => !seen.has(r.mention_id))),
+      budgetFor(mine.length),
+      perSource
+    );
+    if (!picked.length) continue;
+    for (const r of picked) {
+      seen.add(r.mention_id);
+      usedSources.add(r.source_id);
+    }
+    watched.push({ label: w.label, kind: w.kind, entityId: w.entity_id, sources: mine.length, passages: picked });
+  }
+
+  // A phrase watch is answered by full-text search over the passages of
+  // articles no topic has claimed, under the same cap per article.
+  for (const w of watches) {
+    if (w.kind !== "phrase" || !w.phrase) continue;
+    let rows: Row[] = [];
+    try {
+      rows = db()
+        .prepare(
+          `SELECT ${PASSAGE_COLUMNS}, m.confidence,
+                  (SELECT COUNT(*) FROM story_sources x WHERE x.story_id = st.story_id) AS accounts
+           ${PASSAGE_JOINS}
+            WHERE m.chunk_id IN (SELECT rowid FROM chunks_fts WHERE chunks_fts MATCH @match)
+              AND ${IN_WINDOW} AND ${WORTH_READING}
+            ORDER BY m.id`
+        )
+        .all({ ...params, match: `"${w.phrase.replace(/"/g, "")}"` }) as Row[];
+    } catch {
+      rows = [];
+    }
+    rows = rows.filter((r) => !seen.has(r.mention_id) && !filedUnder.has(r.source_id));
+    if (!rows.length) continue;
+    attachDates(rows, params.from, params.to);
+    const bySource = new Map<number, Row[]>();
+    for (const r of rows) bySource.set(r.source_id, [...(bySource.get(r.source_id) ?? []), r]);
+    for (const list of bySource.values()) list.sort(byUsefulness);
+    const ranked = [...bySource.values()].sort((a, b) => (b[0].accounts ?? 0) - (a[0].accounts ?? 0));
+    const picked = roundRobin(ranked, perWatch, perSource);
+    for (const r of picked) {
+      seen.add(r.mention_id);
+      usedSources.add(r.source_id);
+    }
+    watched.push({ label: w.label, kind: w.kind, entityId: w.entity_id, sources: bySource.size, passages: picked });
+  }
+
+  // The fullest sections first: the shape of the morning, not the order of
+  // the watchlist.
+  watched.sort(
+    (a, b) => b.sources - a.sources || b.passages.length - a.passages.length || a.label.localeCompare(b.label)
+  );
+
+  /**
+   * Everything else that arrived, one or two lines an article: what no topic
+   * claimed, and what a topic claimed but had no room for. Ranked by how
+   * widely the story was carried, then by when it came in. It used to rank
+   * by how much the pedia already knew about the passage's subject, which
+   * meant sixty lines that each began "Donald Trump". A passage that only
+   * dates something older than the window is background, and background
+   * has no line here.
+   */
+  const unfiled = (
     db()
       .prepare(
-        `SELECT ${PASSAGE_COLUMNS},
-                (SELECT COUNT(*) FROM live_mentions mm WHERE mm.entity_id = e.id) AS weight
-         ${PASSAGE_JOINS}
-          WHERE ${IN_WINDOW} AND ${WORTH_READING}
-          ORDER BY weight DESC, COALESCE(s.published_at, s.added_at) DESC
-          LIMIT @limit`
+        `SELECT s.id FROM sources s
+          WHERE ${IN_WINDOW}
+            AND EXISTS (SELECT 1 FROM live_mentions m WHERE m.source_id = s.id AND ${WORTH_READING})`
       )
-      .all({ ...params, limit: (opts.maxOther ?? 60) + seen.size }) as (BriefPassage & { weight: number })[]
+      .all(params) as { id: number }[]
   )
-    .filter((r) => !seen.has(r.mention_id))
-    .slice(0, opts.maxOther ?? 60);
+    .map((r) => r.id)
+    .filter((id) => !usedSources.has(id));
+  load(unfiled);
+  const perEntity = new Map<number, number>();
+  const other: BriefPassage[] = [];
+  const leftovers = rankSources(unfiled).map((id) =>
+    passagesOf.get(id)!.filter((r) => !seen.has(r.mention_id) && r.when !== "before")
+  );
+  for (const r of roundRobin(leftovers, maxOther * 2, OTHER_PER_SOURCE_CAP)) {
+    if (other.length >= maxOther) break;
+    const n = perEntity.get(r.entity_id) ?? 0;
+    if (n >= OTHER_PER_ENTITY_CAP) continue;
+    perEntity.set(r.entity_id, n + 1);
+    seen.add(r.mention_id);
+    other.push(r);
+  }
 
+  /**
+   * Running stories: only the ones you kept an account of. A story of
+   * thirty-four accounts of which you kept five is five articles' worth of
+   * passages and thirty-four outlets' worth of attention, and the writer is
+   * told both. One you kept none of is not in your library and not in your
+   * brief, however many outlets carried it.
+   */
   const stories = (
     db()
       .prepare(
         `SELECT s.id, s.title, s.first_seen,
                 (SELECT COUNT(*) FROM story_sources ss WHERE ss.story_id=s.id) AS accounts,
+                (SELECT COUNT(*) FROM story_sources ss JOIN sources src ON src.id = ss.source_id
+                  WHERE ss.story_id=s.id AND src.triage = 'kept'
+                    AND COALESCE(src.kept_at, src.published_at, src.added_at) >= @from
+                    AND COALESCE(src.kept_at, src.published_at, src.added_at) < @to) AS kept,
                 (SELECT group_concat(DISTINCT COALESCE(src.outlet, src.publisher, src.title))
                    FROM story_sources ss JOIN sources src ON src.id=ss.source_id
                   WHERE ss.story_id=s.id) AS outlets,
@@ -199,7 +504,8 @@ export function gather(from: Date, to: Date, opts: { perWatch?: number; maxOther
                   WHERE ss.story_id=s.id) AS passages
            FROM stories s
           WHERE s.last_seen >= @from AND s.last_seen < @to
-          ORDER BY accounts DESC, s.last_seen DESC
+            AND kept > 0
+          ORDER BY kept DESC, accounts DESC, s.last_seen DESC
           LIMIT 25`
       )
       .all(params) as (Omit<BriefStory, "outlets"> & { outlets: string | null })[]
@@ -237,13 +543,16 @@ export function gather(from: Date, to: Date, opts: { perWatch?: number; maxOther
     )
     .all(params) as BriefMaterial["problems"];
 
+  // Stories are counted as the ones your kept articles belong to; the
+  // thousand opened by every wire item the inbox showed you are not news
+  // you read.
   const counts = db()
     .prepare(
       `SELECT
          (SELECT COUNT(*) FROM sources s WHERE ${IN_WINDOW}) AS sources,
          (SELECT COUNT(*) FROM live_mentions m JOIN sources s ON s.id=m.source_id WHERE ${IN_WINDOW}) AS passages,
          (SELECT COUNT(DISTINCT m.entity_id) FROM live_mentions m JOIN sources s ON s.id=m.source_id WHERE ${IN_WINDOW}) AS entities,
-         (SELECT COUNT(*) FROM stories st WHERE st.first_seen >= @from AND st.first_seen < @to) AS stories`
+         (SELECT COUNT(DISTINCT ss.story_id) FROM story_sources ss JOIN sources s ON s.id = ss.source_id WHERE ${IN_WINDOW}) AS stories`
     )
     .get(params) as BriefMaterial["counts"];
 

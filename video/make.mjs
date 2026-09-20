@@ -13,7 +13,7 @@ import { ffmpeg, duration } from "./lib/ffmpeg.mjs";
 import { narrate } from "./lib/tts.mjs";
 import { Camera, CURSOR_SCRIPT } from "./lib/camera.mjs";
 import { overlayMain } from "./lib/overlay.mjs";
-import { sceneCues, assDocument } from "./lib/captions.mjs";
+import { sceneCues, assDocument, spoken } from "./lib/captions.mjs";
 
 const args = process.argv.slice(2);
 const has = (name) => args.includes(`--${name}`);
@@ -31,7 +31,7 @@ for (const d of ["tts", "scenes", "frames", "cards", "fonts"]) fs.mkdirSync(path
 
 // ---------------------------------------------------------------- narration
 for (const s of SCENES) {
-  s.narr = s.say ? await narrate(s.say, { voice: VOICE, rate: RATE, dir: path.join(FILM, "tts") }) : null;
+  s.narr = s.say ? await narrate(spoken(s.say), { voice: VOICE, rate: RATE, dir: path.join(FILM, "tts") }) : null;
   s.length = Math.max(s.min ?? 0, s.narr ? LEAD + s.narr.duration + TAIL : 0);
 }
 const estimate = SCENES.reduce((t, s) => t + s.length, 0) - XF * (SCENES.length - 1);

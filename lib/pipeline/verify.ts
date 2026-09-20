@@ -180,7 +180,10 @@ export async function handleVerify(task: Task): Promise<void> {
           if (!m) return null;
           const ctx = m.context ? `\n       in context: ${m.context}` : "";
           const who = m.attribution && m.attribution !== "source" ? `\n       attributed to: ${m.attribution}` : "";
-          return `     [[m:${id}]] "${m.quote}"${ctx}${who}`;
+          // The passage's date, so "on 14 September 2026" in the entry can be
+          // judged against "on Monday" in a piece published the 15th.
+          const when = m.published_at ? ` (published ${m.published_at.slice(0, 10)})` : m.source_year ? ` (${m.source_year})` : "";
+          return `     [[m:${id}]]${when} "${m.quote}"${ctx}${who}`;
         })
         .filter(Boolean)
         .join("\n");

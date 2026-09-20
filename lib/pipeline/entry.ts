@@ -9,6 +9,7 @@ import { dedupeByQuote, isFromContext, type Task } from "../types";
 import { formatLocator } from "../chunk";
 import { citedIds as citedIdsOf, normaliseMarkers } from "../markers";
 import { paragraphSentences } from "../sentences";
+import { normalize, trigramSimilarity } from "../normalize";
 
 /**
  * An entry is never authored once and left alone — it is a function of the
@@ -82,7 +83,7 @@ const SCHEMA: Schema = {
     summary: {
       type: Type.STRING,
       description:
-        "One or two sentences identifying who or what this is, saying only what the body says. No citations.",
+        "One or two sentences identifying who or what this is, saying only what the body says. About the subject, never about the entry: 'Ramallah is a city…', not 'This entry details…'. No citations.",
     },
     body: {
       type: Type.STRING,
@@ -167,7 +168,12 @@ const SHAPES: Record<string, string> = {
   person: `For a person: who they are and what they are known for in these sources;
 then their life and work in time order — origins, positions held, what they did
 and said in each; their relationships (family, patrons, rivals, employers) where
-the sources record them; then what is contested or unclear.`,
+the sources record them; then what is contested or unclear. For someone in
+office now, the office and its episodes carry most of the entry: each major
+episode the sources follow (a war, a court fight, a trade dispute, an
+election) is its own section with its dates, in time order, and the most
+consequential of them is the lead — not a section per continent or per
+policy area with the episodes shuffled together inside it.`,
   org: `For a company, party, movement or army: what it is and what it does
 according to these sources; who leads or owns it; its actions and dealings in
 time order; disputes and controversies; what is contested.`,
@@ -219,6 +225,32 @@ ABSOLUTE RULES
   sentence whose whole content is that something happened at some time.
 - A "note" line saying the passage did not name the subject means the evidence
   is weaker; do not build a central claim on it alone.
+
+TIME AND REPETITION
+
+- DATES ARE ABSOLUTE. This is a reference work, read months later. "On
+  Monday", "last year", "this April", "a decade ago", "two years prior" mean
+  nothing to that reader. Every passage shows when its source was published
+  and, where extraction fixed one, the date of what it describes (the
+  "dated:" line). Resolve every relative expression against those and write
+  the date: "on 14 September 2026", "in January 2025". Where neither fixes
+  it, write what the passage allows ("in September 2026", "in 2025") and no
+  more. Never copy a relative expression into the entry.
+- ONE FACT, ONCE. Several passages reporting the same thing — two accounts
+  of one pledge, three of one ruling — are one sentence carrying all their
+  markers, never one sentence each. A "repeats" line under a passage names
+  the earlier passage it repeats; cite them together.
+- A sentence whose whole content is that the subject is mentioned, listed,
+  indexed, referenced, "associated with" someone, or "appears in" a work is
+  not a fact about the subject and is not written. The same for a source's
+  own apparatus: an index line, a note, a contents entry, a credit, a
+  byline.
+- PARAGRAPHS ARE SHORT. Four to six sentences, one subject each. A section
+  with more to say is several paragraphs, each on its own episode or
+  aspect, in time order. A twenty-sentence paragraph is a list wearing
+  prose, and a reader cannot find anything in it.
+- The summary is about the subject, never about the entry: "Ramallah is a
+  city…", never "An overview of…" or "An entry covering…".
 
 FLOW — this is what separates an entry from an index
 
@@ -317,7 +349,11 @@ with its id, date, and a one-line gist. Decide the shape of the entry.
 - Passages that repeat another, that say nothing usable about the subject,
   or in which the subject is only incidental — named in passing in an account
   of something else — go in leaveOut with a clear conscience. Peripheral
-  detail belongs in the entries of the people and places it is about.
+  detail belongs in the entries of the people and places it is about. So
+  does a source's apparatus: an index line, a note, a credit.
+- A section is one episode or one aspect, never "foreign relations" with
+  six unrelated episodes inside it. Two passages reporting the same thing
+  are one item in one section.
 - Do not write the entry, and do not add anything you know from outside the
   passages.`;
 
@@ -392,8 +428,11 @@ export async function handleEntry(task: Task): Promise<void> {
 
   // The memory the old loop lacked. A rewrite against unchanged evidence is
   // allowed a few times — you may not like the draft, verification may have
-  // flagged it — and then refused until the evidence moves, whoever asks.
-  if (existing && sameEvidence && existing.passes >= MAX_REWRITES_PER_EVIDENCE) {
+  // flagged it — and then refused until the evidence moves, whatever the
+  // routine asks. A request made by hand, from the entry's own page, is one
+  // click and one call and is honoured: the cap exists to stop a loop, and
+  // a person is not one.
+  if (existing && sameEvidence && existing.passes >= MAX_REWRITES_PER_EVIDENCE && !force) {
     tx(() => {
       db().prepare("UPDATE entities SET entry_state='fresh' WHERE id=?").run(entityId);
       finishTask(
@@ -409,6 +448,8 @@ export async function handleEntry(task: Task): Promise<void> {
 
   // Everything the writer will see.
   const { evidence, leftOut } = selectEvidence(mentions);
+  const dated = datesByMention(entityId);
+  const repeats = repeatsOf(evidence);
   const previous = existing?.body_md?.trim() ?? "";
   const header = `ENTITY: ${entity.canonical_name}${entity.disambiguator ? ` — ${entity.disambiguator}` : ""}\nTYPE: ${entity.type}`;
 
@@ -417,7 +458,7 @@ export async function handleEntry(task: Task): Promise<void> {
   let planBlock = "";
 
   if (evidence.length > PLAN_THRESHOLD) {
-    const plan = await planEntry(entity, evidence);
+    const plan = await planEntry(entity, evidence, entityId);
     tokensIn += plan.usage.tokensIn;
     tokensOut += plan.usage.tokensOut;
     planBlock = plan.text;
@@ -436,7 +477,9 @@ export async function handleEntry(task: Task): Promise<void> {
   }
   if (planBlock) parts.push(planBlock);
 
-  parts.push(`EVIDENCE (${evidence.length} passages${leftOut ? `; ${leftOut} more were held back as duplicates or thin` : ""}):\n${renderEvidence(evidence)}`);
+  parts.push(
+    `EVIDENCE (${evidence.length} passages${leftOut ? `; ${leftOut} more were held back as duplicates, apparatus or thin` : ""}):\n${renderEvidence(evidence, { dated, repeats })}`
+  );
 
   if (previous) {
     parts.push(
@@ -571,8 +614,12 @@ export async function handleEntry(task: Task): Promise<void> {
  * writer than a bare sentence the sweep found by name — then newest, so a
  * living subject's recent evidence is never the part that gets cut.
  */
-function selectEvidence(all: MentionRow[]): { evidence: MentionRow[]; leftOut: number } {
-  if (all.length <= MAX_EVIDENCE) return { evidence: all, leftOut: 0 };
+export function selectEvidence(all: MentionRow[]): { evidence: MentionRow[]; leftOut: number } {
+  // A book's apparatus is never evidence, however many passages there are.
+  const usable = all.filter((m) => !looksLikeApparatus(m));
+  const apparatus = all.length - usable.length;
+  if (usable.length <= MAX_EVIDENCE) return { evidence: usable, leftOut: apparatus };
+  all = usable;
   const score = (m: MentionRow) =>
     (m.claim ? 2 : 0) +
     (m.context ? 2 : 0) +
@@ -586,20 +633,105 @@ function selectEvidence(all: MentionRow[]): { evidence: MentionRow[]; leftOut: n
   });
   const kept = new Set(ranked.slice(0, MAX_EVIDENCE).map((m) => m.id));
   // Back into reading order, so the writer sees each book in sequence.
-  return { evidence: all.filter((m) => kept.has(m.id)), leftOut: all.length - kept.size };
+  return { evidence: all.filter((m) => kept.has(m.id)), leftOut: all.length - kept.size + apparatus };
+}
+
+/**
+ * Passages that are a book's apparatus rather than its account: an index
+ * line, a note pointing at a page, a contents entry, a heading list. They
+ * reach the writer because the cleaner cannot catch every one, and the
+ * writer, told to use what it is given, wrote "Index entries list references
+ * specifically to Palestinians" and "Ramallah is listed in the prologue
+ * section heading" — cited sentences with no content.
+ */
+export function looksLikeApparatus(m: { quote: string; claim: string | null; context: string | null }): boolean {
+  const q = m.quote.trim();
+  const words = q.split(/\s+/).filter(Boolean).length;
+  // "Ramallah, 12, 45–47, 102; Khalidi, Rashid, 3, 9": an index line.
+  const numbers = (q.match(/\b\d{1,4}(?:[–-]\d{1,4})?\b/g) ?? []).length;
+  if (words >= 4 && numbers >= Math.max(3, Math.ceil(words / 3))) return true;
+  if (/^(see also|see|cf\.)\b/i.test(q)) return true;
+  const gloss = `${m.claim ?? ""} ${m.context ?? ""}`;
+  return /\b(index (entr\w*|list\w*|reference\w*)|in the index|notes? (to|section|on) the|endnotes?|footnotes?|table of contents|contents (page|list)|section heading|chapter (title|heading|list)|listed in the (prologue|contents|index|notes)|bibliograph\w*|appears? in the (index|notes|contents)|acknowledg(e)?ments|copyright page)\b/i.test(
+    gloss
+  );
+}
+
+/**
+ * For each passage whose claim repeats an earlier passage's, the earlier id.
+ *
+ * Two outlets carrying one wire report arrive as two passages with two
+ * claims that differ in a word, and the writer, which is told to cite what
+ * it is given, wrote the pledge twice in one section. Telling it which
+ * passages repeat which is cheaper than asking it to notice.
+ *
+ * Deliberately strict. Character trigrams put the same pledge in different
+ * words at 0.38 and two accounts that DISAGREE about where a phone call
+ * happened at 0.56, so a loose threshold would tell the writer to merge a
+ * contradiction. Only near-verbatim repeats are marked; the rest is the
+ * prompt's "one fact, once" rule, and the writer's judgement.
+ */
+export function repeatsOf(rows: { id: number; claim: string | null }[], threshold = 0.75): Map<number, number> {
+  const out = new Map<number, number>();
+  const seen: { id: number; key: string }[] = [];
+  for (const r of rows) {
+    const key = normalize(r.claim ?? "");
+    if (!key || key.split(" ").length < 6) continue;
+    const hit = seen.find((s) => trigramSimilarity(s.key, key) >= threshold);
+    if (hit) out.set(r.id, hit.id);
+    else seen.push({ id: r.id, key });
+  }
+  return out;
+}
+
+export interface DatedLine {
+  iso: string | null;
+  text: string | null;
+  summary: string;
+}
+
+/** The dated events extraction recorded from each of this entity's passages. */
+export function datesByMention(entityId: number): Map<number, DatedLine[]> {
+  const rows = db()
+    .prepare(
+      `SELECT ev.mention_id, ev.date_iso, ev.date_text, ev.summary
+         FROM events ev JOIN live_mentions m ON m.id = ev.mention_id
+        WHERE m.entity_id = ? ORDER BY ev.id`
+    )
+    .all(entityId) as { mention_id: number; date_iso: string | null; date_text: string | null; summary: string }[];
+  const out = new Map<number, DatedLine[]>();
+  for (const r of rows) {
+    if (!r.date_iso && !r.date_text) continue;
+    out.set(r.mention_id, [...(out.get(r.mention_id) ?? []), { iso: r.date_iso, text: r.date_text, summary: r.summary }]);
+  }
+  return out;
+}
+
+/** "2026-09-14 ("Monday night"): the Court blocked the order" */
+export function describeDatedLine(d: DatedLine): string {
+  const when = d.iso && !d.iso.startsWith("--") ? d.iso : (d.text ?? "undated");
+  const worded = d.text && d.iso && !d.iso.startsWith("--") && d.text !== d.iso ? ` ("${d.text}")` : "";
+  return `${when}${worded}: ${d.summary}`;
 }
 
 /** A cheap planning call for a large subject: the gist of every passage in,
  *  a section list out. */
 async function planEntry(
   entity: { canonical_name: string; type: string; disambiguator: string | null },
-  evidence: MentionRow[]
+  evidence: MentionRow[],
+  entityId: number
 ): Promise<{ text: string; usage: { tokensIn: number; tokensOut: number } }> {
+  const dated = datesByMention(entityId);
+  const repeats = repeatsOf(evidence);
   const lines = evidence.map((m) => {
-    const when = dateOf(m);
+    // The date of what the passage describes, where extraction fixed one;
+    // the source's date otherwise, marked as such.
+    const own = (dated.get(m.id) ?? []).map((d) => d.iso).filter((iso): iso is string => Boolean(iso && !iso.startsWith("--")));
+    const when = own.length ? own.sort()[0] : dateOf(m) ? `published ${dateOf(m)}` : "";
     const gist = (m.claim ?? m.quote).replace(/\s+/g, " ").slice(0, 160);
     const ctx = m.context ? ` — ${m.context.replace(/\s+/g, " ").slice(0, 80)}` : "";
-    return `[[m:${m.id}]] ${when ? `(${when}) ` : ""}${gist}${ctx}`;
+    const rep = repeats.has(m.id) ? ` (repeats [[m:${repeats.get(m.id)}]])` : "";
+    return `[[m:${m.id}]] ${when ? `(${when}) ` : ""}${gist}${ctx}${rep}`;
   });
 
   const { data, usage } = await generateJson<{
@@ -792,23 +924,51 @@ account says, not what is established — say so where it matters.`
  * writer used to reconstruct chronology from loose quotes, which is why entries
  * had no chronology; this hands it the spine ready-made.
  */
-function timelineBlock(entityId: number): string {
-  const rows = db()
+/** The most dated events the writer is handed; past this the list is thinned. */
+const MAX_TIMELINE = 120;
+/** When thinned, how many of the earliest are kept; the rest are the latest. */
+const TIMELINE_EARLY = 30;
+
+export function timelineBlock(entityId: number): string {
+  const all = db()
     .prepare(
       `SELECT ev.date_iso, ev.date_text, ev.summary, ev.mention_id
          FROM events ev
          JOIN live_mentions m ON m.id = ev.mention_id
         WHERE ev.entity_id = ?
-        ORDER BY COALESCE(ev.date_iso, 'zzzz'), ev.id
-        LIMIT 40`
+        ORDER BY COALESCE(ev.date_iso, 'zzzz'), ev.id`
     )
     .all(entityId) as { date_iso: string | null; date_text: string | null; summary: string; mention_id: number | null }[];
-  if (rows.length === 0) return "";
-  return `DATED EVENTS (as recorded from the passages; cite the passage, not this list):\n${rows
-    // A recurring "--MM-DD" is the source's wording with the year unknown;
-    // the writer should see the wording, not be handed a form that reads as
-    // a year of nothing.
-    .map((r) => `- ${r.date_iso && !r.date_iso.startsWith("--") ? r.date_iso : (r.date_text ?? r.date_iso ?? "undated")}: ${r.summary}${r.mention_id ? ` [[m:${r.mention_id}]]` : ""}`)
+  if (all.length === 0) return "";
+
+  // The same event recorded from two accounts is one line with two markers.
+  const merged: { when: string; summary: string; ids: number[]; key: string }[] = [];
+  for (const r of all) {
+    const when = r.date_iso && !r.date_iso.startsWith("--") ? r.date_iso : (r.date_text ?? r.date_iso ?? "undated");
+    const key = normalize(r.summary);
+    const twin = merged.find((m) => m.when === when && (m.key === key || trigramSimilarity(m.key, key) >= 0.8));
+    if (twin) {
+      if (r.mention_id && !twin.ids.includes(r.mention_id)) twin.ids.push(r.mention_id);
+      continue;
+    }
+    merged.push({ when, summary: r.summary, ids: r.mention_id ? [r.mention_id] : [], key });
+  }
+
+  // The list used to stop at the forty oldest, so a living subject's
+  // current year — the part the entry is mostly about — was exactly the
+  // part the writer never saw dated, and wrote as "on Monday night". Now
+  // everything goes, and when there is too much it is the middle that is
+  // thinned: the beginning and the present are what an entry is for.
+  const rows =
+    merged.length <= MAX_TIMELINE
+      ? merged
+      : [...merged.slice(0, TIMELINE_EARLY), ...merged.slice(merged.length - (MAX_TIMELINE - TIMELINE_EARLY))];
+  const thinned = merged.length - rows.length;
+
+  return `DATED EVENTS (as recorded from the passages, oldest first; cite the passage, not this list${
+    thinned ? `; ${thinned} from the middle years left out` : ""
+  }):\n${rows
+    .map((r) => `- ${r.when}: ${r.summary}${r.ids.length ? ` ${r.ids.map((id) => `[[m:${id}]]`).join(" ")}` : ""}`)
     .join("\n")}`;
 }
 
@@ -897,15 +1057,22 @@ Do not repeat a flagged sentence with its old citations unexamined.`;
 /**
  * The evidence, as the writer sees it. Dated, attributed, and glossed.
  */
-function renderEvidence(rows: MentionRow[]): string {
+export function renderEvidence(
+  rows: MentionRow[],
+  extras: { dated?: Map<number, DatedLine[]>; repeats?: Map<number, number> } = {}
+): string {
   return rows
     .map((m) => {
       const loc = formatLocator(JSON.parse(m.locator_json), m.doc_label);
       const when = dateOf(m);
-      const where = [m.source_title, when, loc].filter(Boolean).join(", ");
+      const where = [m.source_title, when ? `published ${when}` : "", loc].filter(Boolean).join(", ");
       const lines = [`[[m:${m.id}]] (${where})`, `   "${m.quote}"`];
       if (m.claim) lines.push(`   claim: ${m.claim}`);
       if (m.context) lines.push(`   in context: ${m.context}`);
+      const dated = extras.dated?.get(m.id) ?? [];
+      if (dated.length) lines.push(`   dated: ${dated.slice(0, 3).map(describeDatedLine).join(" | ")}`);
+      const earlier = extras.repeats?.get(m.id);
+      if (earlier) lines.push(`   repeats: [[m:${earlier}]] — the same report; one sentence, both markers`);
       if (m.attribution && m.attribution !== "source") lines.push(`   attributed to: ${m.attribution}`);
       if (m.claim_kind && m.claim_kind !== "fact") lines.push(`   kind: ${m.claim_kind}`);
       if (isFromContext(m.confidence)) {

@@ -45,7 +45,7 @@ const MIN_SHARED_ENTITIES = 2;
  */
 const MIN_TITLE_WORDS = 3;
 
-const STOP = new Set([
+export const STOP = new Set([
   "the", "a", "an", "and", "or", "but", "of", "in", "on", "at", "to", "for", "with", "by",
   "from", "as", "is", "are", "was", "were", "be", "been", "will", "would", "could", "should",
   "says", "say", "said", "after", "over", "amid", "new", "how", "why", "what", "who",
@@ -142,7 +142,7 @@ export function namesIn(text: string): Set<string> {
  * are here for the same reason; so are the parties and the chambers, and the
  * outlets, which name themselves in their own ledes.
  */
-const COMMON_NAMES = new Set([
+export const COMMON_NAMES = new Set([
   "monday", "tuesday", "wednesday", "thursday", "friday", "saturday", "sunday",
   "january", "february", "march", "april", "may", "june", "july", "august", "september",
   "october", "november", "december",

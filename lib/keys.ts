@@ -207,7 +207,7 @@ export function configuredProviders(): ProviderId[] {
  * Read through config-file rather than lib/config, which imports this module:
  * the same reason lib/lan.ts reads it directly.
  */
-export function modelFor(key: ApiKey): string {
+export function modelFor(key: ApiKey, opts: { quality?: boolean; cheap?: boolean } = {}): string {
   const provider = key.provider ?? "gemini";
   const named = key.model?.trim();
   if (named) return named;
@@ -216,9 +216,22 @@ export function modelFor(key: ApiKey): string {
   // goes to the front of it rather than replacing it, so choosing a model is
   // still a preference and not a way to strand the app on a spent one.
   const configured = provider === "gemini" ? readStore<{ model?: string }>().model?.trim() : undefined;
-  const ring = configured
+  const full = configured
     ? [configured, ...modelsFor(provider).filter((m) => m !== configured)]
     : modelsFor(provider);
+  // A quality call never steps down to a "lite" model. The ring's tail is
+  // there so extraction keeps moving on a busy afternoon; an entry written by
+  // the smallest model on the ring is kept until its evidence changes, which
+  // can be months, and the ten most-cited entries in the library were all
+  // written that way. Better to wait for a real model than to file that.
+  // A cheap call asks the lite tail first: reading headlines does not need
+  // the model that writes entries, and the small ones answer in a second.
+  const ring = opts.quality
+    ? full.filter((m) => !isLiteModel(m))
+    : opts.cheap
+      ? [...full.filter((m) => isLiteModel(m)), ...full.filter((m) => !isLiteModel(m))]
+      : full;
+  if (!ring.length) return full[0] ?? spec(provider).defaultModel;
 
   const live = ring.filter((m) => !modelSpent(provider, m));
   // With every model set aside, ask the one due back soonest rather than
@@ -226,6 +239,11 @@ export function modelFor(key: ApiKey): string {
   // and asking it for every task while five others were about to come back
   // was how a spike became an hour.
   return live[0] ?? soonestBack(provider, ring) ?? ring[0] ?? spec(provider).defaultModel;
+}
+
+/** Whether a model is the cut-down kind a quality call must not fall to. */
+export function isLiteModel(model: string): boolean {
+  return /(^|[-_])(lite|mini|nano|flash-8b)\b/i.test(model);
 }
 
 function soonestBack(provider: ProviderId, ring: string[]): string | undefined {

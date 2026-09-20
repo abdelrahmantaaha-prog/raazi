@@ -17,6 +17,8 @@ import {
 } from "../feeds";
 import { judge, learn, standingOf, type Tallies } from "../curator";
 import { fileSource, regroupRecent } from "../stories";
+import { regroupHeld } from "../inbox-groups";
+import { bundleInbox, groupEventsInBundles } from "../inbox-bundles";
 import { unwrapRedirect } from "../ingest/meta";
 import type { Task } from "../types";
 
@@ -196,6 +198,13 @@ function regroupStories(): void {
   globalThis.__corpusRegroupedAt = Date.now();
   try {
     regroupRecent();
+    // And the fuller pass over what is waiting in the inbox, now the
+    // articles behind the headlines have been read; then the cheap model
+    // on whatever the rules left alone, without holding the poll up.
+    regroupHeld();
+    void bundleInbox()
+      .then((b) => (b.error ? undefined : groupEventsInBundles()))
+      .catch(() => undefined);
   } catch (err) {
     console.warn(`[corpus] stories: regroup failed — ${(err as Error).message}`);
   }

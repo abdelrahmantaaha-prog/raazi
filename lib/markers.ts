@@ -47,8 +47,9 @@ export function normaliseMarkers(md: string): string {
   // Stray whitespace inside a marker.
   s = s.replace(/\[\[\s*m:\s*(\d+)\s*\]\]/g, "[[m:$1]]");
 
-  // Markers butted together.
-  s = s.replace(/\]\]\[\[m:/g, "]] [[m:");
+  // Markers butted together, or joined with a comma or semicolon: "[[m:1]],
+  // [[m:2]]" was the older writer's habit and it reads as a list.
+  s = s.replace(/\]\]\s*[,;]?\s*\[\[m:/g, "]] [[m:");
 
   return s;
 }

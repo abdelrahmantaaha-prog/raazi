@@ -2,6 +2,7 @@ import Anthropic from "@anthropic-ai/sdk";
 import type { Schema } from "@google/genai";
 import { toJsonSchema, dropNulls } from "./schema";
 import { TruncatedOutputError, SafetyBlockError } from "./errors";
+import { unescapeModelJson } from "./escapes";
 
 /**
  * The Anthropic adapter.
@@ -61,6 +62,7 @@ export const EFFORT: Record<string, AnthropicCall["effort"]> = {
   entry: "high",
   verify: "high",
   brief: "high",
+  group: "low",
 };
 
 /** Room for the answer. Extraction returns long JSON; a tag returns a line. */
@@ -134,7 +136,7 @@ export async function anthropicJson<T>(
 
   let parsed: T;
   try {
-    parsed = JSON.parse(text) as T;
+    parsed = unescapeModelJson(JSON.parse(text) as T);
   } catch {
     // A JSON response that will not parse is a truncated one nine times in
     // ten, and the worker knows how to split an oversized chunk.

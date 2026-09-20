@@ -57,6 +57,9 @@ export interface HeldItem {
   clipped_at: string | null;
   /** 1 when the article is starred for a closer look (lib/starred.ts), else 0. */
   starred: number;
+  /** The subject bundle the grouping pass put it in, if any. See lib/inbox-bundles.ts. */
+  bundle_id: number | null;
+  bundle_label: string | null;
 }
 
 const HELD_COLUMNS = `
@@ -71,14 +74,18 @@ const HELD_COLUMNS = `
   (SELECT COUNT(*) FROM story_sources s2 WHERE s2.story_id = ss.story_id) AS story_accounts,
   COALESCE(i.image_url, json_extract(s.meta_json, '$.image')) AS image,
   s.note AS source_note,
-  (s.starred_at IS NOT NULL) AS starred`;
+  (s.starred_at IS NOT NULL) AS starred,
+  bi.bundle_id AS bundle_id,
+  b.label AS bundle_label`;
 
 const HELD_JOINS = `
   FROM feed_items i
   JOIN feeds f ON f.id = i.feed_id
   LEFT JOIN sources s ON s.id = i.source_id
   LEFT JOIN story_sources ss ON ss.source_id = i.source_id
-  LEFT JOIN stories st ON st.id = ss.story_id`;
+  LEFT JOIN stories st ON st.id = ss.story_id
+  LEFT JOIN inbox_bundle_items bi ON bi.item_id = i.id
+  LEFT JOIN inbox_bundles b ON b.id = bi.bundle_id`;
 
 /** A search typed into the inbox, made safe for the full-text index. See lib/fts.ts. */
 export const inboxMatch = ftsMatch;

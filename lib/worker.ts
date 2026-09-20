@@ -20,6 +20,7 @@ import {
   noteTaskModel,
   overBudget,
   pauseRun,
+  refundAttempt,
   releaseTask,
   settleRun,
   supersedeTask,
@@ -130,6 +131,8 @@ async function dispose(task: Task, err: unknown): Promise<void> {
 
   switch (d.kind) {
     case "retry":
+      // A wait the ring caused is not a try. See refundAttempt.
+      if (d.free) refundAttempt(task.id);
       if (d.delayMs > INLINE_RETRY_MS) {
         deferTask(task.id, new Date(Date.now() + d.delayMs), message);
       } else {
@@ -140,11 +143,13 @@ async function dispose(task: Task, err: unknown): Promise<void> {
       break;
 
     case "pause_quota":
+      refundAttempt(task.id);
       releaseTask(task.id, message);
       pauseRun(task.run_id, "paused_quota", message, d.resumeAt);
       break;
 
     case "pause_key":
+      refundAttempt(task.id);
       releaseTask(task.id, message);
       pauseRun(task.run_id, "paused_key", message);
       break;

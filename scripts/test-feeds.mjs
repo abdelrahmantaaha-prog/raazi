@@ -419,6 +419,118 @@ section("The brief is a query, not a summary");
   check("today's key is a local calendar day", /^\d{4}-\d{2}-\d{2}$/.test(brief.todayKey()));
 }
 
+
+section("A heading is the day on that beat, not the last article filed under it");
+{
+  const now = new Date();
+  const at = (h) => new Date(now.getTime() - h * 3600_000).toISOString();
+  const mkSource = (title, hoursAgo, outlet) =>
+    Number(
+      db()
+        .prepare("INSERT INTO sources (title, kind, status, outlet, published_at, kept_at, triage) VALUES (?, 'url','ready',?,?,?,'kept')")
+        .run(title, outlet, at(hoursAgo), at(hoursAgo - 0.5)).lastInsertRowid
+    );
+  const ent = (name, type = "person") =>
+    Number(db().prepare("INSERT INTO entities (type, canonical_name, normalized) VALUES (?,?,?)").run(type, name, name.toLowerCase()).lastInsertRowid);
+  const mkPassage = (sourceId, entityId, quote, claim) => {
+    const chunkId = Number(db().prepare("INSERT INTO chunks (source_id, seq, text) VALUES (?, 0, ?)").run(sourceId, quote).lastInsertRowid);
+    return Number(
+      db()
+        .prepare("INSERT INTO mentions (entity_id, chunk_id, source_id, surface, quote, claim, claim_kind) VALUES (?,?,?,?,?,?,'fact')")
+        .run(entityId, chunkId, sourceId, "x", quote, claim).lastInsertRowid
+    );
+  };
+  const tag = (name, description) => Number(db().prepare("INSERT INTO tags (name, description) VALUES (?,?)").run(name, description).lastInsertRowid);
+  const file = (sourceId, tagId) => db().prepare("INSERT INTO source_tags (source_id, tag_id) VALUES (?,?)").run(sourceId, tagId);
+  const discarded = (title, outlet, hoursAgo) =>
+    Number(
+      db()
+        .prepare("INSERT INTO sources (title, kind, status, outlet, published_at, triage) VALUES (?, 'url','ready',?,?,'discarded')")
+        .run(title, outlet, at(hoursAgo)).lastInsertRowid
+    );
+  const join = (storyId, sourceId) => db().prepare("INSERT INTO story_sources (story_id, source_id) VALUES (?,?)").run(storyId, sourceId);
+  const story = (title) => Number(db().prepare("INSERT INTO stories (title, shingle) VALUES (?, ?)").run(title, title.toLowerCase()).lastInsertRowid);
+  const event = (entityId, text, iso, precision, summary, sourceId, mentionId) =>
+    db()
+      .prepare("INSERT INTO events (entity_id, date_text, date_iso, precision, summary, source_id, mention_id) VALUES (?,?,?,?,?,?,?)")
+      .run(entityId, text, iso, precision, summary, sourceId, mentionId);
+
+  const admin = tag("Administration", "Actor: the executive branch.");
+  const elections = tag("Elections", "Theme: campaigns and voting.");
+  const war = tag("Gulf war", "Story: the conflict in the Gulf.");
+  watchlist.watch({ tagId: admin });
+  watchlist.watch({ tagId: elections });
+  watchlist.watch({ tagId: war });
+
+  const court = ent("The Court", "institution");
+  const pm = ent("The PM");
+  const army = ent("The Army", "org");
+
+  // A long think-tank paper, newest, tagged under Elections and Administration.
+  const paper = mkSource("A long paper", 1, "Think Tank");
+  file(paper, elections);
+  file(paper, admin);
+  for (let i = 0; i < 20; i++) mkPassage(paper, pm, `Paper passage ${i} about the PM.`, `Paper claim ${i}`);
+
+  // Three kept wire accounts of one ruling, older, tagged the same way, grouped as one story.
+  const ruling = story("Court rules");
+  for (const [title, h, outlet] of [["Court rules on ballots", 6, "Wire A"], ["Court blocks the order", 5, "Wire B"], ["Court ruling reaction", 4, "Wire C"]]) {
+    const s = mkSource(title, h, outlet);
+    file(s, elections);
+    file(s, admin);
+    join(ruling, s);
+    for (let i = 0; i < 6; i++) mkPassage(s, court, `${title} passage ${i}.`, `Ruling claim ${i}`);
+  }
+  // Fifteen more discarded accounts of the same story, so it is widely carried.
+  for (let i = 0; i < 15; i++) join(ruling, discarded(`Court account ${i}`, `Outlet ${i}`, 5));
+
+  // A war report tagged Administration and the war story, with one passage dating last year.
+  const report = mkSource("Munitions running low", 2, "Paper of Record");
+  file(report, admin);
+  file(report, war);
+  const fresh = mkPassage(report, army, "The army said on Monday stocks were low.", "Stocks low");
+  const old = mkPassage(report, army, "The war began in February.", "War began");
+  event(army, "Monday", now.toISOString().slice(0, 10), "day", "Stocks low", report, fresh);
+  event(army, "February", `${now.getFullYear() - 1}-02`, "month", "War began", report, old);
+
+  const m = brief.gather(new Date(now.getTime() - 24 * 3600_000), new Date(now.getTime() + 60_000));
+  const by = Object.fromEntries(m.watched.map((w) => [w.label, w]));
+  check("the war report is filed under the story, not the administration", Boolean(by["Gulf war"]) && by["Gulf war"].passages.every((p) => p.source_id === report), JSON.stringify(Object.keys(by)));
+  check("the ruling and the paper are under Elections, the theme, not the actor", Boolean(by["Elections"]) && !by["Administration"], JSON.stringify(Object.keys(by)));
+  const elec = by["Elections"];
+  const srcs = new Set(elec.passages.map((p) => p.source_id));
+  check("Elections draws on every article, not just the newest", srcs.size === 4, String(srcs.size));
+  check("no article gives more than its cap", [...srcs].every((s) => elec.passages.filter((p) => p.source_id === s).length <= brief.PER_SOURCE_CAP));
+  check("the widely carried ruling comes before the single paper", elec.passages[0].entity === "The Court", elec.passages[0].entity);
+  check("the heading knows how many articles it had", elec.sources === 4, String(elec.sources));
+  check("the fullest heading comes first", m.watched[0].label === "Elections", m.watched[0].label);
+  const warRows = by["Gulf war"].passages;
+  check("a passage dated in the window says so", warRows.find((p) => p.mention_id === fresh)?.when === "within", JSON.stringify(warRows.map((p) => [p.mention_id, p.when])));
+  check("a passage dating only last year is marked as background", warRows.find((p) => p.mention_id === old)?.when === "before");
+  check("and background comes after the news", warRows.findIndex((p) => p.mention_id === fresh) < warRows.findIndex((p) => p.mention_id === old));
+  check("the ruling story is listed, with how much of it was kept", m.stories.some((s) => s.title === "Court rules" && s.kept === 3 && s.accounts === 18), JSON.stringify(m.stories));
+  check("the stories count is of stories the kept articles belong to", m.counts.stories === 1, String(m.counts.stories));
+
+  // A story nobody kept an account of is not in the brief.
+  const ghost = story("Celebrity tour row");
+  for (let i = 0; i < 5; i++) join(ghost, discarded(`Tour ${i}`, `Outlet ${i}`, 3));
+  const m2 = brief.gather(new Date(now.getTime() - 24 * 3600_000), new Date(now.getTime() + 60_000));
+  check("a story with no kept account is not a running story", !m2.stories.some((s) => s.title === "Celebrity tour row"));
+  check("everything else gives an article a line or two, never its whole tail", m2.other.filter((p) => p.source_id === paper).length <= 2, String(m2.other.filter((p) => p.source_id === paper).length));
+  check("and the round-robin is fair", JSON.stringify(brief.roundRobin([[1, 2, 3], [4], [5, 6]], 5, 2)) === "[1,2,4,5,6]", JSON.stringify(brief.roundRobin([[1, 2, 3], [4], [5, 6]], 5, 2)));
+
+  const { fixedSections } = await import("../lib/pipeline/brief.ts");
+  const fixed = fixedSections({
+    ...m2,
+    revised: [{ entity_id: 1, entity: "The Court", changelog: "- Added the ruling.\n- Removed a stale line.", updated_at: "" }],
+    problems: [{ title: "A post", note: "Nothing readable was found in that source.", feed: "Some blog" }],
+  });
+  check("the running stories are written by the app, with the kept count", /## Running stories\n\n- \*\*Court rules\*\* — kept 3 of 18 accounts/.test(fixed), fixed.slice(0, 200));
+  check("entries that changed carry the first line of the changelog", fixed.includes("- The Court: Added the ruling."), fixed);
+  check("and what did not come in is listed", fixed.includes('## Did not come in\n\n- "A post" from Some blog: Nothing readable'), fixed);
+  check("a window with none of these appends nothing", fixedSections({ ...m2, stories: [], revised: [], problems: [] }) === "");
+}
+
 /* ------------------------------------------------- a day off costs nothing */
 
 section("A brief starts where the last one stopped");

@@ -129,8 +129,12 @@ const GRACE_DAYS = 3;
  * month — keeps the publication year, as before.
  */
 function yearlessDay(d: Date, pub: Date | null, summary: string | null | undefined, text: string): Bucket {
+  // Only a bare month-and-day can be an anniversary. A day the wording
+  // fixed against publication — "Friday", "this past weekend" — is that
+  // day, whatever the ceremony on it was commemorating: the speech at the
+  // memorial happened on the 11th of this year, once.
   const words = `${summary ?? ""} ${text}`;
-  if (ANNIVERSARY_RE.test(words)) return annualBucket(d.getMonth() + 1, d.getDate());
+  if (ANNIVERSARY_RE.test(words) && !RELATIVE_RE.test(text)) return annualBucket(d.getMonth() + 1, d.getDate());
   if (pub) {
     const horizon = shift(pub, { days: GRACE_DAYS });
     if (d > horizon && readsAsPast(summary)) return annualBucket(d.getMonth() + 1, d.getDate());
@@ -163,13 +167,179 @@ function monthIndex(word: string): number {
  * publication, which is how news copy uses it. Anything else is left out
  * rather than guessed.
  */
+/**
+ * Wording that places a happening against the day of publication rather
+ * than on a named day: "last week", "over the weekend", "three days later",
+ * "on Tuesday". Such wording is read by the rules below and not from the
+ * extractor's sortable date, however precise that date looks.
+ *
+ * The extractor is asked to resolve relative wording and does, but it
+ * rounds to a day whatever the words allowed: "last week" arrived as
+ * 2026-09-07, "as soon as this week" as the 15th, "just a few days after"
+ * as the 9th with precision "unknown", and the calendar printed all three
+ * as days a reporter could ring someone about. The words are the only
+ * honest measure of the precision, and they are deterministic to read.
+ */
+const RELATIVE_RE = new RegExp(
+  [
+    "yesterday", "today", "tonight", "tomorrow",
+    "this (?:morning|afternoon|evening)",
+    "(?:this|the|last|past|next|coming|this past|over the|at the) (?:past )?weekend",
+    "(?:this|last|past|previous|next|coming) (?:week|month|year|spring|summer|autumn|fall|winter)",
+    "(?:earlier|later) (?:this|in the) (?:week|month|year)",
+    "as soon as this week", "in the coming days", "in recent (?:days|weeks|months)",
+    "in the (?:coming|next|past|last)(?: few)? (?:days|weeks|months)",
+    "(?:past|last) few (?:days|weeks|months)", "recently",
+    "(?:the )?(?:next|following|previous) day", "the day (?:before|after)",
+    "(?:a|an|one|two|three|four|five|six|seven|eight|nine|ten|eleven|twelve|several|some|just a few|a few|few|\\d+) (?:days?|weeks?|months?|years?|decades?) (?:later|after|earlier|before|ago|on)",
+    "days (?:later|after|earlier|before|ago)",
+    "in (?:a|an|one|two|three|four|five|six|seven|eight|nine|ten|\\d+) (?:days?|weeks?|months?)",
+    "end of (?:the )?(?:week|month|year)",
+    WEEKDAYS.join("|"),
+  ].join("|"),
+  "i"
+);
+
+/** Whether the wording names a month or a year outright, which anchors it without publication. */
+const hasMonth = (text: string) => MONTH_RE.test(text);
+
+const SMALL_NUMBERS: Record<string, number> = {
+  a: 1, an: 1, one: 1, two: 2, three: 3, four: 4, five: 5, six: 6, seven: 7, eight: 8, nine: 9, ten: 10, eleven: 11, twelve: 12,
+};
+function smallNumber(word: string): number {
+  return SMALL_NUMBERS[word] ?? (Number(word) || 1);
+}
+
+/** The most recent Saturday on or before a day: where "the weekend" sits in weekday copy. */
+function lastSaturday(d: Date): Date {
+  const day = new Date(d.getFullYear(), d.getMonth(), d.getDate());
+  return shift(day, { days: -((day.getDay() + 1) % 7) });
+}
+
+const SEASON_END: Record<string, number> = { spring: 5, summer: 8, autumn: 11, fall: 11 };
+
+/**
+ * "This summer" in a September piece is not "sometime in 2026": it is June
+ * to August, and it is over. A season is filed as a month bucket keyed to
+ * its last month, so it sorts and tenses with the months, under its own
+ * label. Winter straddles the year and is left to the year rule.
+ */
+function seasonBucket(season: string, year: number): Bucket {
+  const name = season === "fall" ? "autumn" : season;
+  return { kind: "month", key: `${year}-${pad(SEASON_END[season])}`, label: `Sometime in ${name} ${year}` };
+}
+
+/**
+ * Relative wording read against the day of publication. Returns null for
+ * wording the rules do not settle, which the caller then reads as vaguely
+ * as it can rather than as a day.
+ *
+ * `iso` is the extractor's own resolution of the same words, used only
+ * where the words point at another event rather than at publication —
+ * "three days later" — since the extractor alone saw what "later" than.
+ * Even then it is filed as a week: the words did not fix the day.
+ */
+function relativeBucket(text: string, pub: Date, iso: string): Bucket | null {
+  if (/\byesterday\b/.test(text)) return dayBucket(shift(pub, { days: -1 }));
+  if (/\btomorrow\b/.test(text)) return dayBucket(shift(pub, { days: 1 }));
+  if (/\btoday\b|\bthis (morning|afternoon|evening)\b|\btonight\b/.test(text)) return dayBucket(pub);
+
+  if (/\b(next|coming)\s+weekend\b/.test(text)) return weekBucket(shift(lastSaturday(pub), { days: 7 }));
+  if (/\bweekend\b/.test(text)) return weekBucket(lastSaturday(pub));
+
+  const count = /\b(a|an|one|two|three|four|five|six|seven|eight|nine|ten|eleven|twelve|several|some|few|\d+)\s+(day|week|month|year|decade)s?\s+(later|after|earlier|before|ago|on)\b/.exec(
+    text
+  );
+  if (count) {
+    const n = smallNumber(count[1]);
+    const unit = count[2];
+    const ago = /^(ago|earlier|before)$/.test(count[3]);
+    if (ago) {
+      if (unit === "day") return n <= 3 ? dayBucket(shift(pub, { days: -n })) : weekBucket(shift(pub, { days: -n }));
+      if (unit === "week") return weekBucket(shift(pub, { days: -7 * n }));
+      if (unit === "month") return monthBucket(shift(pub, { months: -n }));
+      if (unit === "year") return yearBucket(pub.getFullYear() - n);
+      return yearBucket(pub.getFullYear() - 10 * n, true);
+    }
+    // "later", "after", "on": counted from something other than publication.
+    const d = /^\d{4}-\d{2}-\d{2}$/.test(iso) ? parseDate(iso) : null;
+    if (unit === "day" || unit === "week") return d ? weekBucket(d) : monthBucket(pub);
+    if (unit === "month") return d ? monthBucket(d) : yearBucket(pub.getFullYear());
+    return /^\d{4}/.test(iso) ? yearBucket(Number(iso.slice(0, 4))) : null;
+  }
+  if (/\bdays (later|after|earlier|before|ago)\b|\b(the )?(next|following|previous) day\b|\bthe day (before|after)\b/.test(text)) {
+    const d = /^\d{4}-\d{2}-\d{2}$/.test(iso) ? parseDate(iso) : null;
+    return d ? weekBucket(d) : monthBucket(pub);
+  }
+  const ahead = /\bin\s+(a|an|one|two|three|four|five|six|seven|eight|nine|ten|\d+)\s+(day|week|month)s?\b/.exec(text);
+  if (ahead) {
+    const n = smallNumber(ahead[1]);
+    if (ahead[2] === "day") return weekBucket(shift(pub, { days: n }));
+    if (ahead[2] === "week") return weekBucket(shift(pub, { days: 7 * n }));
+    return monthBucket(shift(pub, { months: n }));
+  }
+
+  if (/\b(last|past|previous)\s+(week|few days|several days)\b/.test(text)) {
+    return weekBucket(shift(pub, { days: -7 }));
+  }
+  if (/\b(next|coming)\s+week\b|\bin the coming days\b|\bin the (next|coming) few days\b|\bend of (the )?week\b/.test(text)) {
+    return weekBucket(shift(pub, { days: 7 }));
+  }
+  if (/\bthis week\b|\b(earlier|later) this week\b|\bin recent days\b|\bpast few days\b/.test(text)) {
+    return weekBucket(pub);
+  }
+
+  if (/\b(last|past|previous)\s+month\b/.test(text)) return monthBucket(shift(pub, { months: -1 }));
+  if (/\bnext month\b/.test(text)) return monthBucket(shift(pub, { months: 1 }));
+  if (
+    /\bthis month\b|\b(earlier|later) (this|in the) month\b|\bin recent weeks\b|\bin the (coming|next few|past few|last few) weeks\b|\brecently\b|\bend of (the )?month\b/.test(
+      text
+    )
+  ) {
+    return monthBucket(pub);
+  }
+
+  const season = /\b(this|last|past|next|coming)\s+(spring|summer|autumn|fall)\b/.exec(text);
+  if (season) {
+    const offset = /^(last|past)$/.test(season[1]) ? -1 : /^(next|coming)$/.test(season[1]) ? 1 : 0;
+    return seasonBucket(season[2], pub.getFullYear() + offset);
+  }
+
+  if (/\b(last|past|previous)\s+year\b/.test(text)) return yearBucket(pub.getFullYear() - 1);
+  if (/\bnext year\b|\bearly next year\b/.test(text)) return yearBucket(pub.getFullYear() + 1);
+  if (
+    /\bthis (year|winter)\b|\b(earlier|later) (this|in the) year\b|\bend of (the )?year\b|\bin recent months\b|\bin the (coming|next few|past few|last few) months\b|\b(last|next|coming)\s+winter\b/.test(
+      text
+    )
+  ) {
+    return yearBucket(pub.getFullYear());
+  }
+
+  const weekday = new RegExp(`\\b(next\\s+)?(${WEEKDAYS.join("|")})\\b`).exec(text);
+  if (weekday) {
+    const want = WEEKDAYS.indexOf(weekday[2]);
+    const d = new Date(pub.getFullYear(), pub.getMonth(), pub.getDate());
+    if (weekday[1]) {
+      // "next Tuesday": the first one strictly after publication.
+      const ahead = (want - d.getDay() + 7) % 7 || 7;
+      return dayBucket(shift(d, { days: ahead }));
+    }
+    // "on Tuesday": the most recent one, publication day included.
+    const back = (d.getDay() - want + 7) % 7;
+    return dayBucket(shift(d, { days: -back }));
+  }
+
+  return null;
+}
+
 export function bucketFor(
   ev: { date_iso: string | null; precision: string | null; date_text: string | null; summary?: string | null },
   publishedAt: string | null
 ): Bucket | null {
   const iso = (ev.date_iso ?? "").trim();
-  const pubDate = parseDate(publishedAt);
+  const pub = parseDate(publishedAt);
   const textRaw = (ev.date_text ?? "").trim();
+  const text = textRaw.toLowerCase();
 
   // A yearless recurring form — "--10-07" is ISO 8601 for the day itself.
   const recurring = /^(?:--)?(\d{2})-(\d{2})$/.exec(iso);
@@ -178,15 +348,27 @@ export function bucketFor(
     if (m >= 1 && m <= 12 && d >= 1 && d <= 31) return annualBucket(m, d);
   }
 
+  // Wording anchored on publication is read from the wording. A month or a
+  // year in the text anchors it on its own ("Sunday, Sept. 13"), so those
+  // keep the absolute reading below.
+  const relative = Boolean(pub) && !hasMonth(text) && !hasYear(text) && RELATIVE_RE.test(text);
+  if (relative && pub) {
+    const b = relativeBucket(text, pub, iso);
+    if (b) return b;
+  }
+
   if (/^\d{4}-\d{2}-\d{2}$/.test(iso)) {
     const d = parseDate(iso);
     if (d) {
       if (ev.precision === "month") return monthBucket(d);
       if (ev.precision === "year" || ev.precision === "decade") return yearBucket(d.getFullYear(), ev.precision === "decade");
+      // A day the extractor could not vouch for, or one it reached from
+      // wording that fixed no day, is a week at most.
+      if (ev.precision === "unknown" || relative) return weekBucket(d);
       // The extractor may itself have supplied the publication year to a day
       // the source gave without one. Same question, same answer.
-      if (pubDate && !hasYear(textRaw) && textRaw && d.getFullYear() === pubDate.getFullYear()) {
-        return yearlessDay(d, pubDate, ev.summary, textRaw);
+      if (pub && !hasYear(textRaw) && textRaw && d.getFullYear() === pub.getFullYear()) {
+        return yearlessDay(d, pub, ev.summary, textRaw);
       }
       return dayBucket(d);
     }
@@ -200,9 +382,7 @@ export function bucketFor(
   }
   if (/^\d{4}$/.test(iso)) return yearBucket(Number(iso), ev.precision === "decade");
 
-  const text = (ev.date_text ?? "").trim().toLowerCase();
   if (!text) return null;
-  const pub = parseDate(publishedAt);
 
   // Absolute wording first, since it needs no anchor. A day-and-month form
   // is tried before month-and-year, or "20 October 2027" would be read as
@@ -237,63 +417,23 @@ export function bucketFor(
     }
   }
   const season = /\b(spring|summer|autumn|fall|winter)\b(?:\s+of)?\s+(\d{4})/.exec(text);
-  if (season) return yearBucket(Number(season[2]));
+  if (season) return season[1] === "winter" ? yearBucket(Number(season[2])) : seasonBucket(season[1], Number(season[2]));
   const decade = /\b(1[89]\d0|20\d0)s\b/.exec(text);
   if (decade) return yearBucket(Number(decade[1]), true);
   const bareYear = /\b(1[89]\d{2}|20\d{2})\b/.exec(text);
   if (bareYear) return yearBucket(Number(bareYear[1]));
 
+  // A bare month with the publication's own year: "in September" in a
+  // September piece. Vaguer than a day and honest about it.
+  const bareMonth = MONTH_RE.exec(text);
+  if (bareMonth && pub) {
+    const m = monthIndex(bareMonth[1]);
+    if (m >= 0) return { kind: "month", key: `${pub.getFullYear()}-${pad(m + 1)}`, label: monthLabel(pub.getFullYear(), m + 1) };
+  }
+
   // Relative wording needs the publication date to mean anything.
   if (!pub) return null;
-  if (/\byesterday\b/.test(text)) return dayBucket(shift(pub, { days: -1 }));
-  if (/\btomorrow\b/.test(text)) return dayBucket(shift(pub, { days: 1 }));
-  if (/\btoday\b|\bthis (morning|afternoon|evening)\b|\btonight\b/.test(text)) return dayBucket(pub);
-
-  if (/\b(last|past|previous)\s+(week|weekend|few days|several days)\b/.test(text)) {
-    return weekBucket(shift(pub, { days: -7 }));
-  }
-  if (/\b(next|coming)\s+(week|weekend)\b|\bin the coming days\b|\bin the (next|coming) few days\b/.test(text)) {
-    return weekBucket(shift(pub, { days: 7 }));
-  }
-  if (/\bthis (week|weekend)\b|\b(earlier|later) this week\b|\bin recent days\b|\bpast few days\b/.test(text)) {
-    return weekBucket(pub);
-  }
-
-  if (/\b(last|past|previous)\s+month\b/.test(text)) return monthBucket(shift(pub, { months: -1 }));
-  if (/\bnext month\b/.test(text)) return monthBucket(shift(pub, { months: 1 }));
-  if (
-    /\bthis month\b|\b(earlier|later) this month\b|\bin recent weeks\b|\bin the (coming|next few|past few|last few) weeks\b|\brecently\b/.test(
-      text
-    )
-  ) {
-    return monthBucket(pub);
-  }
-
-  if (/\b(last|past|previous)\s+year\b/.test(text)) return yearBucket(pub.getFullYear() - 1);
-  if (/\bnext year\b|\bearly next year\b/.test(text)) return yearBucket(pub.getFullYear() + 1);
-  if (
-    /\bthis year\b|\b(earlier|later) this year\b|\bend of (the )?year\b|\bin recent months\b|\bin the (coming|next few|past few|last few) months\b/.test(
-      text
-    )
-  ) {
-    return yearBucket(pub.getFullYear());
-  }
-
-  const weekday = new RegExp(`\\b(next\\s+)?(${WEEKDAYS.join("|")})\\b`).exec(text);
-  if (weekday) {
-    const want = WEEKDAYS.indexOf(weekday[2]);
-    const d = new Date(pub.getFullYear(), pub.getMonth(), pub.getDate());
-    if (weekday[1]) {
-      // "next Tuesday": the first one strictly after publication.
-      const ahead = (want - d.getDay() + 7) % 7 || 7;
-      return dayBucket(shift(d, { days: ahead }));
-    }
-    // "on Tuesday": the most recent one, publication day included.
-    const back = (d.getDay() - want + 7) % 7;
-    return dayBucket(shift(d, { days: -back }));
-  }
-
-  return null;
+  return relativeBucket(text, pub, iso);
 }
 
 /** Whether a bucket has passed, is now, or is still to come — as of `now`. */
@@ -488,14 +628,27 @@ function withTense(rows: Omit<CalendarRow, "tense">[], now: Date): CalendarRow[]
   return rows.map((r) => ({ ...r, tense: tenseOf({ kind: r.kind, key: r.bucket }, now) }));
 }
 
-/** Everything a brief filed, for the block under that brief. */
-export function calendarFor(loggedFrom: string, now = new Date()): CalendarRow[] {
+/**
+ * What a brief filed, for the block under that brief.
+ *
+ * Only the recent past and the future: a brief's sources also date the
+ * background they retell — 1889, 2001, last March — and every one of
+ * those was printed under the brief as though it were on watch. Anything
+ * older than `pastDays` is the pedia's business. Anniversaries stay.
+ */
+export function calendarFor(loggedFrom: string, now = new Date(), opts: { pastDays?: number } = {}): CalendarRow[] {
+  const floor = dayKey(shift(now, { days: -(opts.pastDays ?? 120) }));
   const rows = db()
     .prepare(
       `SELECT ${ROW_COLUMNS} ${ROW_JOINS} WHERE c.logged_from = ? AND c.dismissed = 0 ORDER BY c.bucket, c.id`
     )
     .all(loggedFrom) as Omit<CalendarRow, "tense">[];
-  return withTense(rows, now);
+  const recent = rows.filter((r) => {
+    if (r.kind === "annual") return true;
+    const first = r.kind === "year" ? `${r.bucket}-12-31` : r.kind === "month" ? `${r.bucket}-31` : r.bucket;
+    return first >= floor;
+  });
+  return withTense(recent, now);
 }
 
 export interface CalendarGroup {
@@ -552,7 +705,9 @@ export function listCalendar(opts: { pastDays?: number; now?: Date } = {}): Cale
   const groups = new Map<string, CalendarGroup>();
   for (const r of rows) {
     if (r.kind === "day" || r.kind === "annual") continue;
-    const key = `${r.kind}:${r.bucket}`;
+    // The label is part of the key so a season, filed under its last
+    // month, stays its own group beside that month's.
+    const key = `${r.kind}:${r.bucket}:${r.label}`;
     const g = groups.get(key) ?? { label: r.label, kind: r.kind, bucket: r.bucket, tense: r.tense, items: [] };
     g.items.push(r);
     groups.set(key, g);

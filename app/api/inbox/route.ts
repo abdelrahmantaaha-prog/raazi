@@ -1,6 +1,8 @@
 import { NextResponse } from "next/server";
 import { badRequest, readBody } from "@/lib/http";
 import { clipStamp, discard, file, heldCount, keep, listHeld, pasteText, undo } from "@/lib/triage";
+import { regroupHeld } from "@/lib/inbox-groups";
+import { bundleInbox, groupEventsInBundles } from "@/lib/inbox-bundles";
 import { kickWorker } from "@/lib/worker";
 
 export const dynamic = "force-dynamic";
@@ -21,7 +23,7 @@ export async function GET(req: Request) {
 
 export async function POST(req: Request) {
   const body = await readBody<{
-    action?: "keep" | "file" | "discard" | "undo" | "paste";
+    action?: "keep" | "file" | "discard" | "undo" | "paste" | "group";
     itemIds?: number[];
     reason?: string;
     text?: string;
@@ -30,6 +32,28 @@ export async function POST(req: Request) {
   }>(req);
   if (body === null) return badRequest("Malformed JSON body.");
   const q = queryOf(body.q);
+
+  // Grouping reads the whole inbox and needs no items named. Deterministic
+  // and idempotent, so a second press is free.
+  if (body.action === "group") {
+    // The rules first, then the subject bundles, then the same-event pass
+    // inside each bundle, where a small model actually finds them.
+    const rules = regroupHeld();
+    const bundled = await bundleInbox();
+    const events = bundled.error ? null : await groupEventsInBundles();
+    const grouped = rules.grouped + (events?.grouped ?? 0);
+    const stories = rules.stories + (events?.stories ?? 0);
+    const folded = rules.folded + (events?.folded ?? 0);
+    const who = events?.model ?? bundled.model;
+    const note = bundled.error
+      ? `The rules ${rules.grouped ? `grouped ${rules.grouped}` : "found nothing new"}; the model could not read the headlines (${bundled.error}).`
+      : `${who ?? "The model"} sorted ${bundled.assigned} article${bundled.assigned === 1 ? "" : "s"} into ${bundled.bundles} bundle${
+          bundled.bundles === 1 ? "" : "s"
+        }${grouped ? ` and ${grouped} of them into ${stories} stor${stories === 1 ? "y" : "ies"}` : ""}${
+          folded ? `, folding ${folded} duplicate${folded === 1 ? "" : "s"}` : ""
+        }.${events?.errors ? ` ${events.errors} bundle${events.errors === 1 ? "" : "s"} could not be read.` : ""}`;
+    return NextResponse.json({ rules, bundled, events, grouped, stories, folded, note, items: listHeld(200, q), held: heldCount() });
+  }
 
   // Pasting is about one article at a time — it is the paywalled one you went
   // and fetched by hand.

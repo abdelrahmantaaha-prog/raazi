@@ -76,7 +76,8 @@ section("Absolute wording needs no anchor");
   check("October 2027 → month", b("October 2027")?.key === "2027-10");
   check("Oct. 20 → day in the publication year", b("Oct. 20")?.key === "2026-10-20");
   check("20 October 2027 → day", b("20 October 2027")?.key === "2027-10-20");
-  check("spring of 2027 → year", b("in the spring of 2027")?.key === "2027");
+  check("spring of 2027 → the season, filed with the months", b("in the spring of 2027")?.key === "2027-05" && b("in the spring of 2027")?.label === "Sometime in spring 2027", JSON.stringify(b("in the spring of 2027")));
+  check("winter of 2027 → year, since it straddles two", b("in the winter of 2027")?.key === "2027");
   check("a bare year → year", b("the 2003 invasion")?.key === "2003");
   check("the 1990s → decade", b("in the 1990s")?.label === "Sometime in the 1990s");
 }
@@ -112,6 +113,32 @@ section("A day named without a year is this year's only if it is still to come")
   check("it is current on the day", cal.tenseOf({ kind: "annual", key: "09-12" }, now) === "current");
   check("next occurrence rolls into next year once passed", cal.nextOccurrence("01-15", now) === "2027-01-15");
   check("next occurrence this year when ahead", cal.nextOccurrence("10-07", now) === "2026-10-07");
+}
+
+section("Relative wording is read from the words, not from the extractor's rounding");
+{
+  const b = (text, iso, precision = "day", summary = "It happened.") =>
+    cal.bucketFor({ date_iso: iso, precision, date_text: text, summary }, PUB);
+  check("'last week' with a day iso is still a week", b("last week", "2026-09-02")?.kind === "week" && b("last week", "2026-09-02")?.key === "2026-08-28", JSON.stringify(b("last week", "2026-09-02")));
+  check("'as soon as this week' is this week, not a day", b("as soon as this week", "2026-09-09")?.kind === "week");
+  check("'just a few days after' with precision unknown is a week around the extractor's day", b("just a few days after", "2026-09-05", "unknown")?.kind === "week" && b("just a few days after", "2026-09-05", "unknown")?.key === "2026-09-04", JSON.stringify(b("just a few days after", "2026-09-05", "unknown")));
+  check("'three days later' is a week around the day the extractor reached", b("Three days later", "2026-08-27")?.kind === "week" && b("Three days later", "2026-08-27")?.key === "2026-08-21");
+  check("'a day after' too", b("a day after", "2026-09-05")?.kind === "week");
+  check("'this past weekend' is the weekend just gone", b("this past weekend", "2026-09-06")?.kind === "week" && b("this past weekend", "2026-09-06")?.key === "2026-09-04", JSON.stringify(b("this past weekend", "2026-09-06")));
+  check("'over the weekend' the same", b("over the weekend", "2026-09-06")?.key === "2026-09-04");
+  check("'in two weeks' is a week ahead", b("in two weeks", "2026-09")?.kind === "week" && b("in two weeks", "2026-09")?.key === "2026-09-18", JSON.stringify(b("in two weeks", "2026-09")));
+  check("'29 years ago' is a year", b("29 years ago", "1997", "decade")?.key === "1997" && b("29 years ago", "1997", "decade")?.kind === "year");
+  check("'three days ago' is a day", b("three days ago", "2026-09-06")?.key === "2026-09-06");
+  check("'this summer' is over by September", b("this summer", "2026", "year")?.kind === "month" && cal.tenseOf(b("this summer", "2026", "year"), new Date(2026, 8, 11)) === "past", JSON.stringify(b("this summer", "2026", "year")));
+  check("and labelled as the season", b("this summer", "2026", "year")?.label === "Sometime in summer 2026");
+  check("'last spring' is last year's", b("last spring", null, "unknown")?.key === "2025-05");
+  check("a day iso with precision unknown is a week, never a day", b("", "2026-09-05", "unknown")?.kind === "week");
+  check("a fixed weekday is that day even at a commemoration", b("Friday", "2026-09-04", "day", "Spoke at a September 11 anniversary ceremony at the Pentagon.")?.kind === "day" && b("Friday", "2026-09-04", "day", "Spoke at a September 11 anniversary ceremony at the Pentagon.")?.key === "2026-09-04");
+  check("'this past weekend' at a commemorative ceremony is that weekend, not an anniversary", b("this past weekend", "2026-09-06", "day", "Shook hands at the 9/11 commemorative ceremony.")?.kind === "week");
+  check("but a bare month-and-day at an anniversary still recurs", b("September 11", "2026-09-11", "day", "The city marked the anniversary of the attacks.")?.kind === "annual");
+  check("a month and a weekday keeps the absolute reading", b("Sunday, Sept. 6", "2026-09-06")?.key === "2026-09-06" && b("Sunday, Sept. 6", "2026-09-06")?.kind === "day", JSON.stringify(b("Sunday, Sept. 6", "2026-09-06")));
+  check("a bare month in the publication year is that month", b("in September", null, "unknown")?.key === "2026-09" && b("in September", null, "unknown")?.kind === "month");
+  check("'later in September' too", b("later in September", "2026-09", "month")?.key === "2026-09");
 }
 
 section("Tense is judged as of a day");
@@ -163,8 +190,12 @@ section("Filing from a window is idempotent and grouped");
   check("'next month' is a month group", sometime.includes("Sometime in October 2026"), sometime.join(" / "));
   check("future groups come before past ones", sometime[0] === "Sometime in October 2026", sometime.join(" / "));
 
+  ins.run(entityId, "1889", "1889", "year", "The Chinese Exclusion Case was decided.", sourceId);
+  check("a date from the deep past is filed", cal.logCalendar(from, to, "2026-09-10") === 1);
   const forBrief = cal.calendarFor("2026-09-10");
   check("the brief's own block lists what it filed", forBrief.length === 4);
+  check("but the deep past is not under the brief", !forBrief.some((r) => r.summary.startsWith("The Chinese Exclusion")));
+  check("it is still on the whole calendar", cal.listCalendar({ now: new Date(2026, 8, 11) }).sometime.some((g) => g.items.some((r) => r.summary.startsWith("The Chinese Exclusion"))));
   const id = forBrief[0].id;
   check("dismissing hides a line", cal.dismissCalendar(id) && cal.calendarFor("2026-09-10").length === 3);
   check("restoring brings it back", cal.dismissCalendar(id, false) && cal.calendarFor("2026-09-10").length === 4);

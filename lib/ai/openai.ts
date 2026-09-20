@@ -2,6 +2,7 @@ import type { Schema } from "@google/genai";
 import { spec, type ProviderId } from "../providers";
 import { toJsonSchema, dropNulls } from "./schema";
 import { TruncatedOutputError, SchemaUnsupportedError, isSchemaFailure } from "./errors";
+import { unescapeModelJson } from "./escapes";
 
 /**
  * The OpenAI Chat Completions adapter. One provider uses it now — Ollama on
@@ -232,13 +233,13 @@ function parseJson<T>(text: string): T {
     s = s.replace(/^```[a-z]*\s*/i, "").replace(/```\s*$/, "").trim();
   }
   try {
-    return JSON.parse(s) as T;
+    return unescapeModelJson(JSON.parse(s) as T);
   } catch {
     const first = s.search(/[[{]/);
     const last = Math.max(s.lastIndexOf("}"), s.lastIndexOf("]"));
     if (first >= 0 && last > first) {
       try {
-        return JSON.parse(s.slice(first, last + 1)) as T;
+        return unescapeModelJson(JSON.parse(s.slice(first, last + 1)) as T);
       } catch {
         /* fall through */
       }

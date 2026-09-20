@@ -83,7 +83,7 @@ navigation bar — nothing has moved or gone, it is just filed now.
 | **Pedia**    | Entries · Network                        | What was built from the library, one at a time or all  |
 | **Write**    | —                                        | Drafts and ideas, with the citations to hand           |
 | **Search**   | Library · News · Books & papers          | Three searches: your own text, the wire, the catalogues |
-| **Settings** | —                                        | Keys, routing, schedules, corrections                  |
+| **Settings** | —                                        | Keys, routing, schedules, corrections, lessons         |
 
 ## The inbox
 

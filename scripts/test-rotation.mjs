@@ -202,6 +202,61 @@ section("A busy model is stepped over, not the whole provider");
   keys.clearSpentModels();
 }
 
+section("A cheap call asks the lite tail first");
+{
+  const key = reset();
+  const lite = RING.filter((m) => keys.isLiteModel(m));
+  check("a cheap pick names a lite model while one is free", keys.isLiteModel(keys.modelFor(key, { cheap: true })), keys.modelFor(key, { cheap: true }));
+  for (const m of lite) keys.markModelSpent("gemini", m, 60);
+  check("with the lite tail spent it steps up to a real one rather than waiting", !keys.isLiteModel(keys.modelFor(key, { cheap: true })) && keys.modelFor(key, { cheap: true }) === RING[0], keys.modelFor(key, { cheap: true }));
+  keys.clearSpentModels();
+  check("an ordinary pick is unchanged", keys.modelFor(key) === RING[0]);
+}
+
+section("A quality call waits for a real model rather than taking a lite one");
+{
+  const { withRotation } = await import("../lib/ai/client.ts");
+  const { ProvidersBusyError } = await import("../lib/ai/errors.ts");
+  const key = reset();
+  const lite = RING.filter((m) => keys.isLiteModel(m));
+  const real = RING.filter((m) => !keys.isLiteModel(m));
+  check("the ring has a lite tail to refuse", lite.length > 0 && real.length > 0, RING.join(" "));
+  check("a quality pick never names a lite model", !keys.isLiteModel(keys.modelFor(key, { quality: true })));
+  for (const m of real) keys.markModelSpent("gemini", m, 60);
+  check("with every real model spent an ordinary pick steps down to lite", keys.isLiteModel(keys.modelFor(key)), keys.modelFor(key));
+  check("a quality pick still refuses to", !keys.isLiteModel(keys.modelFor(key, { quality: true })), keys.modelFor(key, { quality: true }));
+
+  const asked = [];
+  let err;
+  try {
+    await withRotation(["gemini"], async (k, model) => {
+      asked.push(model);
+      return "served";
+    }, { quality: true });
+  } catch (e) {
+    err = e;
+  }
+  check("and the quality call waits rather than asking anything", asked.length === 0 && err instanceof ProvidersBusyError, `${asked.join(" ")} ${String(err)}`);
+  check("such a task is a retry, not a failure", classify(err, 5).kind === "retry");
+  check("the key was not set aside for the models' wall", keys.usableKeys("gemini").length === 1);
+
+  keys.clearSpentModels();
+  const busy = Object.assign(new Error("503 high demand"), { status: 503 });
+  const asked2 = [];
+  let err2;
+  try {
+    await withRotation(["gemini"], async (k, model) => {
+      asked2.push(model);
+      throw busy;
+    }, { quality: true });
+  } catch (e) {
+    err2 = e;
+  }
+  check("when every real model is busy the lite tail is still not asked", asked2.every((m) => !keys.isLiteModel(m)) && asked2.length === real.length, asked2.join(" > "));
+  check("and the call waits", err2 instanceof ProvidersBusyError, String(err2));
+  keys.clearSpentModels();
+}
+
 section("A slow local model is set aside, not charged to the task");
 {
   const { withRotation } = await import("../lib/ai/client.ts");

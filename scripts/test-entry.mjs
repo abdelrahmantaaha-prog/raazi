@@ -166,6 +166,40 @@ section("A dead marker takes its sentence with it, a framing sentence survives")
 
 /* -------------------------------------------------------- staleness */
 
+section("Apparatus, repeats and the timeline the writer is handed");
+{
+  const { looksLikeApparatus, repeatsOf, describeDatedLine } = await import("../lib/pipeline/entry.ts");
+  const passage = (quote, claim = null, context = null) => ({ quote, claim, context });
+  check("an index line is apparatus", looksLikeApparatus(passage("Ramallah, 12, 45–47, 102, 118; Khalidi, Rashid, 3, 9, 211")));
+  check("a note pointing at the index is apparatus", looksLikeApparatus(passage("Ramallah is referenced.", "Index entries list references specifically to Palestinians.")));
+  check("a section-heading listing is apparatus", looksLikeApparatus(passage("Wadi Naar, Ramallah, Hebron", null, "the prologue section heading listing places")));
+  check("a 'see also' is apparatus", looksLikeApparatus(passage("See also Nabi Saleh; Qalandia.")));
+  check("prose with a date and a figure is not", !looksLikeApparatus(passage("On 14 September 2026 the court blocked the order by 7 votes to 2.", "The court blocked the order.")));
+  check("a passage about a 1929 visit is not", !looksLikeApparatus(passage("She grew up in Jerusalem and visited her sister in Hebron in August 1929.", "A woman visited Hebron in 1929.")));
+
+  const rows = [
+    { id: 1, claim: "Donald Trump proposed giving a $5,000 dividend to all US adults if Republicans keep control of Congress." },
+    { id: 2, claim: "The Fed is expected to raise rates on Wednesday despite the president's demands." },
+    { id: 3, claim: "Donald Trump proposed giving a $5,000 dividend to every US adult if Republicans keep control of Congress in November." },
+    { id: 6, claim: "Trump called Nvidia CEO Jensen Huang during a company all-hands meeting." },
+    { id: 7, claim: "Trump called Nvidia CEO Jensen Huang during an event panel." },
+    { id: 4, claim: null },
+    { id: 5, claim: "Short claim." },
+  ];
+  const rep = repeatsOf(rows);
+  check("the second account of one pledge repeats the first", rep.get(3) === 1, JSON.stringify([...rep]));
+  check("an unrelated claim repeats nothing", !rep.has(2));
+  check("a missing or tiny claim is never a repeat", !rep.has(4) && !rep.has(5));
+  check("two accounts that disagree are not a repeat", !rep.has(7), JSON.stringify([...rep]));
+
+  const shown = describeDatedLine({ iso: "2026-09-14", text: "Monday night", summary: "The Court blocked the order" });
+  check("a dated line shows the date and the wording", shown === '2026-09-14 ("Monday night"): The Court blocked the order', shown);
+  check("a bare year shows once", describeDatedLine({ iso: "2025", text: "2025", summary: "x" }) === "2025: x");
+  check("a recurring day shows its wording", describeDatedLine({ iso: "--10-07", text: "Oct. 7", summary: "attack" }) === "Oct. 7: attack");
+  const joined = normaliseMarkers("a [[m:1]], [[m:2]]; [[m:3]].");
+  check("comma-joined markers are one grammar too", joined === "a [[m:1]] [[m:2]] [[m:3]].", joined);
+}
+
 section("Coverage never queues a rewrite; evidence and requests do");
 {
   const { db } = await import("../lib/db/index.ts");

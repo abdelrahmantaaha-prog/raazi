@@ -46,6 +46,8 @@ interface Item {
   source_note: string | null;
   clipped_at: string | null;
   starred: number;
+  bundle_id: number | null;
+  bundle_label: string | null;
 }
 
 interface Group {
@@ -53,6 +55,14 @@ interface Group {
   title: string;
   storyId: number | null;
   items: Item[];
+}
+
+/** The subject level: the stories the grouping pass filed under one label. */
+interface Bundle {
+  key: string;
+  label: string;
+  groups: Group[];
+  count: number;
 }
 
 type PaneView = "text" | "page";
@@ -117,6 +127,7 @@ export default function Inbox({
   const [error, setError] = useState<string | null>(null);
   const [runId, setRunId] = useState<number | null>(null);
   const [lastDiscarded, setLastDiscarded] = useState<number[]>([]);
+  const [grouping, setGrouping] = useState(false);
   const [pasting, setPasting] = useState<number | null>(null);
   const [pasted, setPasted] = useState("");
   /**
@@ -292,7 +303,52 @@ export default function Inbox({
     return all.sort((a, b) => rank.get(a.key)! - rank.get(b.key)!);
   }, [items]);
 
-  const flat = useMemo(() => groups.flatMap((g) => g.items), [groups]);
+  /**
+   * The subject level above the stories. Biggest bundles first, since that
+   * is where one decision clears the most; what the pass left unsorted comes
+   * last as "Everything else". A folded bundle keeps its place and hides its
+   * rows, and the keyboard skips what is hidden.
+   */
+  const [collapsed, setCollapsed] = useState<Set<string>>(new Set());
+  const toggleBundle = (key: string) =>
+    setCollapsed((prev) => {
+      const next = new Set(prev);
+      if (next.has(key)) next.delete(key);
+      else next.add(key);
+      return next;
+    });
+  const bundles = useMemo<Bundle[]>(() => {
+    const map = new Map<string, Bundle>();
+    for (const g of groups) {
+      const lead = g.items.find((i) => i.bundle_id !== null) ?? g.items[0];
+      const key = lead.bundle_id !== null ? `b${lead.bundle_id}` : "none";
+      const label = lead.bundle_id !== null ? (lead.bundle_label ?? "Bundle") : "Everything else";
+      const b = map.get(key) ?? { key, label, groups: [], count: 0 };
+      b.groups.push(g);
+      b.count += g.items.length;
+      map.set(key, b);
+    }
+    return [...map.values()].sort((a, b) => {
+      if (a.key === "none" || b.key === "none") return a.key === "none" ? 1 : -1;
+      return b.count - a.count || a.label.localeCompare(b.label);
+    });
+  }, [groups]);
+  const selectBundle = (bundle: Bundle) =>
+    setSelected((prev) => {
+      const next = new Set(prev);
+      const ids = bundle.groups.flatMap((g) => g.items.map((i) => i.id));
+      const all = ids.every((id) => next.has(id));
+      for (const id of ids) {
+        if (all) next.delete(id);
+        else next.add(id);
+      }
+      return next;
+    });
+
+  const flat = useMemo(
+    () => bundles.flatMap((b) => (collapsed.has(b.key) ? [] : b.groups.flatMap((g) => g.items))),
+    [bundles, collapsed]
+  );
   const cursor = Math.max(0, flat.findIndex((f) => f.id === currentId));
   const current = flat[cursor] ?? null;
 
@@ -507,6 +563,33 @@ export default function Inbox({
       setError((err as Error).message);
     } finally {
       setBusy(false);
+    }
+  }
+
+  /**
+   * Groups everything related in the inbox, deterministically, and reloads
+   * the list so the accounts of one story sit under one heading before you
+   * go through them. Nothing is decided by it.
+   */
+  async function group() {
+    setGrouping(true);
+    setError(null);
+    try {
+      const res = await fetch("/api/inbox", {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ action: "group", q: searched || undefined }),
+      });
+      const data = (await res.json().catch(() => ({}))) as { items?: Item[]; held?: number; note?: string; error?: string };
+      if (!res.ok) throw new Error(data.error ?? "That did not work.");
+      if (data.items) setItems(data.items);
+      if (typeof data.held === "number") setCount(data.held);
+      if (data.note) setError(data.note);
+      router.refresh();
+    } catch (err) {
+      setError((err as Error).message);
+    } finally {
+      setGrouping(false);
     }
   }
 
@@ -869,6 +952,17 @@ export default function Inbox({
                   ) : null}
                 </label>
               )}
+              {!selectedIds.length && (
+                <button
+                  type="button"
+                  disabled={busy || grouping}
+                  onClick={() => group()}
+                  title="Put the related articles waiting here together. The rules go first (same wire copy, same names and figures), then the cheapest model — or the local one, if you route it there — reads the headlines still alone and says which are one story. Pressing it again is free."
+                  className={`${bulkButton} shrink-0 border border-[var(--color-rule)] hover:border-[var(--color-accent)] hover:text-[var(--color-accent)]`}
+                >
+                  <IconSelectAll /> {grouping ? "Grouping…" : "Group related"}
+                </button>
+              )}
             </div>
 
             <div
@@ -886,7 +980,37 @@ export default function Inbox({
                   </p>
                 </div>
               ) : (
-                groups.map((group) => {
+                bundles.map((bundle) => (
+                  <section key={bundle.key} className="border-b-2 border-[var(--color-rule)] last:border-b-0">
+                    {bundles.length > 1 || bundle.key !== "none" ? (
+                      <div className="flex items-center gap-2 bg-[var(--color-accent-soft)] px-3 py-1.5 text-xs">
+                        <button
+                          type="button"
+                          onClick={() => toggleBundle(bundle.key)}
+                          aria-expanded={!collapsed.has(bundle.key)}
+                          title={collapsed.has(bundle.key) ? "Show this bundle" : "Fold this bundle away"}
+                          className="w-4 shrink-0 text-[var(--color-muted)] transition hover:text-[var(--color-accent)]"
+                        >
+                          {collapsed.has(bundle.key) ? "▸" : "▾"}
+                        </button>
+                        <span className="min-w-0 truncate font-semibold text-[var(--color-ink)]">{bundle.label}</span>
+                        <span className="shrink-0 text-[var(--color-muted)]">
+                          {bundle.count} article{bundle.count === 1 ? "" : "s"}
+                          {bundle.groups.length < bundle.count ? ` · ${bundle.groups.length} stor${bundle.groups.length === 1 ? "y" : "ies"}` : ""}
+                        </span>
+                        <button
+                          type="button"
+                          onClick={() => selectBundle(bundle)}
+                          title="Select every article in this bundle, to keep, file or discard them together"
+                          className="ms-auto inline-flex shrink-0 items-center gap-1 text-[var(--color-muted)] transition hover:text-[var(--color-accent)]"
+                        >
+                          <IconSelectAll size={14} /> Select all
+                        </button>
+                      </div>
+                    ) : null}
+                    {collapsed.has(bundle.key)
+                      ? null
+                      : bundle.groups.map((group) => {
                   const many = group.items.length > 1;
                   return (
                     <section key={group.key} className="border-b border-[var(--color-rule)] last:border-b-0">
@@ -1020,7 +1144,9 @@ export default function Inbox({
                       </ul>
                     </section>
                   );
-                })
+                        })}
+                  </section>
+                ))
               )}
             </div>
 

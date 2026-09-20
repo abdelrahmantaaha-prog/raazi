@@ -171,8 +171,8 @@ export function modelsFor(id: ProviderId): string[] {
  * day the estimate said. A routing table that hides three quarters of what it
  * routes is not a routing table.
  */
-export type Stage = "extract" | "resolve" | "entry" | "verify" | "tag" | "brief";
-export const STAGES: Stage[] = ["extract", "resolve", "entry", "verify", "tag", "brief"];
+export type Stage = "extract" | "resolve" | "entry" | "verify" | "tag" | "brief" | "group";
+export const STAGES: Stage[] = ["extract", "resolve", "entry", "verify", "tag", "brief", "group"];
 
 export const STAGE_LABEL: Record<Stage, string> = {
   extract: "Reading passages",
@@ -181,6 +181,7 @@ export const STAGE_LABEL: Record<Stage, string> = {
   verify: "Checking entries",
   tag: "Filing sources",
   brief: "Writing the brief",
+  group: "Grouping the inbox",
 };
 
 export const STAGE_NOTE: Record<Stage, string> = {
@@ -193,6 +194,8 @@ export const STAGE_NOTE: Record<Stage, string> = {
   tag: "One short call per source. Barely worth routing.",
   brief:
     "A handful of calls a week, over every passage the week collected. The one place long context beats everything else, and the one you present from.",
+  group:
+    "Reads only headlines and says which are one story. A few thousand tokens a pass, a few passes a day; the cheapest model on the ring is asked first, and the local one does it for nothing.",
 };
 
 export function spec(id: ProviderId): ProviderSpec {

@@ -3,6 +3,9 @@ import { migrateQueue } from "./migrate-queue";
 import { migrateFeeds } from "./migrate-feeds";
 import { migrateWatch } from "./migrate-watch";
 import { migrateCalendar } from "./migrate-calendar";
+import { migrateLessons } from "./migrate-lessons";
+import { migrateEscapes } from "./migrate-escapes";
+import { migrateBundles } from "./migrate-bundles";
 
 /**
  * `schema.sql` is all CREATE IF NOT EXISTS, which means it can add tables to an
@@ -480,6 +483,9 @@ export function migrate(db: Database.Database) {
   migrateFeeds(db);
   migrateWatch(db);
   migrateCalendar(db);
+  migrateLessons(db);
+  migrateBundles(db);
+  migrateEscapes(db);
 }
 
 /**
