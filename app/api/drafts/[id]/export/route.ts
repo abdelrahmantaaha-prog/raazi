@@ -2,7 +2,8 @@ import { NextResponse } from "next/server";
 import { asId, attachment, badRequest, notFound } from "@/lib/http";
 import { buildDocx } from "@/lib/docx";
 import { citationsFor, getDraft } from "@/lib/drafts";
-import { htmlToDocx } from "@/lib/richtext";
+import { htmlToDocx, htmlToText } from "@/lib/richtext";
+import { dirOf } from "@/lib/dir";
 
 export const dynamic = "force-dynamic";
 
@@ -23,10 +24,17 @@ export async function GET(_req: Request, ctx: { params: Promise<{ id: string }> 
   const citations = citationsFor(id);
   const { blocks, notes } = htmlToDocx(draft.body_html || `<p>${draft.body_md}</p>`, citations);
 
+  // Which way the document reads, judged the way the editor judges it — from
+  // the draft's own words, with the title thrown in for a piece that is still
+  // only a heading. Word infers nothing from the characters themselves, so a
+  // draft written in Arabic exported ragged-left until this was passed.
+  const rtl = dirOf(`${draft.title} ${htmlToText(draft.body_html || draft.body_md || "")}`) === "rtl";
+
   const file = buildDocx({
     title: draft.title,
     blocks,
     notes,
+    rtl,
     subtitle: `Drawn from Corpus · ${new Date().toLocaleDateString("en-GB", {
       day: "numeric",
       month: "long",

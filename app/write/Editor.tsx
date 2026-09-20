@@ -1,7 +1,7 @@
 "use client";
 
 import { useCallback, useEffect, useRef, useState } from "react";
-import { citationMarker } from "./citations";
+import { citationMarker, sanitizeDraftHtml } from "./citations";
 
 export interface CitationRef {
   id: number;
@@ -178,12 +178,44 @@ export function Editor({
   // So a blank line starts a new paragraph, and a single newline — which in
   // pasted text is almost always a wrapped line rather than a break the
   // author meant — closes up into a space.
+  /**
+   * The last thing cut or copied out of this editor.
+   *
+   * Moving a paragraph is cut and paste, and pasting as plain text turned
+   * every citation marker in it into the literal characters `[3]` — no longer
+   * renumbered, no longer removed with its reference, and exported as text
+   * rather than a footnote. Matching the clipboard's plain text against what
+   * we last took out of here tells us the paste is a move rather than
+   * something from outside, so it can go back as markup with its markers
+   * intact, while a paragraph from a web page still arrives as plain words.
+   */
+  const taken = useRef<{ text: string; html: string } | null>(null);
+
   useEffect(() => {
     const el = box.current;
     if (!el) return;
+
+    const remember = () => {
+      const sel = document.getSelection();
+      if (!sel || sel.isCollapsed || !sel.anchorNode || !el.contains(sel.anchorNode)) return;
+      const range = sel.getRangeAt(0);
+      const holder = document.createElement("div");
+      holder.appendChild(range.cloneContents());
+      taken.current = { text: sel.toString(), html: holder.innerHTML };
+    };
+
     const onPaste = (e: ClipboardEvent) => {
       e.preventDefault();
       const text = e.clipboardData?.getData("text/plain") ?? "";
+
+      // A move: put back exactly what was taken, markers and all.
+      const held = taken.current;
+      if (held && text && held.text === text) {
+        document.execCommand("insertHTML", false, sanitizeDraftHtml(held.html));
+        emit();
+        return;
+      }
+
       const paragraphs = text
         .replace(/\r\n?/g, "\n")
         .split(/\n\s*\n+/)
@@ -201,8 +233,15 @@ export function Editor({
       }
       emit();
     };
+
+    el.addEventListener("copy", remember);
+    el.addEventListener("cut", remember);
     el.addEventListener("paste", onPaste);
-    return () => el.removeEventListener("paste", onPaste);
+    return () => {
+      el.removeEventListener("copy", remember);
+      el.removeEventListener("cut", remember);
+      el.removeEventListener("paste", onPaste);
+    };
   }, [emit]);
 
   return (

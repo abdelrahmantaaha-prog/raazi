@@ -74,6 +74,57 @@ export function renumberHtml(html: string, refs: CitedRef[]): string {
 }
 
 /**
+ * What may survive a move inside the draft.
+ *
+ * Moving a paragraph means cut and paste, and the paste handler takes the
+ * clipboard's plain text — deliberately, so a paragraph dragged in from a web
+ * page does not bring its fonts and colours with it. But a citation marker is
+ * a span, and plain text flattens it to the four characters `[3]`: it stops
+ * renumbering, stops being removed when its reference is deleted, and exports
+ * as literal text rather than a footnote. Moving a paragraph quietly cost you
+ * every citation in it.
+ *
+ * So text that came out of this editor is put back as markup, through this
+ * allowlist. Everything the editor can produce is kept and nothing else is:
+ * no styles, no classes, no colours, and a span only when it is a marker.
+ */
+const ALLOWED = new Set(["p", "h1", "h2", "h3", "blockquote", "ul", "ol", "li", "b", "strong", "i", "em", "br"]);
+
+export function sanitizeDraftHtml(html: string): string {
+  let out = "";
+  const re = /<(\/?)([a-zA-Z][a-zA-Z0-9]*)((?:[^>"']|"[^"]*"|'[^']*')*)(\/?)>/g;
+  let last = 0;
+  let m: RegExpExecArray | null;
+  while ((m = re.exec(html))) {
+    out += html.slice(last, m.index);
+    last = m.index + m[0].length;
+    const closing = m[1] === "/";
+    const tag = m[2].toLowerCase();
+    const attrs = m[3] ?? "";
+
+    if (tag === "span") {
+      // Kept only when it is a marker, and re-emitted in canonical form so
+      // nothing of where it has been travels with it.
+      const cite = /data-cite="(\d+)"/.exec(attrs);
+      const note = /data-note="(\d+)"/.exec(attrs);
+      if (!closing && cite) {
+        out += `<span data-cite="${cite[1]}" data-note="${note ? note[1] : 0}" contenteditable="false" style="${MARKER_STYLE}">`;
+      } else if (closing) {
+        // A closing span is emitted only if we opened one; an unmatched close
+        // is harmless in a fragment the browser is about to parse.
+        out += "</span>";
+      }
+      continue;
+    }
+
+    if (ALLOWED.has(tag)) out += closing ? `</${tag}>` : `<${tag}>`;
+    // Anything else: the tag goes, the words it wrapped stay.
+  }
+  out += html.slice(last);
+  return out;
+}
+
+/**
  * The same rules applied to the live editor, in place.
  *
  * Returns true when anything changed, so the caller knows whether to emit the

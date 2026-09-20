@@ -1,6 +1,7 @@
 "use client";
 
-import { useRouter, useSearchParams } from "next/navigation";
+import { useEffect, useState } from "react";
+import { useRouter } from "next/navigation";
 import { WritingDesk } from "./WritingDesk";
 import { Ideas } from "./Ideas";
 import { Starred } from "./Starred";
@@ -22,43 +23,53 @@ const TABS: WriteTab[] = ["drafts", "ideas", "starred"];
  * the articles you marked in the inbox for a closer look, kept beside the
  * drafts they may end up in.
  *
- * Which tab is open lives in the address, not in this component.
+ * Which tab is open lives in the address, and arrives here as a prop.
  *
- * It used to be `useState(openTab ?? "drafts")`, and being state rather than
- * address broke three things at once. Back, after clicking into Starred, left
+ * It used to be `useState(openTab ?? "drafts")` and nothing else, and being
+ * state *alone* broke three things. Back, after clicking into Starred, left
  * Write altogether instead of returning to Drafts. Reloading, or sending
  * yourself the link, always landed on Drafts whatever you had been reading.
  * And the inbox's "Starred" link did nothing at all when you were already on
- * this page: the initial value had already been taken, and a new `?tab=`
- * could not reach it. Reading the parameter on every render fixes all three,
- * and costs nothing — the panes below stay mounted either way.
+ * this page: the initial value had been taken, and a new `?tab=` could not
+ * reach it.
+ *
+ * So the address is now the record, the server reads it (see page.tsx for why
+ * not `useSearchParams`), and the state below exists only to make the click
+ * instant — it changes at once and the effect keeps it honest when the
+ * address changes underneath it, which is what the inbox's link does.
  */
 export function WriteHome({
   drafts,
   ideas,
   starred,
   openDraft,
+  openTab,
 }: {
   drafts: DraftSummary[];
   ideas: IdeaSummary[];
   starred: StarredArticle[];
   /** The draft the URL asked for, if it asked for one. */
   openDraft?: number | null;
+  /** The tab the address asks for, read on the server. */
+  openTab?: WriteTab;
 }) {
   const router = useRouter();
-  const params = useSearchParams();
-  const asked = params.get("tab");
-  const tab: WriteTab = TABS.find((t) => t === asked) ?? "drafts";
+  const [tab, setTab] = useState<WriteTab>(openTab ?? "drafts");
+
+  // The address changing is what a link from elsewhere does — this is the
+  // line whose absence made the inbox's "Starred" link a no-op.
+  useEffect(() => {
+    if (openTab && openTab !== tab) setTab(openTab);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [openTab]);
 
   const go = (next: WriteTab) => {
-    const q = new URLSearchParams(params.toString());
-    // Drafts is the default, so it stays out of the address: /write is Drafts.
-    if (next === "drafts") q.delete("tab");
-    else q.set("tab", next);
+    setTab(next);
     // push, not replace: moving between tabs is somewhere you have been, and
     // Back should bring you to the one you were on rather than off the page.
     // scroll: false keeps a long draft where you left it.
-    router.push(q.size ? `/write?${q}` : "/write", { scroll: false });
+    // Drafts is the default, so it stays out of the address: /write is Drafts.
+    router.push(next === "drafts" ? "/write" : `/write?tab=${next}`, { scroll: false });
   };
 
   return (
