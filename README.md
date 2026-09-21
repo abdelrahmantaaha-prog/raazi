@@ -329,6 +329,33 @@ deliberate: ingesting a book takes hundreds of calls over a long stretch, and th
 background worker has to keep going with no tab open, so it needs to reach the key
 on its own. `GEMINI_API_KEY` in `.env.local` overrides the stored one.
 
+## Asking a vague question of your own sources
+
+**Search → By meaning** takes the question you actually have rather than the
+word you happen to remember. "How did debt become a moral obligation rather
+than just a number" shares almost nothing with the passages that answer it, and
+finds them anyway.
+
+What comes back is **passages** — the text, the source, the page, and a link
+that opens the reader there. Not an answer. A generated answer is a claim with
+no address, and the whole of this application is built the other way round: you
+read the passage and decide what it says. The model never sees the library's
+text at query time and never writes a sentence. It turns your question into a
+vector; the comparing is arithmetic over vectors already stored.
+
+Word matching is blended in rather than discarded, because it is better than
+meaning at exactly what meaning is worst at — a name, a figure, a statute. Each
+result says how it was found: by meaning, by words, or by both.
+
+Passages need a vector before they can be searched this way, and that is the
+only part of it that spends anything, so it is a button rather than something
+the search does for itself: **Index the other N**. It goes in small batches
+with a pause between them — the free tier meters embeddings by tokens per
+minute as well as by requests, and one large batch refuses instantly and rests
+every key for half an hour. Running out partway is an ordinary end to a long
+errand: what is indexed stays indexed and the button picks up where it left
+off.
+
 ## A book beside its translation
 
 Add the translation to the library the way you add any book, then pair it from
@@ -607,7 +634,7 @@ writes it again; *Hide expanded* folds it away.
 npm test
 ```
 
-2,195 assertions across 36 suites, no API key needed. `test-resume.mjs` drives the real worker against
+2,283 assertions across 39 suites, no API key needed. `test-resume.mjs` drives the real worker against
 a scratch database with injected handlers, including a simulated kill mid-run and a
 real Gemini quota-error payload. `test-tags.mjs` covers the property that matters
 most — an entity in two topics stays one entity — plus derivation, overrides and

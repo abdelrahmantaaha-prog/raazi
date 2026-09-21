@@ -4,16 +4,21 @@ import { listTags } from "@/lib/tags";
 import { ENTITY_LABEL } from "@/lib/types";
 import { Badge, Card, Empty } from "../components/ui";
 import { TagFilter } from "../components/TagFilter";
+import { Meaning } from "./Meaning";
 
 export const dynamic = "force-dynamic";
 
 export default async function SearchPage({
   searchParams,
 }: {
-  searchParams: Promise<{ q?: string; tag?: string }>;
+  searchParams: Promise<{ q?: string; tag?: string; mode?: string }>;
 }) {
   const params = await searchParams;
   const q = params.q ?? "";
+  // Two ways of looking, on one page: the words you know, or the question you
+  // have. Kept as a mode rather than a separate page because they answer the
+  // same need and you switch between them mid-search.
+  const byMeaning = params.mode === "meaning";
   const tagId = Number(params.tag ?? 0) || undefined;
   const results = q ? search(q, { tagId }) : { chunks: [], entries: [] };
   const tags = listTags();
@@ -27,6 +32,33 @@ export default async function SearchPage({
         </p>
       </div>
 
+      <div className="flex gap-1 border-b border-[var(--color-rule)] pb-px">
+        {[
+          { mode: "", label: "By words" },
+          { mode: "meaning", label: "By meaning" },
+        ].map((m) => {
+          const active = (m.mode === "meaning") === byMeaning;
+          return (
+            <Link
+              key={m.label}
+              href={m.mode ? "/search?mode=meaning" : "/search"}
+              aria-current={active ? "page" : undefined}
+              className={`-mb-px shrink-0 border-b-2 px-3 py-2 text-sm transition ${
+                active
+                  ? "border-[var(--color-accent)] font-medium text-[var(--color-ink)]"
+                  : "border-transparent text-[var(--color-muted)] hover:border-[var(--color-rule)] hover:text-[var(--color-ink)]"
+              }`}
+            >
+              {m.label}
+            </Link>
+          );
+        })}
+      </div>
+
+      {byMeaning && <Meaning />}
+
+      {!byMeaning && (
+        <>
       <TagFilter tags={tags} active={tagId} basePath="/search" extra={{ q: q || undefined }} />
 
       <form action="/search" className="flex gap-2">
@@ -93,6 +125,8 @@ export default async function SearchPage({
             </Card>
           ))}
         </section>
+      )}
+        </>
       )}
     </div>
   );
