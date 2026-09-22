@@ -3,8 +3,8 @@ import { db, tx } from "./db";
 import { embed } from "./ai/client";
 import { getConfig } from "./config";
 import { cosine, fromBlob, toBlob } from "./normalize";
-import { ftsMatch, queryWords } from "./fts";
 import { formatLocator } from "./chunk";
+import { isJunkText } from "./junk-text";
 import type { Locator } from "./types";
 
 /**
@@ -24,10 +24,41 @@ import type { Locator } from "./types";
  * library's text at query time and never writes a sentence; it turns your
  * question into a vector, and the comparing is arithmetic.
  *
- * Word matching is not discarded, because it is better than meaning at exactly
- * the thing meaning is bad at: a name, a figure, a statute. The two rankings
- * are blended, so a passage that is both about your question and contains your
- * words outranks one that is only either.
+ * How it ranks was settled by measurement, on 22 September 2026, against 36
+ * hand-written questions whose right passage was known — 24 vague ones that
+ * paraphrase a passage while avoiding its words, 12 that name a person, a
+ * company or a decree. What it found, and so what this does:
+ *
+ * - **Meaning orders the list.** The first version blended in a full-text
+ *   ranking with fixed weights, and it made both kinds of question worse:
+ *   right passage first 13 of 24 times for the vague ones against 18 by
+ *   meaning alone, and "Al Smooth" — a nickname, exactly what words are for —
+ *   sank to 1,956th. Two faults compounded. The word query was every word of
+ *   the question joined by AND, so a vague question matched nothing, or
+ *   matched the wrong long passage; and the weights meant a passage matching
+ *   both scored 0.75·m + 0.25·w against 0.85·m for one matching meaning
+ *   alone, so being found by your words could push a passage *down*.
+ *
+ * - **Only rare words lift.** A word bonus helps names and hurts vague
+ *   questions in equal measure, because a vague question's words ("children",
+ *   "government") are everywhere. Counting only the words that appear in at
+ *   most one passage in two hundred leaves vague questions ranked by meaning
+ *   exactly as before and moved name searches from 7 of 12 first to 10 of 12.
+ *
+ * - **The library stays as it was embedded.** Re-embedding every passage as a
+ *   "retrieval document", which is what the provider recommends for search,
+ *   was measured too and was markedly worse here (right passage first 12 of 24
+ *   against 18). Nothing is re-indexed.
+ *
+ * - **Strength, not a percentage.** Similarity from this model is compressed:
+ *   the least related passage in the library scores about 0.60 against any
+ *   question and the median about 0.70, so "71%" said nothing — it is what a
+ *   passage picked at random gets. What does separate is distance from the
+ *   library's own average, in standard deviations: the right passage sat a
+ *   median 4.95 above it and never below 3.1, while the 20th result sits
+ *   around 2.9. That becomes a band. It is not a verdict — among thousands of
+ *   passages the best of pure chance lands near 3.5 — which is why the lowest
+ *   band is called loosely related and not relevant.
  */
 
 export interface Found {
@@ -38,13 +69,19 @@ export interface Found {
   outlet: string | null;
   locator: string;
   text: string;
-  /** 0..1, and only ever a ranking — never a claim about correctness. */
+  /** The ranking value. Only an order — never a claim about correctness. */
   score: number;
-  /** Why it is here: both rankings, one, or the other. */
+  /**
+   * How far this passage stands above the rest of the library for this
+   * question. Null when the library is too small for that to mean anything.
+   */
+  strength: "close" | "related" | "loose" | null;
+  /** Found by meaning alone, or lifted by a rare word of yours it contains. */
   via: "meaning" | "words" | "both";
 }
 
 export interface Coverage {
+  /** Passages that can be searched this way — text, not bytes. */
   chunks: number;
   embedded: number;
   stale: number;
@@ -79,26 +116,65 @@ const MAX_CHARS = 1_600;
 const BETWEEN_MS = 250;
 /** The most the ranking ever loads into memory at once. */
 const MAX_VECTORS = 40_000;
-/** Below this a passage is not about the question at all. */
-const FLOOR = 0.34;
+
+/** A word in at most this share of the library counts as rare. */
+const RARE_SHARE = 0.005;
+/** What a passage gains for holding every rare word of the question. */
+const RARE_LIFT = 0.03;
+/** Below this many passages, distance from the average means nothing. */
+const MIN_FOR_STRENGTH = 200;
+/** Standard deviations above the library's average for this question. */
+const CLOSE = 4.5;
+const RELATED = 3.8;
+
+/** Words that say nothing about what a passage is about. */
+const STOP = new Set(
+  (
+    "a an and are as at be been but by can could did do does for from had has have how i if in into is it its " +
+    "just more most much no not of on or our so some than that the their them then there these they this those " +
+    "to up was we were what when where which who whom why will with would you your about after before over " +
+    "only same such very across also while during between both each few other any all own too " +
+    "في من على إلى عن مع هذا هذه ذلك التي الذي كيف ما ماذا لماذا هل أن إن كان قد لم لن ثم أو و"
+  ).split(" ")
+);
+
+/**
+ * A row with no vector, standing for a passage that is not text: it keeps
+ * the passage from being offered to the indexer on every pass, and is left
+ * out of the counts and the ranking. Dim 0 is the mark.
+ */
+const TOMBSTONE = Buffer.alloc(0);
 
 function hashOf(text: string): string {
   return crypto.createHash("sha1").update(text).digest("hex").slice(0, 16);
 }
 
-/** What has a current vector, and what does not. */
+/** The words of a question worth looking up in the index. */
+export function contentWords(q: string): string[] {
+  const words = q
+    .toLowerCase()
+    .split(/[^\p{L}\p{N}]+/u)
+    .filter((w) => w && !STOP.has(w) && (w.length > 2 || /\d/.test(w)));
+  return [...new Set(words)].slice(0, 12);
+}
+
+/** What has a current vector, and what does not. Passages that are not text are not counted. */
 export function coverage(sourceId?: number): Coverage {
   const where = sourceId ? "WHERE c.source_id = ?" : "";
-  const args = sourceId ? [sourceId] : [];
+  const model = getConfig().embedModel;
   const row = db()
     .prepare(
-      `SELECT COUNT(*) AS chunks,
-              SUM(CASE WHEN v.chunk_id IS NOT NULL THEN 1 ELSE 0 END) AS embedded,
-              SUM(CASE WHEN v.chunk_id IS NOT NULL AND v.model != ? THEN 1 ELSE 0 END) AS stale
+      `SELECT SUM(CASE WHEN v.dim = 0 THEN 0 ELSE 1 END) AS chunks,
+              SUM(CASE WHEN v.dim > 0 AND v.model = ? THEN 1 ELSE 0 END) AS embedded,
+              SUM(CASE WHEN v.dim > 0 AND v.model != ? THEN 1 ELSE 0 END) AS stale
          FROM chunks c LEFT JOIN chunk_vectors v ON v.chunk_id = c.id ${where}`
     )
-    .get(getConfig().embedModel, ...args) as { chunks: number; embedded: number | null; stale: number | null };
-  return { chunks: row.chunks, embedded: row.embedded ?? 0, stale: row.stale ?? 0 };
+    .get(model, model, ...(sourceId ? [sourceId] : [])) as {
+    chunks: number | null;
+    embedded: number | null;
+    stale: number | null;
+  };
+  return { chunks: row.chunks ?? 0, embedded: row.embedded ?? 0, stale: row.stale ?? 0 };
 }
 
 /**
@@ -108,6 +184,10 @@ export function coverage(sourceId?: number): Coverage {
  * Bounded by `limit` because this is the only part of the feature that spends
  * anything, and an unbounded pass over a library of six thousand passages is
  * not something a page request should start.
+ *
+ * A passage that is not text is marked rather than embedded, and marked
+ * rather than skipped: skipped, it would be offered again on every pass and
+ * could fill a whole batch with nothing to do while real passages waited.
  */
 export async function embedPassages(
   opts: { limit?: number; sourceId?: number; embedder?: Embedder } = {}
@@ -118,42 +198,36 @@ export async function embedPassages(
 
   const rows = db()
     .prepare(
-      `SELECT c.id, c.source_id, c.text
+      `SELECT c.id, c.source_id, c.text, v.hash, v.model
          FROM chunks c LEFT JOIN chunk_vectors v ON v.chunk_id = c.id
-        WHERE length(trim(c.text)) > 40
+        WHERE (v.chunk_id IS NULL OR (v.dim > 0 AND v.model != ?))
           ${opts.sourceId ? "AND c.source_id = ?" : ""}
-          -- Missing, or made by a different model. Text that changed cannot be
-          -- caught here (SQL has no sha1), but re-reading a source deletes and
-          -- recreates its chunks, so changed text arrives as a new id with no
-          -- vector at all. The hash below is the belt to that pair of braces.
-          AND (v.chunk_id IS NULL OR v.model != ?)
         ORDER BY c.id
         LIMIT ?`
     )
-    .all(...(opts.sourceId ? [opts.sourceId] : []), model, limit) as {
+    .all(model, ...(opts.sourceId ? [opts.sourceId] : []), limit) as {
     id: number;
     source_id: number;
     text: string;
+    hash: string | null;
+    model: string | null;
   }[];
+  if (!rows.length) return 0;
 
-  // The hash check above cannot be done in SQL against the live text, so the
-  // rows that already have a vector are filtered here.
-  const existing = new Map(
-    (
-      db()
-        .prepare(
-          `SELECT chunk_id, hash, model FROM chunk_vectors WHERE chunk_id IN (${rows.map(() => "?").join(",") || "NULL"})`
-        )
-        .all(...rows.map((r) => r.id)) as { chunk_id: number; hash: string; model: string }[]
-    ).map((r) => [r.chunk_id, r])
+  const mark = db().prepare(
+    `INSERT INTO chunk_vectors (chunk_id, source_id, vec, model, dim, hash)
+     VALUES (?, ?, ?, ?, 0, ?)
+     ON CONFLICT(chunk_id) DO UPDATE SET vec=excluded.vec, model=excluded.model, dim=0, hash=excluded.hash`
   );
-  const todo = rows.filter((r) => {
-    const had = existing.get(r.id);
-    return !had || had.model !== model || had.hash !== hashOf(r.text);
-  });
-  if (!todo.length) return 0;
+  const unreadable = rows.filter((r) => r.text.trim().length <= 40 || isJunkText(r.text));
+  if (unreadable.length) {
+    tx(() => {
+      for (const r of unreadable) mark.run(r.id, r.source_id, TOMBSTONE, model, hashOf(r.text));
+    });
+  }
+  const todo = rows.filter((r) => !unreadable.includes(r));
+  let done = unreadable.length;
 
-  let done = 0;
   for (let i = 0; i < todo.length; i += BATCH) {
     const slice = todo.slice(i, i + BATCH);
     if (i > 0) await new Promise((r) => setTimeout(r, BETWEEN_MS));
@@ -187,6 +261,21 @@ export async function embedPassages(
   return done;
 }
 
+/** Which of a set of passages hold a word, from the full-text index. */
+function holders(word: string): Set<number> {
+  try {
+    return new Set(
+      (
+        db()
+          .prepare(`SELECT rowid AS id FROM chunks_fts WHERE chunks_fts MATCH ? LIMIT 5000`)
+          .all(`"${word}"`) as { id: number }[]
+      ).map((r) => r.id)
+    );
+  } catch {
+    return new Set();
+  }
+}
+
 /**
  * The search itself.
  *
@@ -210,63 +299,43 @@ export async function askLibrary(
 
   const rows = db()
     .prepare(
-      `SELECT v.chunk_id, v.source_id, v.vec, v.dim
+      `SELECT v.chunk_id, v.vec, v.dim
          FROM chunk_vectors v
-        WHERE v.model = ? ${opts.sourceId ? "AND v.source_id = ?" : ""}
+        WHERE v.model = ? AND v.dim = ? ${opts.sourceId ? "AND v.source_id = ?" : ""}
         LIMIT ?`
     )
-    .all(model, ...(opts.sourceId ? [opts.sourceId] : []), MAX_VECTORS) as {
+    .all(model, qv.length, ...(opts.sourceId ? [opts.sourceId] : []), MAX_VECTORS) as {
     chunk_id: number;
-    source_id: number;
     vec: Buffer;
     dim: number;
   }[];
+  if (!rows.length) return { results: [], coverage: cov };
 
-  const byMeaning = new Map<number, number>();
+  const sims = new Map<number, number>();
   for (const r of rows) {
-    if (r.dim !== qv.length) continue;
     const v = fromBlob(r.vec);
-    if (!v) continue;
-    const s = cosine(qv, v);
-    if (s >= FLOOR) byMeaning.set(r.chunk_id, s);
+    if (v) sims.set(r.chunk_id, cosine(qv, v));
   }
+  const n = sims.size;
+  let mean = 0;
+  for (const s of sims.values()) mean += s;
+  mean /= n || 1;
+  let variance = 0;
+  for (const s of sims.values()) variance += (s - mean) ** 2;
+  const sd = Math.sqrt(variance / (n || 1)) || 1;
 
-  // The word ranking over the same question, so a name or a figure in it still
-  // counts for something. Best-effort: a query the index cannot parse simply
-  // leaves the meaning ranking standing on its own.
-  const byWord = new Map<number, number>();
-  const match = ftsMatch(queryWords(q));
-  if (match) {
-    try {
-      const hits = db()
-        .prepare(
-          `SELECT c.id AS chunk_id, bm25(chunks_fts) AS rank
-             FROM chunks_fts JOIN chunks c ON c.id = chunks_fts.rowid
-            WHERE chunks_fts MATCH ? ${opts.sourceId ? "AND c.source_id = ?" : ""}
-            ORDER BY rank LIMIT 200`
-        )
-        .all(match, ...(opts.sourceId ? [opts.sourceId] : [])) as { chunk_id: number; rank: number }[];
-      // bm25 is negative and unbounded; position in the list is enough, and
-      // is the one thing that compares across queries.
-      hits.forEach((h, i) => byWord.set(h.chunk_id, 1 - i / Math.max(hits.length, 1)));
-    } catch {
-      /* an index that would not take the query; meaning alone, then */
-    }
-  }
+  // The rare words of the question, and which passages hold them. A word
+  // most of the library contains says nothing about which passage you mean.
+  const rare = contentWords(q)
+    .map(holders)
+    .map((set) => new Set([...set].filter((id) => sims.has(id))))
+    .filter((set) => set.size > 0 && set.size <= Math.max(3, n * RARE_SHARE));
 
-  const ids = new Set([...byMeaning.keys(), ...byWord.keys()]);
-  if (!ids.size) return { results: [], coverage: cov };
-
-  const scored = [...ids].map((id) => {
-    const m = byMeaning.get(id) ?? 0;
-    const w = byWord.get(id) ?? 0;
-    // Meaning leads, because that is the question being asked; words are a
-    // lift rather than a ranking of their own, or a passage that merely
-    // repeats a common word would outrank one that answers.
-    const score = m > 0 && w > 0 ? m * 0.75 + w * 0.25 : m > 0 ? m * 0.85 : w * 0.45;
-    return { id, score, via: (m > 0 && w > 0 ? "both" : m > 0 ? "meaning" : "words") as Found["via"] };
+  const scored = [...sims].map(([id, cos]) => {
+    const share = rare.length ? rare.filter((set) => set.has(id)).length / rare.length : 0;
+    return { id, cos, z: (cos - mean) / sd, rank: cos + RARE_LIFT * share, lifted: share > 0 };
   });
-  scored.sort((a, b) => b.score - a.score);
+  scored.sort((a, b) => b.rank - a.rank);
   const top = scored.slice(0, limit);
 
   const detail = new Map(
@@ -293,6 +362,7 @@ export async function askLibrary(
     ).map((r) => [r.id, r])
   );
 
+  const judged = n >= MIN_FOR_STRENGTH;
   const results: Found[] = [];
   for (const t of top) {
     const d = detail.get(t.id);
@@ -311,8 +381,9 @@ export async function askLibrary(
       outlet: d.outlet,
       locator,
       text: d.text,
-      score: Math.min(1, t.score),
-      via: t.via,
+      score: Math.min(1, t.rank),
+      strength: judged ? (t.z >= CLOSE ? "close" : t.z >= RELATED ? "related" : "loose") : null,
+      via: t.lifted ? (judged && t.z < RELATED ? "words" : "both") : "meaning",
     });
   }
   return { results, coverage: cov };

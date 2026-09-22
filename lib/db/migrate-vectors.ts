@@ -1,4 +1,5 @@
 import type Database from "better-sqlite3";
+import { isJunkText } from "../junk-text";
 
 /**
  * A vector per passage, so a vague question can find the passage that answers
@@ -26,4 +27,24 @@ export function migrateVectors(db: Database.Database) {
     );
     CREATE INDEX IF NOT EXISTS chunk_vectors_source ON chunk_vectors(source_id);
   `);
+
+  // Passages that are not text had vectors made for them before anything
+  // checked — 183 of them on 22 September 2026, nearly all one PDF read as
+  // bytes. The vector goes and the row stays, as dim 0, so the passage is
+  // neither searched nor offered to the indexer again. Runs over vectors
+  // that still have a dimension, so once they are marked it finds nothing.
+  const rows = db
+    .prepare(
+      `SELECT v.chunk_id AS id, c.text FROM chunk_vectors v JOIN chunks c ON c.id = v.chunk_id WHERE v.dim > 0`
+    )
+    .all() as { id: number; text: string }[];
+  const junk = rows.filter((r) => isJunkText(r.text));
+  if (junk.length) {
+    const mark = db.prepare("UPDATE chunk_vectors SET vec = ?, dim = 0 WHERE chunk_id = ?");
+    const empty = Buffer.alloc(0);
+    db.transaction(() => {
+      for (const r of junk) mark.run(empty, r.id);
+    })();
+    console.log(`[corpus] set aside ${junk.length} passage vector(s) that were not text`);
+  }
 }

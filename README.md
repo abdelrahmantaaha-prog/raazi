@@ -343,9 +343,17 @@ read the passage and decide what it says. The model never sees the library's
 text at query time and never writes a sentence. It turns your question into a
 vector; the comparing is arithmetic over vectors already stored.
 
-Word matching is blended in rather than discarded, because it is better than
-meaning at exactly what meaning is worst at — a name, a figure, a statute. Each
-result says how it was found: by meaning, by words, or by both.
+Meaning orders the list. A rare word of yours — a name, a figure, a decree —
+lifts the passages that hold it; a common one does not, so a vague question is
+ranked by meaning alone. Each result says how close it is to the question
+(*close match*, *related*, *loosely related*), measured as distance above the
+library’s own average rather than as a percentage, because similarity from this
+model reads about 70% for a passage picked at random.
+
+How it ranks was settled by measurement against 36 questions whose right passage
+is known, kept in `scripts/eval/`. Run `node scripts/eval-meaning.mjs` with
+Corpus running after any change to the ranking; on 22 September 2026 it put the
+right passage first for 18 of 24 vague questions and 10 of 12 name searches.
 
 Passages need a vector before they can be searched this way, and that is the
 only part of it that spends anything, so it is a button rather than something
@@ -634,7 +642,7 @@ writes it again; *Hide expanded* folds it away.
 npm test
 ```
 
-2,283 assertions across 39 suites, no API key needed. `test-resume.mjs` drives the real worker against
+2,297 assertions across 39 suites, no API key needed. `test-resume.mjs` drives the real worker against
 a scratch database with injected handlers, including a simulated kill mid-run and a
 real Gemini quota-error payload. `test-tags.mjs` covers the property that matters
 most — an entity in two topics stays one entity — plus derivation, overrides and

@@ -14,6 +14,7 @@ interface Found {
   locator: string;
   text: string;
   score: number;
+  strength: "close" | "related" | "loose" | null;
   via: "meaning" | "words" | "both";
 }
 
@@ -23,10 +24,21 @@ interface Coverage {
   stale: number;
 }
 
+/**
+ * How far a passage stands above the rest of the library for this question.
+ * Worded as closeness rather than a percentage: the similarity number itself
+ * reads about 70 for a passage picked at random, so showing it said nothing.
+ */
+const STRENGTH: Record<NonNullable<Found["strength"]>, { label: string; className: string }> = {
+  close: { label: "Close match", className: "text-[var(--color-ink)] font-medium" },
+  related: { label: "Related", className: "text-[var(--color-ink)]" },
+  loose: { label: "Loosely related", className: "text-[var(--color-muted)]" },
+};
+
 const VIA: Record<Found["via"], string> = {
-  both: "by meaning and words",
-  meaning: "by meaning",
-  words: "by words",
+  both: " · holds your word",
+  words: " · found by your word",
+  meaning: "",
 };
 
 /**
@@ -135,8 +147,8 @@ export function Meaning() {
 
       <p className="text-xs text-[var(--color-muted)]">
         Passages from your own sources, ranked by how close they are to the question — not an answer
-        written about them. Word matching is blended in, so a name or a figure in the question still
-        counts.
+        written about them. A rare word of yours, like a name or a figure, lifts the passages that hold
+        it; common words do not, so a vague question is ranked by meaning alone.
         {cov && (
           <>
             {" "}
@@ -186,8 +198,11 @@ export function Meaning() {
                   {r.author && <span>· {r.author}</span>}
                   {r.outlet && r.outlet !== r.author && <span>· {r.outlet}</span>}
                   {r.locator && <span>· {r.locator}</span>}
-                  <span className="ms-auto tabular-nums">
-                    {Math.round(r.score * 100)}% {VIA[r.via]}
+                  <span className="ms-auto">
+                    {r.strength ? (
+                      <span className={STRENGTH[r.strength].className}>{STRENGTH[r.strength].label}</span>
+                    ) : null}
+                    {VIA[r.via]}
                   </span>
                 </div>
                 <p dir={dirOf(r.text)} className="mt-1.5 text-sm leading-relaxed">
