@@ -4,6 +4,20 @@ import { Nav } from "./components/Nav";
 import { PageTransition } from "./components/PageTransition";
 import { SectionTabs } from "./components/SectionTabs";
 import { ServerWatch } from "./components/ServerWatch";
+import { activeDiscipline, listDisciplines } from "@/lib/disciplines";
+
+/**
+ * The discipline whose library every page below is showing — named in the
+ * rail only once there is more than one, since a single library needs no
+ * label and would only carry a word that meant nothing.
+ */
+function disciplineName(): string | undefined {
+  try {
+    return listDisciplines().length > 1 ? activeDiscipline().name : undefined;
+  } catch {
+    return undefined;
+  }
+}
 
 export const metadata: Metadata = {
   title: "Corpus",
@@ -22,7 +36,7 @@ export default function RootLayout({ children }: { children: React.ReactNode }) 
     <html lang="en">
       <body className="min-h-screen">
         <ServerWatch />
-        <Nav />
+        <Nav discipline={disciplineName()} />
         {/* Offset by the rail, which is fixed. The max width is applied inside
             the remaining space rather than to the page, so a wide screen still
             centres its content and a narrow one gives everything it has. */}

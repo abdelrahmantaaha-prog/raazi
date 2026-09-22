@@ -47,10 +47,20 @@ interface LanStore {
 
 // The same rule as lib/db/index.ts, spelled out here so the middleware need
 // not import that module (and the native driver it loads) to find the file.
+// LAN mode, its token and the paired copies belong to the machine rather
+// than to any one discipline: held per discipline, opening another one would
+// take Corpus off the network and hand the phone a different token. They live
+// in the shared file beside the registry, with the keys. A copy pointed at a
+// single library (a test) keeps everything in that library.
 const DATA_DIR = process.env.CORPUS_DATA_DIR
   ? path.resolve(process.env.CORPUS_DATA_DIR)
   : path.join(process.cwd(), "data");
-const CONFIG_PATH = path.join(DATA_DIR, "config.json");
+const ROOT_DIR = process.env.CORPUS_ROOT_DIR
+  ? path.resolve(process.env.CORPUS_ROOT_DIR)
+  : path.join(process.cwd(), "data");
+const CONFIG_PATH = process.env.CORPUS_DATA_DIR
+  ? path.join(DATA_DIR, "config.json")
+  : path.join(ROOT_DIR, "shared.json");
 
 /** Cached by the file's mtime, so a request costs one stat rather than a parse. */
 // Keyed on size as well as mtime: NTFS stamps files at a coarse resolution,
@@ -104,7 +114,8 @@ export function lanSettings(): LanSettings {
 export async function ensureLanToken(): Promise<string> {
   const current = lanSettings().token;
   if (current) return current;
-  const { readStore, writeStore } = await import("./config-file");
+  const { readShared, writeShared } = await import("./config-file");
+  const [readStore, writeStore] = [readShared, writeShared];
   const s = readStore<LanStore>();
   if (typeof s.lan?.token === "string" && s.lan.token.length >= 32) return s.lan.token;
   const token = crypto.randomBytes(32).toString("hex");
@@ -115,7 +126,8 @@ export async function ensureLanToken(): Promise<string> {
 
 /** Records the preference; the launcher reads it to pick the bind address. */
 export async function setLanEnabled(enabled: boolean): Promise<LanSettings> {
-  const { readStore, writeStore } = await import("./config-file");
+  const { readShared, writeShared } = await import("./config-file");
+  const [readStore, writeStore] = [readShared, writeShared];
   const s = readStore<LanStore>();
   writeStore({ ...s, lan: { ...(s.lan ?? {}), enabled } });
   cache = null;

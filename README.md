@@ -483,6 +483,38 @@ with an **Update now** button, and Settings can switch the automatic part off.
 Where sources disagree, both claims are kept with their evidence and shown on the
 entry. Silently picking a winner would be a bug, not a feature.
 
+## More than one discipline
+
+Topics organise one library; a **discipline** is a separate one. Settings →
+Disciplines starts another: its own sources, entities, entries, feeds, inbox,
+stories, briefs, drafts and search index, in its own folder. One is open at a
+time, and the rail names it once there is more than one.
+
+Nothing filters anything here — there is nothing to filter, because the other
+discipline is not in the database being read. That is the point. Scoping a
+single shared library would have meant a discipline test on 267 separate
+queries, and one forgotten is a silent leak of exactly the kind this exists to
+prevent. It also keeps the rule that makes topics work: inside a discipline an
+entity is never split, so someone who turns up in two of your subjects there
+stays one person with one entry.
+
+Opening another discipline restarts Corpus, which takes a second or two and is
+the guarantee rather than a cost: the process working in one library is gone
+before the next is opened, so nothing of it can carry over.
+
+What is **not** about the subject is shared, and lives in `data/shared.json`
+beside the registry: your API keys and their quota, which model does which job,
+LAN mode with its token, and the machines paired with this one. A key pasted
+once works everywhere and is counted once. Everything about the subject —
+feeds, the inbox, the brief and its hour, what the models have learned — belongs
+to the discipline it was set in.
+
+The library you already had is the first discipline and does not move: it keeps
+`data/` itself, and later ones get `data/disciplines/<name>/`.
+
+One thing to know: only the open discipline is running. Its feeds poll and its
+brief is written; the others sit still until you open them.
+
 ## Topics, when you research several things at once
 
 Topics organise the pedia without partitioning it. Crucially, **an entity is never
@@ -642,7 +674,7 @@ writes it again; *Hide expanded* folds it away.
 npm test
 ```
 
-2,297 assertions across 39 suites, no API key needed. `test-resume.mjs` drives the real worker against
+2,328 assertions across 40 suites, no API key needed. `test-resume.mjs` drives the real worker against
 a scratch database with injected handlers, including a simulated kill mid-run and a
 real Gemini quota-error payload. `test-tags.mjs` covers the property that matters
 most — an entity in two topics stays one entity — plus derivation, overrides and

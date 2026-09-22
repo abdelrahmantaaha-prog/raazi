@@ -38,7 +38,7 @@ const ICONS: Record<string, (p: IconProps) => ReactElement> = {
   settings: Gear,
 };
 
-export function Nav() {
+export function Nav({ discipline }: { discipline?: string }) {
   const here = sectionFor(usePathname());
 
   return (
@@ -55,7 +55,17 @@ export function Nav() {
         title="Corpus"
       >
         <span className="lg:hidden">C</span>
-        <span className="hidden lg:inline">Corpus</span>
+        <span className="hidden lg:flex lg:min-w-0 lg:flex-col">
+          <span>Corpus</span>
+          {/* Which library you are in, wherever you are in it: every page
+              below shows one discipline and nothing of the others, so the
+              answer has to be on screen rather than in Settings. */}
+          {discipline ? (
+            <span className="truncate text-[0.68rem] font-normal uppercase tracking-[0.1em] text-[var(--color-muted)]">
+              {discipline}
+            </span>
+          ) : null}
+        </span>
       </Link>
 
       {/* Scrolls on a short screen rather than clipping the last few. */}

@@ -1,4 +1,4 @@
-import { readStore, writeStore } from "./config-file";
+import { adoptSharedConfig, readShared, readStore, writeShared, writeStore } from "./config-file";
 import { publicKeys } from "./keys";
 import type { ProviderId, Stage } from "./providers";
 
@@ -82,16 +82,37 @@ const DEFAULTS: Config = {
   briefHours: 24,
 };
 
+/** Settings that are about the tooling rather than the subject. */
+const SHARED_FIELDS = ["routing", "model", "embedModel"] as const;
+
 export function getConfig(): Config {
   // API keys are not part of this — they live on the ring in lib/keys.ts,
   // which owns their per-key state as well as their values. Both read and
   // write the same file through lib/config-file.ts, which is what makes the
   // writes atomic and a corrupt file recoverable instead of silently empty.
-  return { ...DEFAULTS, ...readStore<Config>() };
+  // Which model does which job is shared by every discipline; everything
+  // else here — the feeds schedule, the brief, the reading settings — is
+  // about the subject and belongs to the discipline it was set in.
+  adoptSharedConfig();
+  const shared = readShared<Config>();
+  const mine = readStore<Config>();
+  const overlay: Partial<Config> = {};
+  for (const f of SHARED_FIELDS) if (shared[f] !== undefined) (overlay as Record<string, unknown>)[f] = shared[f];
+  return { ...DEFAULTS, ...mine, ...overlay };
 }
 
 export function saveConfig(patch: Partial<Config>): Config {
-  writeStore({ ...readStore(), ...patch });
+  const shared: Record<string, unknown> = {};
+  const mine: Record<string, unknown> = {};
+  for (const [k, v] of Object.entries(patch)) {
+    if ((SHARED_FIELDS as readonly string[]).includes(k)) shared[k] = v;
+    else mine[k] = v;
+  }
+  if (Object.keys(mine).length) writeStore({ ...readStore(), ...mine });
+  if (Object.keys(shared).length) {
+    adoptSharedConfig();
+    writeShared({ ...readShared(), ...shared });
+  }
   return getConfig();
 }
 

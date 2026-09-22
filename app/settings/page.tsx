@@ -6,6 +6,7 @@ import { PROVIDERS, PROVIDER_IDS, STAGES, STAGE_LABEL, STAGE_NOTE, type Provider
 import { formatDateTime, relativeDate } from "@/lib/dates";
 import { CorrectionsCard } from "./Corrections";
 import { LessonsCard } from "./Lessons";
+import { Disciplines } from "./Disciplines";
 import { LanCard, SyncCard } from "./SyncCard";
 
 /** The languages entries can be written in. Quotes stay in their own. */
@@ -118,7 +119,7 @@ export default function SettingsPage() {
         </p>
         <p className="mt-2 text-sm text-[var(--color-muted)]">
           Keys are stored server-side in{" "}
-          <code className="rounded bg-neutral-100 px-1">data/config.json</code>, not in your
+          <code className="rounded bg-neutral-100 px-1">data/shared.json</code>, beside the
           browser — ingestion keeps running with no tab open, so the background worker needs to
           reach them on its own.
         </p>
@@ -521,6 +522,8 @@ export default function SettingsPage() {
       <SyncCard />
 
       <CorrectionsCard />
+      <Disciplines />
+
       <LessonsCard />
 
       {message && <p className="text-sm text-emerald-700">{message}</p>}

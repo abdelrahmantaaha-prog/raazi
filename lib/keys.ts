@@ -1,5 +1,5 @@
 import crypto from "node:crypto";
-import { readStore, writeStore } from "./config-file";
+import { adoptSharedConfig, readShared, writeShared } from "./config-file";
 import { modelsFor, spec, type ProviderId } from "./providers";
 
 /**
@@ -60,8 +60,15 @@ interface Stored {
 // which is exactly why these must be the atomic, quarantining versions in
 // lib/config-file.ts — a torn write followed by a swallowed parse error was
 // enough to persist an empty ring over all thirty-seven keys.
-const read = (): Stored => readStore<Stored>();
-const write = (next: Stored): void => writeStore(next);
+// The ring lives beside the discipline registry, not inside any one
+// discipline: a key pasted once works in all of them, and its daily quota is
+// counted once rather than separately in each. adoptSharedConfig moves the
+// keys of a library that predates disciplines out to that shared file, once.
+const read = (): Stored => {
+  adoptSharedConfig();
+  return readShared<Stored>();
+};
+const write = (next: Stored): void => writeShared(next);
 
 const newId = () => crypto.randomBytes(6).toString("hex");
 
@@ -215,7 +222,8 @@ export function modelFor(key: ApiKey, opts: { quality?: boolean; cheap?: boolean
   // The ring, minus whatever is out of quota today. A model pinned in Settings
   // goes to the front of it rather than replacing it, so choosing a model is
   // still a preference and not a way to strand the app on a spent one.
-  const configured = provider === "gemini" ? readStore<{ model?: string }>().model?.trim() : undefined;
+  const configured =
+    provider === "gemini" ? (read().model as string | undefined)?.trim() || undefined : undefined;
   const full = configured
     ? [configured, ...modelsFor(provider).filter((m) => m !== configured)]
     : modelsFor(provider);

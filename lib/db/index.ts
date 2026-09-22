@@ -2,11 +2,20 @@ import Database from "better-sqlite3";
 import fs from "node:fs";
 import path from "node:path";
 import { migrate } from "./migrate";
+import { activeDir } from "../disciplines";
 
-/** Overridable so a test run can point at a scratch library instead of yours. */
-export const DATA_DIR = process.env.CORPUS_DATA_DIR
-  ? path.resolve(process.env.CORPUS_DATA_DIR)
-  : path.join(process.cwd(), "data");
+/**
+ * The library this process is working in.
+ *
+ * Settled once, at startup, from the discipline the registry says is open —
+ * and never again while the process lives. Switching discipline is a restart
+ * for exactly that reason: a constant cannot go stale, a cached connection
+ * cannot point at yesterday's database, and no half of the app can be looking
+ * at one library while another half looks at the next. See lib/disciplines.ts.
+ *
+ * CORPUS_DATA_DIR still wins, so a test run points at a scratch library.
+ */
+export const DATA_DIR = activeDir();
 export const SOURCES_DIR = path.join(DATA_DIR, "sources");
 const DB_PATH = path.join(DATA_DIR, "corpus.db");
 const PID_PATH = path.join(DATA_DIR, "corpus.pid");

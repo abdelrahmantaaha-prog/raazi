@@ -1,4 +1,4 @@
-import { readStore, writeStore } from "./config-file";
+import { readShared as readStore, writeShared as writeStore } from "./config-file";
 
 /**
  * What a follower remembers: which Corpus it follows, and where the two stood

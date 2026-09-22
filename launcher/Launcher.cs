@@ -728,7 +728,10 @@ static class Corpus
         psi.EnvironmentVariables["NODE_ENV"] = "production";
         psi.EnvironmentVariables["PORT"] = Port.ToString();
         psi.EnvironmentVariables["HOSTNAME"] = lanMode ? "0.0.0.0" : "127.0.0.1";
-        psi.EnvironmentVariables["CORPUS_DATA_DIR"] = Path.Combine(Root, "data");
+        // The root that holds every discipline and the shared keys. Not
+        // CORPUS_DATA_DIR: that names one library and turns disciplines off,
+        // which is what a test run wants and a person never does.
+        psi.EnvironmentVariables["CORPUS_ROOT_DIR"] = Path.Combine(Root, "data");
         if (lanMode) psi.EnvironmentVariables["CORPUS_LAN"] = "1";
         if (follower) psi.EnvironmentVariables["CORPUS_FOLLOWER"] = "1";
 
@@ -793,6 +796,9 @@ static class Corpus
 
     static volatile bool quitting;
 
+    /** Matches SWITCH_EXIT in lib/disciplines.ts. */
+    const int SwitchExit = 7;
+
     static void OnServerExit()
     {
         if (quitting) return;
@@ -810,6 +816,17 @@ static class Corpus
                        HostOf(settings.RemoteUrl) + " is unaffected; restart Corpus to keep a copy again.");
                 UpdateTip();
             });
+            return;
+        }
+
+        // Asked for by the app when you open another discipline: the server
+        // settles which library it is working in when it starts, so opening
+        // another one is a new process rather than a switch inside this one.
+        // Nothing of the old discipline can survive a restart, which is the
+        // whole guarantee that two subjects do not bleed into each other.
+        if (code == SwitchExit)
+        {
+            Ui(() => { Notify("Opening the other discipline\u2026"); Restart(); });
             return;
         }
 

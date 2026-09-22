@@ -1,5 +1,5 @@
 import os from "node:os";
-import { readStore, writeStore } from "./config-file";
+import { readShared as readStore, writeShared as writeStore } from "./config-file";
 import {
   SyncConflictError,
   fingerprint,
