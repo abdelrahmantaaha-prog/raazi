@@ -677,31 +677,45 @@ static class Corpus
     }
 
     /**
-     * Whether data/config.json asks for LAN mode.
+     * The "lan" section of data/shared.json, or null.
      *
-     * Read here rather than passed in because the setting is changed from the
-     * Settings page, in the running app, and takes effect the next time the
-     * launcher starts the server. Deliberately a substring test rather than a
-     * JSON parser. A file we cannot read means off, which is the setting that
-     * keeps the server on this machine only.
+     * LAN mode belongs to the machine, not to a discipline, so it lives in the
+     * shared file beside the keys (lib/lan.ts). It used to be data/config.json;
+     * reading that after disciplines moved it left every restart on loopback
+     * while Settings still said LAN was on. Deliberately a substring cut rather
+     * than a JSON parser — the section holds only flat values.
      */
-    static bool LanWanted()
+    static string LanSection()
     {
         try
         {
-            var path = Path.Combine(Root, "data", "config.json");
-            if (!File.Exists(path)) return false;
+            var path = Path.Combine(Root, "data", "shared.json");
+            if (!File.Exists(path)) return null;
             var text = File.ReadAllText(path);
             int at = text.IndexOf("\"lan\"", StringComparison.Ordinal);
-            if (at < 0) return false;
+            if (at < 0) return null;
             int end = text.IndexOf('}', at);
             if (end < 0) end = text.Length;
-            var section = text.Substring(at, end - at);
-            var packed = new StringBuilder();
-            foreach (var c in section) if (!char.IsWhiteSpace(c)) packed.Append(c);
-            return packed.ToString().Contains("\"enabled\":true");
+            return text.Substring(at, end - at);
         }
-        catch { return false; }
+        catch { return null; }
+    }
+
+    /**
+     * Whether data/shared.json asks for LAN mode.
+     *
+     * Read here rather than passed in because the setting is changed from the
+     * Settings page, in the running app, and takes effect the next time the
+     * launcher starts the server. A file we cannot read means off, which is the
+     * setting that keeps the server on this machine only.
+     */
+    static bool LanWanted()
+    {
+        var section = LanSection();
+        if (section == null) return false;
+        var packed = new StringBuilder();
+        foreach (var c in section) if (!char.IsWhiteSpace(c)) packed.Append(c);
+        return packed.ToString().Contains("\"enabled\":true");
     }
 
     static bool lanMode;
@@ -1037,14 +1051,15 @@ static class Corpus
         Http("POST", LocalBase() + "/api/worker/kick", "", 15000);
     }
 
-    /** The LAN token from data/config.json, or null when there is none yet. */
+    /** The LAN token from data/shared.json, or null when there is none yet.
+     *  Searched within the "lan" section only: a paired copy under "followers"
+     *  carries a "token" of its own. */
     static string LanToken()
     {
         try
         {
-            var path = Path.Combine(Root, "data", "config.json");
-            if (!File.Exists(path)) return null;
-            var text = File.ReadAllText(path);
+            var text = LanSection();
+            if (text == null) return null;
             int at = text.IndexOf("\"token\"", StringComparison.Ordinal);
             if (at < 0) return null;
             int open = text.IndexOf('"', text.IndexOf(':', at) + 1);
