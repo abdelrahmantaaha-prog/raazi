@@ -19,7 +19,7 @@ export async function GET() {
  * `dismiss` hides a line you do not need to watch; `restore` brings it back.
  */
 export async function POST(req: Request) {
-  const body = await readBody<{ action?: "refresh" | "dismiss" | "restore"; days?: number; id?: number }>(req);
+  const body = await readBody<{ action?: "refresh" | "dismiss" | "restore"; days?: number; id?: number; ids?: unknown }>(req);
   if (body === null) return badRequest("Malformed JSON body.");
 
   if (body.action === "refresh") {
@@ -37,6 +37,9 @@ export async function POST(req: Request) {
     const id = asId(body.id);
     if (id === null) return badRequest("Say which line.");
     if (!dismissCalendar(id, body.action === "dismiss")) return notFound("No such line on the calendar.");
+    // The other records a consolidated line stands for go with it.
+    const more = Array.isArray(body.ids) ? body.ids.map(asId).filter((x): x is number => x !== null && x !== id) : [];
+    for (const other of more.slice(0, 50)) dismissCalendar(other, body.action === "dismiss");
     return NextResponse.json({ ok: true, ...listCalendar() });
   }
 

@@ -9,6 +9,7 @@ import { RunChip } from "../components/RunChip";
 import { Badge } from "../components/ui";
 import { formatDate, formatDateTime } from "@/lib/dates";
 import type { CalendarRow } from "@/lib/calendar";
+import { AlsoSources } from "../components/AlsoSources";
 import { briefSections, headingKey } from "@/lib/brief-sections";
 import { IconCalendar, IconX } from "../components/Icons";
 
@@ -528,7 +529,7 @@ function BriefCalendar({ rows }: { rows: CalendarRow[] }) {
   const line = (r: CalendarRow) => (
     <li key={r.id} className="flex gap-2 text-sm">
       <span className="min-w-0 flex-1">
-        {r.summary}{" "}
+        {r.text}{" "}
         <Link href={`/pedia/${r.entity_id}`} className="text-xs text-[var(--color-accent)] hover:underline">
           {r.entity}
         </Link>
@@ -542,6 +543,12 @@ function BriefCalendar({ rows }: { rows: CalendarRow[] }) {
               {r.outlet ?? r.source_title ?? "source"}
             </Link>
           </>
+        ) : null}
+        {r.also.length ? (
+          <span className="text-xs text-[var(--color-muted)]">
+            {" "}
+            <AlsoSources row={r} />
+          </span>
         ) : null}
       </span>
     </li>

@@ -3,6 +3,7 @@
 import { useEffect, useMemo, useState } from "react";
 import Link from "next/link";
 import type { CalendarGroup, CalendarRow, CalendarSections } from "@/lib/calendar";
+import { AlsoSources } from "../components/AlsoSources";
 import { formatDate } from "@/lib/dates";
 import { IconCalendar, IconDismiss, IconSync } from "../components/Icons";
 
@@ -168,7 +169,12 @@ export function CalendarView({ initial }: { initial: CalendarSections }) {
   }, [cursor, today]);
 
   const empty = !data.upcoming.length && !data.sometime.length && !data.past.length && !data.annual.length;
-  const dismiss = (id: number) => post({ action: "dismiss", id });
+  // A line may stand for several records of one happening; dismissing it
+  // dismisses them all, or the next one would take its place.
+  const idsOf = new Map(
+    [...data.upcoming, ...data.past, ...data.annual, ...data.sometime.flatMap((g) => g.items)].map((r) => [r.id, r.ids])
+  );
+  const dismiss = (id: number) => post({ action: "dismiss", id, ids: idsOf.get(id) ?? [id] });
 
   return (
     <div className="space-y-6">
@@ -296,7 +302,7 @@ export function CalendarView({ initial }: { initial: CalendarSections }) {
                       {chips.slice(0, 3).map(({ r, ann }) => (
                         <span
                           key={r.id}
-                          title={`${r.summary} — ${r.entity}`}
+                          title={`${r.text} — ${r.entity}`}
                           className={`truncate rounded px-1 py-0.5 text-[11px] leading-tight ${
                             ann
                               ? "bg-amber-50 text-amber-900 ring-1 ring-amber-200"
@@ -304,7 +310,7 @@ export function CalendarView({ initial }: { initial: CalendarSections }) {
                           }`}
                         >
                           {ann ? "↻ " : ""}
-                          {r.summary}
+                          {r.text}
                         </span>
                       ))}
                       {chips.length > 3 ? (
@@ -393,7 +399,7 @@ export function CalendarView({ initial }: { initial: CalendarSections }) {
                       </span>
                       {row.kind === "annual" ? <span className="text-amber-800">↻ anniversary</span> : null}
                     </span>
-                    <span className="block text-sm leading-snug">{row.summary}</span>
+                    <span className="block text-sm leading-snug">{row.text}</span>
                     <span className="block text-xs text-[var(--color-accent)]">{row.entity}</span>
                   </button>
                 </li>
@@ -555,7 +561,7 @@ function Line({
               anniversary
             </span>
           ) : null}
-          {row.summary}
+          {row.text}
         </p>
         <p className="mt-0.5 flex flex-wrap items-center gap-x-2 text-xs text-[var(--color-muted)]">
           <Link href={`/pedia/${row.entity_id}`} className="font-medium text-[var(--color-accent)] hover:underline">
@@ -572,6 +578,7 @@ function Line({
               {row.outlet ?? row.source_title ?? "source"}
             </Link>
           ) : null}
+          <AlsoSources row={row} />
         </p>
       </div>
       <button

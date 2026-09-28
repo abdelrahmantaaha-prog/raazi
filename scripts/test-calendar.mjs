@@ -227,6 +227,80 @@ section("Filing from a window is idempotent and grouped");
   check("filing again still adds nothing and keeps the fix", cal.logCalendar(from, to, "2026-09-10") === 0 && cal.listCalendar().annual.length === 1);
 }
 
+section("A weekday someone is planning for is the coming one");
+{
+  const b = (summary) => cal.bucketFor({ date_iso: null, precision: "unknown", date_text: "Tuesday", summary }, PUB);
+  check("'planning to meet on Tuesday' is next Tuesday", b("Johnson and others planning to meet at the White House on Tuesday")?.key === "2026-09-15", JSON.stringify(b("Johnson and others planning to meet at the White House on Tuesday")));
+  check("'will vote on Tuesday' too", b("The Senate will vote on the bill on Tuesday")?.key === "2026-09-15");
+  check("a Tuesday that was done is still the last one", b("Sullivan released a statement calling for a ban until the war ends")?.key === "2026-09-08");
+  check("and a bare Tuesday stays the past, as news copy uses it", b("The committee met on Tuesday")?.key === "2026-09-08");
+  const today = cal.bucketFor({ date_iso: null, precision: "unknown", date_text: "Wednesday", summary: "Leaders are scheduled to meet on Wednesday" }, PUB);
+  check("a plan for the publication's own weekday is that day", today?.key === "2026-09-09", JSON.stringify(today));
+  check("'put out a plan to begin' is a thing done", b("The Board of Peace put out a new plan to begin rebuilding Gaza")?.key === "2026-09-08");
+  const late = cal.bucketFor(
+    { date_iso: null, precision: "unknown", date_text: "Wednesday evening", summary: "Xi Jinping is scheduled to meet Donald Trump in Washington" },
+    "2026-09-23T22:51:23.000Z"
+  );
+  check("a Washington evening piece stamped after midnight here is still that Wednesday", late?.key === "2026-09-23", JSON.stringify(late));
+  check("a thing said, about the future, happened when it was said", b("Pezeshkian states on TV that the strait will open if the blockade is lifted")?.key === "2026-09-08");
+  const tonight = cal.bucketFor({ date_iso: null, precision: "unknown", date_text: "today", summary: "The House voted" }, "2026-09-11T22:45:00.000Z");
+  check("'today' in a Washington evening piece is that day", tonight?.key === "2026-09-11", JSON.stringify(tonight));
+}
+
+section("A calendar line says who, and not when");
+{
+  const line = (summary, entity, date_text) => cal.calendarSentence({ summary, entity, date_text });
+  check(
+    "a line opening on a verb gets its subject",
+    line("Released a news release calling for an export ban", "Dan Sullivan", "Tuesday") === "Dan Sullivan released a news release calling for an export ban.",
+    line("Released a news release calling for an export ban", "Dan Sullivan", "Tuesday")
+  );
+  check(
+    "the words that dated it go, since the heading is the date",
+    line("House Speaker Mike Johnson and others planning to meet at the White House on Tuesday", "Speaker Mike Johnson", "Tuesday") ===
+      "House Speaker Mike Johnson and others planning to meet at the White House."
+  );
+  check(
+    "longer relative wording as well",
+    line("President Trump had a private dinner with Dario Amodei late Sunday night", "Donald J. Trump", "late Sunday night") ===
+      "President Trump had a private dinner with Dario Amodei."
+  );
+  check(
+    "but a weekday that is part of a name stays",
+    line("Perdue said on Fox News Sunday that policy is unchanged", "David Perdue", "Sunday") === "Perdue said on Fox News Sunday that policy is unchanged."
+  );
+  check("a line that names its subject is left as it is", line("Newsom signed an order", "Gavin Newsom", "") === "Newsom signed an order.");
+  check("an absolute date in the words is not cut", line("The vote is set for Oct. 19", "Alberta", "Oct. 19") === "The vote is set for Oct. 19.");
+  check("a line that was only its date is kept whole", line("Tuesday", "Somebody", "Tuesday") === "Tuesday.");
+}
+
+section("One line per happening, not per record of it");
+{
+  let n = 0;
+  const row = (entity_id, entity, text, bucket = "2026-11-10") => ({
+    id: ++n, event_id: n, entity_id, entity, entity_type: "org", source_id: n, source_title: `Source ${n}`, outlet: `Outlet ${n}`,
+    url: null, mention_id: null, chunk_id: null, kind: "day", bucket, label: bucket, date_text: null, date_iso: bucket,
+    summary: text, logged_from: null, logged_at: "", dismissed: 0, tense: "upcoming", text, ids: [n], also: [],
+  });
+  const out = cal.consolidate([
+    row(1, "United States of America", "The trade truce with China was originally due to expire."),
+    row(2, "People's Republic of China", "The trade truce with the US was originally due to expire."),
+    row(3, "Gavin Newsom", "Gavin Newsom signed an executive order on AI safety.", "2026-09-18"),
+    row(4, "Joe Lombardo", "Joe Lombardo signed an executive order barring data center tax breaks.", "2026-09-18"),
+    row(3, "Gavin Newsom", "Newsom signed an executive order to speed up AI safety laws.", "2026-09-18"),
+    row(5, "Xi Jinping", "Xi Jinping landed in Maryland for a state visit.", "2026-09-23"),
+    row(6, "Donald J. Trump", "Trump welcomed Xi Jinping at Joint Base Andrews for a state visit.", "2026-09-23"),
+  ]);
+  const truce = out.filter((r) => r.bucket === "2026-11-10");
+  check("the same happening filed on two entities is one line", truce.length === 1 && truce[0].also.length === 1, JSON.stringify(truce.map((r) => r.text)));
+  check("the line stands for both records", truce[0].ids.length === 2 && truce[0].ids[0] === truce[0].id);
+  const orders = out.filter((r) => r.bucket === "2026-09-18");
+  check("two governors signing orders the same day are two lines", orders.length === 2, JSON.stringify(orders.map((r) => r.text)));
+  check("while two records of one governor's order are one", orders.some((r) => r.entity === "Gavin Newsom" && r.also.length === 1));
+  const visit = out.filter((r) => r.bucket === "2026-09-23");
+  check("a line naming the other's subject may join it", visit.length === 1, JSON.stringify(visit.map((r) => r.text)));
+}
+
 console.log(`\n${passed} passed, ${failed} failed`);
 db().close();
 fs.rmSync(SANDBOX, { recursive: true, force: true });

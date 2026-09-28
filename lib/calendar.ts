@@ -1,6 +1,7 @@
 import { db, tx } from "./db";
 import { parseDate, formatDate } from "./dates";
 import { dayKey, weekStart } from "./week";
+import { titleSimilarity, titleWords } from "./stories";
 
 /**
  * The watching calendar: every date the sources mention, filed by how
@@ -108,6 +109,51 @@ export function readsAsPast(summary: string | null | undefined): boolean {
   if (!s) return false;
   if (FUTURE_RE.test(s)) return false;
   return PAST_RE.test(s);
+}
+
+/**
+ * Wording that can only mean the thing is still to come. Narrower than
+ * FUTURE_RE, which also holds words like "until" and "opens" that sit as
+ * easily in a report of something done ("called for a ban until the war
+ * ends").
+ */
+const PLAINLY_AHEAD_RE =
+  // Not "plan to": "put out a plan to begin rebuilding Gaza" is a thing done.
+  /\b(will|shall|(?:is|are) (?:due|set|expected|scheduled|slated|poised) to|scheduled to|slated to|set to|planning to|intends? to|preparing to|to be held)\b/i;
+
+/**
+ * The day a piece was written, where it was written.
+ *
+ * Relative wording — "today", "on Wednesday evening" — is the writer's, and
+ * the desk's outlets are North American. A Washington piece filed on a
+ * Wednesday evening is stamped after midnight on this machine, so "today's
+ * vote" was filed a day late and "is scheduled to meet on Wednesday
+ * evening" a week late. The publication moment is read as a day in
+ * Washington and returned as that date at local midnight, which is what
+ * the day arithmetic below expects.
+ */
+const WRITER_TIME_ZONE = "America/New_York";
+
+function writerDay(pub: Date): Date {
+  const parts = new Intl.DateTimeFormat("en-CA", { timeZone: WRITER_TIME_ZONE, year: "numeric", month: "2-digit", day: "2-digit" })
+    .format(pub)
+    .split("-")
+    .map(Number);
+  return new Date(parts[0], parts[1] - 1, parts[2]);
+}
+
+/** Reported speech: "states that the strait will open" happened when it was said. */
+const SAID_RE =
+  /\b(says?|said|states?|stated|tells?|told|warns?|warned|announces?|announced|claims?|claimed|argues?|argued|predicts?|predicted|writes?|wrote|insists?|insisted|vows?|vowed|promises?|promised|pledges?|pledged)\b/i;
+
+function plainlyAhead(summary: string | null | undefined): boolean {
+  const s = (summary ?? "").trim();
+  const ahead = PLAINLY_AHEAD_RE.exec(s);
+  if (!ahead) return false;
+  const said = SAID_RE.exec(s);
+  if (said && said.index < ahead.index) return false;
+  // "scheduled to" carries its own -ed; anything else past-tense says done.
+  return !PAST_RE.test(s.replace(PLAINLY_AHEAD_RE, " "));
 }
 
 /** How far past publication a yearless day may fall before "it already
@@ -239,7 +285,8 @@ function seasonBucket(season: string, year: number): Bucket {
  * "three days later" — since the extractor alone saw what "later" than.
  * Even then it is filed as a week: the words did not fix the day.
  */
-function relativeBucket(text: string, pub: Date, iso: string): Bucket | null {
+function relativeBucket(text: string, published: Date, iso: string, summary?: string | null): Bucket | null {
+  const pub = writerDay(published);
   if (/\byesterday\b/.test(text)) return dayBucket(shift(pub, { days: -1 }));
   if (/\btomorrow\b/.test(text)) return dayBucket(shift(pub, { days: 1 }));
   if (/\btoday\b|\bthis (morning|afternoon|evening)\b|\btonight\b/.test(text)) return dayBucket(pub);
@@ -324,6 +371,15 @@ function relativeBucket(text: string, pub: Date, iso: string): Bucket | null {
       const ahead = (want - d.getDay() + 7) % 7 || 7;
       return dayBucket(shift(d, { days: ahead }));
     }
+    // "planning to meet on Tuesday": the coming one, publication day
+    // included. Only when the summary says so plainly — "scheduled",
+    // "will", "planning to" — and nothing in it reads as done; the default
+    // stays the past, which is how news copy uses a bare weekday. The 29
+    // September brief filed the White House's Tuesday meeting with AI
+    // executives under the Tuesday before, as already over.
+    if (plainlyAhead(summary)) {
+      return dayBucket(shift(d, { days: (want - d.getDay() + 7) % 7 }));
+    }
     // "on Tuesday": the most recent one, publication day included.
     const back = (d.getDay() - want + 7) % 7;
     return dayBucket(shift(d, { days: -back }));
@@ -353,7 +409,7 @@ export function bucketFor(
   // keep the absolute reading below.
   const relative = Boolean(pub) && !hasMonth(text) && !hasYear(text) && RELATIVE_RE.test(text);
   if (relative && pub) {
-    const b = relativeBucket(text, pub, iso);
+    const b = relativeBucket(text, pub, iso, ev.summary);
     if (b) return b;
   }
 
@@ -433,7 +489,7 @@ export function bucketFor(
 
   // Relative wording needs the publication date to mean anything.
   if (!pub) return null;
-  return relativeBucket(text, pub, iso);
+  return relativeBucket(text, pub, iso, ev.summary);
 }
 
 /** Whether a bucket has passed, is now, or is still to come — as of `now`. */
@@ -607,6 +663,24 @@ export interface CalendarRow {
   logged_at: string;
   dismissed: number;
   tense: "past" | "current" | "upcoming";
+  /** The line as the page prints it: a sentence that says who, without the
+   *  relative wording the date heading has replaced. */
+  text: string;
+  /** Every calendar row this line stands for, itself first — for dismissing. */
+  ids: number[];
+  /** The other rows it stands for: the same happening on the same date,
+   *  recorded on another entity or from another outlet. */
+  also: CalendarSource[];
+}
+
+export interface CalendarSource {
+  id: number;
+  entity_id: number;
+  entity: string;
+  source_id: number | null;
+  source_title: string | null;
+  outlet: string | null;
+  chunk_id: number | null;
 }
 
 const ROW_COLUMNS = `
@@ -624,8 +698,129 @@ const ROW_JOINS = `
   LEFT JOIN sources s ON s.id = c.source_id
   LEFT JOIN mentions m ON m.id = c.mention_id`;
 
-function withTense(rows: Omit<CalendarRow, "tense">[], now: Date): CalendarRow[] {
-  return rows.map((r) => ({ ...r, tense: tenseOf({ kind: r.kind, key: r.bucket }, now) }));
+type StoredRow = Omit<CalendarRow, "tense" | "text" | "ids" | "also">;
+
+function withTense(rows: StoredRow[], now: Date): CalendarRow[] {
+  return consolidate(
+    rows.map((r) => ({
+      ...r,
+      tense: tenseOf({ kind: r.kind, key: r.bucket }, now),
+      text: calendarSentence(r),
+      ids: [r.id],
+      also: [],
+    }))
+  );
+}
+
+const escapeRe = (s: string) => s.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+
+/** A first word that is a verb, so the line needs the entity as its subject. */
+const OPENING_VERB =
+  /^(says?|said|tells?|told|writes?|wrote|meets?|met|signs?|issues?|releases?|delivers?|shares?|calls?|announces?|urges?|warns?|argues?|backs?|plans?|votes?|holds?|leads?|joins?|asks?|visits?|speaks?|spoke|gives?|gave|takes?|took|makes?|made|sends?|sent|files?|sues?|won|wins?|loses?|lost|steps?|faces?|launche[sd]|[a-z]{3,}ed)$/i;
+
+/**
+ * The summary as a calendar line.
+ *
+ * The extractor writes each event from its entity's point of view, so a line
+ * often has no subject — "Released a news release calling for an export ban",
+ * "scheduled referendum on separation" — and printed under a date among
+ * other people's lines it no longer says who. It also keeps the words that
+ * dated it, "on Tuesday", "late Sunday night", "earlier this year", which
+ * under a date heading read against today rather than the article. So: the
+ * words that gave the date go (they are shown beside the line, quoted), a
+ * line that opens on a verb gets its entity as the subject, and it reads as
+ * a sentence. No model: the same line on both laptops.
+ */
+export function calendarSentence(r: { summary: string; entity: string; date_text: string | null }): string {
+  let s = r.summary.replace(/\s+/g, " ").trim();
+  const dated = (r.date_text ?? "").trim();
+  if (dated && RELATIVE_RE.test(dated.toLowerCase()) && !hasMonth(dated.toLowerCase())) {
+    // A single word — "Sunday" — goes only with its preposition, or "Fox
+    // News Sunday" would lose its last word.
+    const lead = "(?:on|in|during|by|at|from|until|since|last|this|next|late|early)\\s+";
+    const cut = new RegExp(`,?\\s*\\b${/\s/.test(dated) ? `(?:${lead})?` : lead}${escapeRe(dated)}\\b,?`, "i");
+    const trimmed = s.replace(cut, " ").replace(/\s+([,.;:!?])/g, "$1").replace(/\s{2,}/g, " ").trim();
+    // Only if a sentence is left: "Tuesday" was sometimes the whole summary.
+    if (trimmed.split(" ").length >= 3) s = trimmed;
+  }
+  const first = s.split(" ")[0] ?? "";
+  if (!names(s, r.entity) && OPENING_VERB.test(first)) s = `${r.entity} ${first.toLowerCase()}${s.slice(first.length)}`;
+  s = s.charAt(0).toUpperCase() + s.slice(1);
+  return /[.!?…"”’)]$/.test(s) ? s : `${s}.`;
+}
+
+/**
+ * One line per happening, not per record of it.
+ *
+ * Extraction records a dated event on every entity it concerns, and every
+ * outlet that reported it adds its own: election day on 3 November was three
+ * lines (Republicans, the House, Speaker Johnson), the Alberta referendum
+ * two, the end of the China trade truce two — one on the United States and
+ * one on China, word for word. Lines under the same date whose words mostly
+ * agree are folded into the fullest of them, and the rest are listed with it
+ * as further sources.
+ */
+const SAME_HAPPENING = 0.5;
+/**
+ * Lines about different subjects must agree much more closely. "Signed an
+ * executive order" on the same day was four governors and the president, and
+ * "addressed the General Assembly" two heads of state — shared words, not a
+ * shared happening. Unless one line names the other's subject ("Trump
+ * welcomed Xi…" beside Xi's own line), different subjects need near-identical
+ * wording, like the trade truce filed word for word on both countries.
+ */
+const SAME_HAPPENING_APART = 0.75;
+
+function names(text: string, entity: string): boolean {
+  const surname = entity.replace(/\(.*\)/, "").trim().split(/\s+/).pop() ?? "";
+  return surname.length > 2 && new RegExp(`\\b${escapeRe(surname)}\\b`, "i").test(text);
+}
+
+function sameSubject(a: CalendarRow, b: CalendarRow): boolean {
+  return a.entity_id === b.entity_id || names(a.text, b.entity) || names(b.text, a.entity);
+}
+
+export function consolidate(rows: CalendarRow[]): CalendarRow[] {
+  const groups = new Map<string, CalendarRow[]>();
+  for (const r of rows) {
+    const key = `${r.kind}:${r.bucket}:${r.label}`;
+    groups.set(key, [...(groups.get(key) ?? []), r]);
+  }
+  const out: CalendarRow[] = [];
+  for (const list of groups.values()) {
+    const parent = list.map((_, i) => i);
+    const find = (i: number): number => (parent[i] === i ? i : (parent[i] = find(parent[i])));
+    const words = list.map((r) => new Set(titleWords(r.text)));
+    for (let i = 0; i < list.length; i++) {
+      for (let j = i + 1; j < list.length; j++) {
+        let shared = 0;
+        for (const w of words[i]) if (words[j].has(w)) shared++;
+        if (shared < 2) continue;
+        const bar = sameSubject(list[i], list[j]) ? SAME_HAPPENING : SAME_HAPPENING_APART;
+        if (titleSimilarity(list[i].text, list[j].text) >= bar) parent[find(j)] = find(i);
+      }
+    }
+    const clusters = new Map<number, CalendarRow[]>();
+    list.forEach((r, i) => clusters.set(find(i), [...(clusters.get(find(i)) ?? []), r]));
+    for (const members of clusters.values()) {
+      // The fullest line speaks for the rest.
+      const [lead, ...rest] = [...members].sort((a, b) => b.text.length - a.text.length || a.id - b.id);
+      out.push({
+        ...lead,
+        ids: members.map((m) => m.id).sort((a, b) => (a === lead.id ? -1 : b === lead.id ? 1 : a - b)),
+        also: rest.map((m) => ({
+          id: m.id,
+          entity_id: m.entity_id,
+          entity: m.entity,
+          source_id: m.source_id,
+          source_title: m.source_title,
+          outlet: m.outlet,
+          chunk_id: m.chunk_id,
+        })),
+      });
+    }
+  }
+  return out.sort((a, b) => a.bucket.localeCompare(b.bucket) || a.id - b.id);
 }
 
 /**
@@ -642,7 +837,7 @@ export function calendarFor(loggedFrom: string, now = new Date(), opts: { pastDa
     .prepare(
       `SELECT ${ROW_COLUMNS} ${ROW_JOINS} WHERE c.logged_from = ? AND c.dismissed = 0 ORDER BY c.bucket, c.id`
     )
-    .all(loggedFrom) as Omit<CalendarRow, "tense">[];
+    .all(loggedFrom) as StoredRow[];
   const recent = rows.filter((r) => {
     if (r.kind === "annual") return true;
     const first = r.kind === "year" ? `${r.bucket}-12-31` : r.kind === "month" ? `${r.bucket}-31` : r.bucket;
@@ -687,7 +882,7 @@ export function listCalendar(opts: { pastDays?: number; now?: Date } = {}): Cale
   const rows = withTense(
     db()
       .prepare(`SELECT ${ROW_COLUMNS} ${ROW_JOINS} WHERE c.dismissed = 0 ORDER BY c.bucket, c.id`)
-      .all() as Omit<CalendarRow, "tense">[],
+      .all() as StoredRow[],
     now
   );
 

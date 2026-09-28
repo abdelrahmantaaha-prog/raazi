@@ -328,6 +328,10 @@ function trimTo(text: string, limit: number): string {
 const HOUSEKEEPING =
   /^(removed|corrected|deleted|dropped|fixed|resolved|consolidated|restructured|reorgani[sz]ed|replaced|reworded|rephrased|rewrote|clarified|trimmed|merged|split|tightened|softened|converted|standardi[sz]ed|updated (the )?(dates?|wording|formatting|structure))\b/i;
 
+/** A change to how the entry is laid out, whatever verb it opens with:
+ *  "Added an opening lead paragraph … to establish the inverted pyramid". */
+const LAYOUT = /\b(inverted pyramid|lead paragraph|section headings?|headings?|spine|structure|formatting|layout|chronological order|paragraph breaks?)\b/i;
+
 export function fixedSections(m: BriefMaterial): string {
   const out: string[] = [];
   if (m.stories.length) {
@@ -360,7 +364,7 @@ export function fixedSections(m: BriefMaterial): string {
       // brief listed 25 changes, most of them the verifier taking out a line
       // ("Removed the unsupported claim that Kuala Lumpur is the capital of
       // Malaysia"). An entry whose revision only tidied is left out.
-      const news = lines.find((l) => !HOUSEKEEPING.test(l));
+      const news = lines.find((l) => !HOUSEKEEPING.test(l) && !LAYOUT.test(l));
       return news ? `- ${r.entity}: ${trimTo(news, 220)}` : null;
     })
     .filter((line): line is string => line !== null);
