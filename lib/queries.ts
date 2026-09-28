@@ -75,6 +75,50 @@ export function typeCounts(tagId?: number): Record<string, number> {
   return Object.fromEntries(rows.map((r) => [r.type, r.n]));
 }
 
+declare global {
+  // eslint-disable-next-line no-var
+  var __corpusWords: Map<number, { key: string; words: number }> | undefined;
+}
+
+/**
+ * Each source's rough word count, keyed by source id.
+ *
+ * Counting words means measuring the text of every chunk, and SQLite reads a
+ * whole value to count its characters: across the library that is every page
+ * of it, about a second from a cold disk, and the Library asked for it every
+ * 1.5 seconds while the worker ran. A memory-starved machine had it from disk
+ * each time, on the thread that answers everything else, and the windows put
+ * up "The Corpus server is down".
+ *
+ * Chunk text is never edited in place — a source is re-chunked into new rows —
+ * so a source's count stays true until its number of chunks or its newest
+ * chunk id moves. Both come from the index, so only a changed source is
+ * measured again.
+ */
+export function wordsBySource(): Map<number, number> {
+  const cache = (globalThis.__corpusWords ??= new Map());
+  const shape = db()
+    .prepare(
+      `SELECT source_id AS id, COUNT(*) || ':' || MAX(id) AS key
+         FROM chunks GROUP BY source_id`
+    )
+    .all() as { id: number; key: string }[];
+  const measure = db().prepare(
+    `SELECT COALESCE(SUM(LENGTH(text)), 0) / 6 AS words FROM chunks WHERE source_id = ?`
+  );
+  const out = new Map<number, number>();
+  for (const s of shape) {
+    let hit = cache.get(s.id);
+    if (!hit || hit.key !== s.key) {
+      hit = { key: s.key, words: (measure.get(s.id) as { words: number }).words };
+      cache.set(s.id, hit);
+    }
+    out.set(s.id, hit.words);
+  }
+  for (const id of cache.keys()) if (!out.has(id)) cache.delete(id);
+  return out;
+}
+
 export interface EvidenceRow {
   id: number;
   quote: string;

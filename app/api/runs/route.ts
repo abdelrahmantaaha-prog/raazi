@@ -2,6 +2,7 @@ import { NextResponse } from "next/server";
 import { listRuns } from "@/lib/queue";
 import { workerStatus } from "@/lib/worker";
 import { db } from "@/lib/db";
+import { wordsBySource } from "@/lib/queries";
 
 export const dynamic = "force-dynamic";
 
@@ -20,14 +21,16 @@ export async function GET() {
       `SELECT s.id, s.title, s.kind, s.author, s.status, s.note, s.added_at,
               s.publisher, s.year, s.url, s.bookmark_chunk, s.shelf,
               s.progress, s.read_mode, s.read_at, s.reading_state,
-              (SELECT COALESCE(SUM(LENGTH(c.text)), 0) / 6 FROM chunks c WHERE c.source_id=s.id) AS words,
               (SELECT COUNT(*) FROM chunks c WHERE c.source_id=s.id) AS chunks,
               (SELECT COUNT(*) FROM chunks c WHERE c.source_id=s.id AND c.extracted_at IS NOT NULL) AS read_chunks,
               (SELECT COUNT(*) FROM bookmarks b WHERE b.source_id=s.id) AS bookmarks,
               (SELECT COUNT(DISTINCT m.entity_id) FROM mentions m WHERE m.source_id=s.id) AS entities
          FROM sources s ORDER BY s.id DESC`
     )
-    .all();
+    .all() as { id: number }[];
+  // Measured once per source and remembered — see wordsBySource.
+  const words = wordsBySource();
+  const withWords = sources.map((s) => ({ ...s, words: words.get(s.id) ?? 0 }));
 
   const totals = db()
     .prepare(
@@ -38,5 +41,5 @@ export async function GET() {
     )
     .get();
 
-  return NextResponse.json({ runs, sources, totals, worker: workerStatus() });
+  return NextResponse.json({ runs, sources: withWords, totals, worker: workerStatus() });
 }
