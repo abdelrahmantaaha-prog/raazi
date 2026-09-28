@@ -23,6 +23,16 @@ import { db, tx } from "./db";
 /** How far apart two accounts of the same story may be published. */
 const WINDOW_HOURS = 72;
 
+/**
+ * How long a story stays open to new accounts, counted from its first.
+ *
+ * The window above is measured from a story's *last* account, and every
+ * account that joins moves that forward, so a story that kept winning
+ * matches never closed. A story is one event; a week covers the event and
+ * its aftermath, and after that the next account opens a story of its own.
+ */
+export const MAX_STORY_DAYS = 7;
+
 /** Headline overlap required before the second signal is even consulted.
  *  Low, because the second signal is what decides: "McConnell returns after
  *  months-long absence for crucial vote" shares two words in five with the
@@ -61,13 +71,76 @@ export const STOP = new Set([
   "amid", "again", "still", "has", "have", "had", "not", "out", "off", "all", "some",
 ]);
 
+/**
+ * Headline words that are the beat rather than the story. "Trump" is in one
+ * headline in seven on this desk, and "White House" plus one more word was
+ * enough overlap to try a match: on 28 September 2026 the Xi visit, diesel
+ * prices and a senator's AI letter were folded into the press-ban story on
+ * nothing else. "House" alone stays — the chamber is a story's subject.
+ */
+const TITLE_BEAT = /\b(white\s+house|donald|trump)(['’]s)?\b/g;
+
 /** The words of a headline that carry its identity. */
 export function titleWords(title: string): string[] {
   return title
     .toLowerCase()
+    .replace(TITLE_BEAT, " ")
     .replace(/[^\p{L}\p{N}\s]/gu, " ")
     .split(/\s+/)
-    .filter((w) => w.length > 2 && !STOP.has(w));
+    .filter((w) => w.length > 2 && !STOP.has(w))
+    .map(stem);
+}
+
+/** How much a headline word says about which story it is. */
+export type TitleWeights = (word: string) => number;
+
+/**
+ * Headline words weighed by how rare the week has made them.
+ *
+ * The list above covers the words that are always the beat on this desk;
+ * the rest move with the news. In the week of 22 September 2026 "Iran" and
+ * "war" were each in forty story headlines, and "Hassett on Iran war" took in
+ * the UN General Assembly, a soldier's death, the Senate's war-powers vote
+ * and a Lawfare podcast — every one shared "Iran war", two words of five, and
+ * an Iranian name in its opening lines. Cutting common words out does not
+ * work either: "ban" was in fifty-seven headlines that week and still named
+ * the press ban. So a shared word counts by its rarity (inverse document
+ * frequency over the week's story headlines — stories, not articles, so forty
+ * outlets' headlines on one event count once): sharing "Iran war" with a
+ * headline whose other words are "Hassett" and "act" is little overlap, and
+ * sharing "ban", "CNN" and "Politico" with one that says nothing else is all
+ * of it. With no week to measure, every word weighs the same.
+ */
+let weightCache: { at: number; weigh: TitleWeights } | null = null;
+
+export function titleWeights(): TitleWeights {
+  if (weightCache && Date.now() - weightCache.at < 10 * 60_000) return weightCache.weigh;
+  const titles = db()
+    .prepare("SELECT title FROM stories WHERE first_seen >= datetime('now', '-7 days')")
+    .all() as { title: string }[];
+  const df = new Map<string, number>();
+  for (const t of titles) for (const w of new Set(titleWords(t.title))) df.set(w, (df.get(w) ?? 0) + 1);
+  const n = titles.length;
+  const weigh: TitleWeights = (w) => 1 + Math.log((n + 1) / ((df.get(w) ?? 0) + 1));
+  weightCache = { at: Date.now(), weigh };
+  return weigh;
+}
+
+/**
+ * The same word in another form. "Trump says he'll ban CNN…" and "Trump says
+ * he's banning CNN…" are one announcement, and without this they shared two
+ * words of three and opened two stories. Crude on purpose: it only has to
+ * make two headlines' forms of a word meet, never to be a dictionary word.
+ */
+function stem(w: string): string {
+  if (w.length <= 3 || /^\p{N}+$/u.test(w)) return w;
+  let s = w;
+  if (/ies$/.test(s)) s = s.slice(0, -3) + "y";
+  else if (/(ing|ed)$/.test(s) && s.length > 5) s = s.replace(/(ing|ed)$/, "");
+  else if (/[^s]s$/.test(s)) s = s.slice(0, -1);
+  // banning → bann → ban; a trailing silent e the same way both sides.
+  if (/([b-df-hj-np-tv-z])\1$/.test(s) && !/(ss|ll|ff|zz)$/.test(s)) s = s.slice(0, -1);
+  return s.replace(/e$/, "");
 }
 
 /**
@@ -77,11 +150,11 @@ export function titleWords(title: string): string[] {
  * a one- or two-word identity is what a column title or a wire slug leaves
  * behind, and it matches every instalment.
  */
-export function titlesAgree(a: string, b: string): boolean {
+export function titlesAgree(a: string, b: string, weigh?: TitleWeights): boolean {
   const A = new Set(titleWords(a));
   const B = new Set(titleWords(b));
   if (Math.min(A.size, B.size) < MIN_TITLE_WORDS) return false;
-  return titleSimilarity(a, b) >= TITLE_CERTAIN;
+  return titleSimilarity(a, b, weigh) >= TITLE_CERTAIN;
 }
 
 /** How much of an article's opening is read for the names in it. */
@@ -202,16 +275,17 @@ function sharedSignals(sourceId: number, storyId: number, names: Set<string>): n
 }
 
 /** How much two headlines overlap, 0 to 1. */
-export function titleSimilarity(a: string, b: string): number {
+export function titleSimilarity(a: string, b: string, weigh: TitleWeights = () => 1): number {
   const A = new Set(titleWords(a));
   const B = new Set(titleWords(b));
   if (A.size === 0 || B.size === 0) return 0;
+  const total = (set: Set<string>) => [...set].reduce((sum, w) => sum + weigh(w), 0);
   let shared = 0;
-  for (const w of A) if (B.has(w)) shared++;
+  for (const w of A) if (B.has(w)) shared += weigh(w);
   // Jaccard would punish a long headline paired with a short one, which is the
   // normal shape of a wire report and its rewrite; this asks how much of the
   // *smaller* headline is present in the larger.
-  return shared / Math.min(A.size, B.size);
+  return shared / Math.min(total(A), total(B));
 }
 
 /** A stable fingerprint of a headline, for the story row. */
@@ -247,17 +321,23 @@ export function fileSource(sourceId: number): { storyId: number; created: boolea
          FROM stories s
         WHERE s.last_seen >= datetime(?, '-${WINDOW_HOURS} hours')
           AND s.first_seen <= datetime(?, '+${WINDOW_HOURS} hours')
-        ORDER BY s.last_seen DESC
-        LIMIT 200`
+          AND s.first_seen >= datetime(?, '-${MAX_STORY_DAYS} days')
+        ORDER BY abs(julianday(s.last_seen) - julianday(?))
+        LIMIT 400`
     )
-    .all(source.at, source.at) as Candidate[];
+    .all(source.at, source.at, source.at, source.at) as Candidate[];
+  // Nearest in time first, not newest. The library opens a hundred and more
+  // stories a day, so "the 200 seen most recently" was the last day or so —
+  // and an account filed later than it arrived (a re-filing, a slow fetch)
+  // was never shown the stories of its own day at all.
 
   let best: { story: Candidate; score: number } | null = null;
   // Read once, and only if a headline comes close enough to need it.
   let names: Set<string> | undefined;
+  const weigh = titleWeights();
   const mine = titleWords(source.title).length;
   for (const story of candidates) {
-    const score = titleSimilarity(source.title, story.title);
+    const score = titleSimilarity(source.title, story.title, weigh);
     if (score < TITLE_FLOOR) continue;
     if (Math.min(mine, titleWords(story.title).length) < MIN_TITLE_WORDS) {
       // A headline that says almost nothing — a column's title, a wire slug
@@ -265,7 +345,7 @@ export function fileSource(sourceId: number): { storyId: number; created: boolea
       // the passages have been read. Names in a lede are not enough here:
       // the instalments of one column all open the same way.
       if (sharedEntities(sourceId, story.id) < MIN_SHARED_ENTITIES) continue;
-    } else if (!titlesAgree(source.title, story.title)) {
+    } else if (!titlesAgree(source.title, story.title, weigh)) {
       names ??= namesOf(sourceId);
       if (sharedSignals(sourceId, story.id, names) < MIN_SHARED_NAMES) continue;
     }
@@ -335,21 +415,79 @@ export function refileSource(sourceId: number): { storyId: number; moved: boolea
 }
 
 /** How many known entities a source shares with a story's other accounts. */
-function sharedEntities(sourceId: number, storyId: number): number {
-  return (
+/**
+ * Entities in so many of the week's articles that sharing them says nothing.
+ *
+ * The entity half of the test used to compare an account with every entity
+ * in every account of a story, and on this beat "Donald Trump" and "White
+ * House" are in half of them. So a story, once it had twenty accounts,
+ * agreed with any headline that shared a word with its own: "Trump says he
+ * is banning three media outlets from the White House" took in the Xi
+ * summit, the Iran war, a triumphal arch and a comedian — 286 accounts over
+ * twelve days by 28 September 2026, which the brief then reported as "a
+ * story carried by 282 outlets". The same rule as COMMON_NAMES, measured
+ * rather than listed.
+ */
+const BEAT_SHARE = 0.08;
+const BEAT_FLOOR = 6;
+let beatCache: { at: number; ids: Set<number> } | null = null;
+
+export function beatEntities(): Set<number> {
+  if (beatCache && Date.now() - beatCache.at < 10 * 60_000) return beatCache.ids;
+  const rows = db()
+    .prepare(
+      `SELECT m.entity_id AS id, COUNT(DISTINCT m.source_id) AS n
+         FROM live_mentions m JOIN sources s ON s.id = m.source_id
+        WHERE COALESCE(s.published_at, s.added_at) >= datetime('now', '-7 days')
+        GROUP BY m.entity_id`
+    )
+    .all() as { id: number; n: number }[];
+  const total = (
     db()
       .prepare(
-        `SELECT COUNT(DISTINCT m.entity_id) AS n
-           FROM live_mentions m
-          WHERE m.source_id = ?
-            AND m.entity_id IN (
-              SELECT DISTINCT m2.entity_id FROM live_mentions m2
-               JOIN story_sources ss ON ss.source_id = m2.source_id
-              WHERE ss.story_id = ?
-            )`
+        `SELECT COUNT(DISTINCT m.source_id) AS n
+           FROM live_mentions m JOIN sources s ON s.id = m.source_id
+          WHERE COALESCE(s.published_at, s.added_at) >= datetime('now', '-7 days')`
       )
-      .get(sourceId, storyId) as { n: number }
+      .get() as { n: number }
   ).n;
+  const bar = Math.max(BEAT_FLOOR, Math.ceil(total * BEAT_SHARE));
+  const ids = new Set(rows.filter((r) => r.n >= bar).map((r) => r.id));
+  beatCache = { at: Date.now(), ids };
+  return ids;
+}
+
+/** For tests, which build a library and ask again within the ten minutes. */
+export function forgetBeat(): void {
+  beatCache = null;
+  weightCache = null;
+}
+
+/**
+ * Entities an account shares with the opening accounts of a story, the beat
+ * left out. The first few accounts only, for the reason storyNames gives: a
+ * union across all of them agrees with anything.
+ */
+function sharedEntities(sourceId: number, storyId: number): number {
+  const beat = beatEntities();
+  const mine = db()
+    .prepare("SELECT DISTINCT entity_id AS id FROM live_mentions WHERE source_id = ?")
+    .all(sourceId) as { id: number }[];
+  if (!mine.length) return 0;
+  const theirs = new Set(
+    (
+      db()
+        .prepare(
+          `SELECT DISTINCT m.entity_id AS id FROM live_mentions m
+            WHERE m.source_id IN (
+              SELECT ss.source_id FROM story_sources ss JOIN sources s ON s.id = ss.source_id
+               WHERE ss.story_id = ? ORDER BY COALESCE(s.published_at, s.added_at) LIMIT 3
+            )`
+        )
+        .all(storyId) as { id: number }[]
+    ).map((r) => r.id)
+  );
+  return mine.filter((m) => theirs.has(m.id) && !beat.has(m.id)).length;
 }
 
 export interface StoryRow {
@@ -487,6 +625,7 @@ export function regroupRecent(opts: { hours?: number; limit?: number } = {}): nu
     .all(limit) as { id: number; title: string; first_seen: string; last_seen: string; accounts: number }[];
 
   const gone = new Set<number>();
+  const weigh = titleWeights();
   const words = new Map(recent.map((s) => [s.id, titleWords(s.title).length]));
 
   // Names are read once per story, and a name that turns up in many of the
@@ -519,23 +658,109 @@ export function regroupRecent(opts: { hours?: number; limit?: number } = {}): nu
       const b = recent[j];
       if (gone.has(b.id)) continue;
       if ((words.get(b.id) ?? 0) < MIN_TITLE_WORDS) continue;
-      if (!within(a.first_seen, b.first_seen) && !within(a.last_seen, b.last_seen)) continue;
-      const score = titleSimilarity(a.title, b.title);
+      // Opened within the window of each other. Last-seen used to count as
+      // well, which let a story that never closed fold in anything recent.
+      if (!within(a.first_seen, b.first_seen)) continue;
+      const score = titleSimilarity(a.title, b.title, weigh);
       if (score < TITLE_FLOOR) continue;
-      if (!titlesAgree(a.title, b.title) && overlap(namesFor(a.id), namesFor(b.id)) < MIN_SHARED_NAMES) continue;
+      if (!titlesAgree(a.title, b.title, weigh) && overlap(namesFor(a.id), namesFor(b.id)) < MIN_SHARED_NAMES) continue;
 
       // The one with more accounts keeps its name; on a tie, the older.
       const [keep, drop] = b.accounts > a.accounts ? [b, a] : [a, b];
       mergeStories(keep.id, drop.id);
       gone.add(drop.id);
       keep.accounts += drop.accounts;
-      names.set(keep.id, new Set([...namesFor(keep.id), ...namesFor(drop.id)]));
+      // The kept story's names stay its own: adding the folded one's made
+      // each fold widen what the next could agree with.
       merged++;
       if (drop.id === a.id) break;
     }
   }
   if (merged) console.log(`[corpus] stories: folded ${merged} duplicate${merged === 1 ? "" : "s"} into the story already running`);
   return merged;
+}
+
+/**
+ * Whether two stories were opened close enough together to be one event.
+ * The inbox's grouping folds stories as well as accounts, and without this
+ * one account related to both an old story and a new one joined them.
+ */
+export function mayFold(a: number, b: number): boolean {
+  const rows = db()
+    .prepare("SELECT first_seen FROM stories WHERE id IN (?, ?)")
+    .all(a, b) as { first_seen: string }[];
+  if (rows.length < 2) return true;
+  const t = rows.map((r) => new Date(r.first_seen.replace(" ", "T") + (/[zZ]|[+-]\d\d:?\d\d$/.test(r.first_seen) ? "" : "Z")).getTime());
+  return Math.abs(t[0] - t[1]) <= WINDOW_HOURS * 3_600_000;
+}
+
+/**
+ * Takes apart the stories that grew past one event and files their
+ * accounts again, oldest first, under the rules as they are now.
+ *
+ * A story Corpus named itself whose accounts span more than MAX_STORY_DAYS
+ * cannot be one event under the current rules, so it was built by the old
+ * ones. A story you named or pinned is left alone. Returns how many stories
+ * were taken apart and how many accounts were filed again.
+ */
+export function splitRunaways(): { stories: number; accounts: number } {
+  const runaways = db()
+    .prepare(
+      `SELECT s.id FROM stories s
+         JOIN story_sources ss ON ss.story_id = s.id
+         JOIN sources src ON src.id = ss.source_id
+        WHERE s.named_by = 'auto' AND s.pinned = 0
+        GROUP BY s.id
+       HAVING julianday(MAX(COALESCE(src.published_at, src.added_at)))
+            - julianday(MIN(COALESCE(src.published_at, src.added_at))) > ${MAX_STORY_DAYS}`
+    )
+    .all() as { id: number }[];
+  const accounts = refileStories(runaways.map((r) => r.id));
+  if (runaways.length) {
+    console.log(`[corpus] stories: took apart ${runaways.length} that had grown past one event, filing ${accounts} accounts again`);
+  }
+  return { stories: runaways.length, accounts };
+}
+
+/**
+ * Files every account of the stories Corpus opened since a date again, from
+ * nothing, oldest first, then folds the duplicates — for when the rules that
+ * built them have changed. Stories you named or pinned are left as they are.
+ */
+export function rebuildStories(since: string): { stories: number; accounts: number } {
+  const ids = (
+    db()
+      .prepare("SELECT id FROM stories WHERE named_by = 'auto' AND pinned = 0 AND first_seen >= ?")
+      .all(since) as { id: number }[]
+  ).map((r) => r.id);
+  // No regroup over the whole span afterwards: its "a name in 8% of the
+  // stories is the beat" bar is sized for the 300 stories of a normal pass,
+  // and over thousands it lets the beat's names back in. The regroup after
+  // the next poll covers the recent days at its usual size.
+  return { stories: ids.length, accounts: refileStories(ids) };
+}
+
+/** Dissolves the stories and files their accounts again, oldest first. */
+function refileStories(storyIds: number[]): number {
+  if (!storyIds.length) return 0;
+  // Measured now, while the stories it is measured on still exist.
+  titleWeights();
+  const read = db().prepare(
+    `SELECT ss.source_id AS id, COALESCE(s.published_at, s.added_at) AS at FROM story_sources ss
+       JOIN sources s ON s.id = ss.source_id WHERE ss.story_id = ?`
+  );
+  const members = storyIds.flatMap((id) => read.all(id) as { id: number; at: string }[]);
+  members.sort((a, b) => String(a.at).localeCompare(String(b.at)) || a.id - b.id);
+  tx(() => {
+    const unlink = db().prepare("DELETE FROM story_sources WHERE story_id = ?");
+    const drop = db().prepare("DELETE FROM stories WHERE id = ?");
+    for (const id of storyIds) {
+      unlink.run(id);
+      drop.run(id);
+    }
+  });
+  for (const m of members) fileSource(m.id);
+  return members.length;
 }
 
 /** Merges one story into another, keeping the target's name. */

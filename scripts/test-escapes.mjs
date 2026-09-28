@@ -91,11 +91,11 @@ const { fixedSections } = await import("../lib/pipeline/brief.ts");
 const escaped = fixedSections({
   stories: [],
   problems: [],
-  revised: [{ entity: "Lebanon", changelog: "- Corrected the bomb description.\\n- Removed the 1982 invasion." }],
+  revised: [{ entity: "Lebanon", changelog: "- Added the bomb description.\\n- Added the 1982 invasion." }],
 });
 check(
   "a double-escaped changelog still yields only its first line",
-  escaped.includes("- Lebanon: Corrected the bomb description.") &&
+  escaped.includes("- Lebanon: Added the bomb description.") &&
     !escaped.includes("1982"),
   escaped
 );

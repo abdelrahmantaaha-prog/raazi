@@ -272,13 +272,13 @@ function material(m: BriefMaterial): string[] {
 
   if (m.stories.length) {
     parts.push(
-      `RUNNING STORIES (context, not evidence, and not a section for you to write — it is appended after your text): each is one event that several outlets carried; "kept" is how many of those accounts the journalist read, and the passages above come from those. Use it to judge how widely a development was carried, and say so in the prose:\n` +
+      `RUNNING STORIES (context, not evidence, and not a section for you to write — it is appended after your text): each is one event; "outlets" is how many different outlets carried it, and "kept" is how many of its accounts the journalist read, and the passages above come from those. An outlet often files several accounts of one event, so never give the number of accounts as a number of outlets. Use it to judge how widely a development was carried, and say so in the prose only for the story a passage names:\n` +
         m.stories
           .map(
             (s) =>
-              `- "${s.title}" — kept ${s.kept} of ${s.accounts} account${s.accounts === 1 ? "" : "s"}${
-                s.outlets.length ? ` (${s.outlets.join(", ")})` : ""
-              }`
+              `- "${s.title}" — carried by ${Math.max(1, s.outlets.length)} outlet${
+                s.outlets.length > 1 ? "s" : ""
+              }${s.outlets.length ? ` (${s.outlets.join(", ")})` : ""}; kept ${s.kept} of ${s.accounts} account${s.accounts === 1 ? "" : "s"}`
           )
           .join("\n")
     );
@@ -324,6 +324,10 @@ function trimTo(text: string, limit: number): string {
   return (lastSpace > limit - 40 ? cut.slice(0, lastSpace) : cut).trimEnd() + "…";
 }
 
+/** A changelog line about the entry's own tidying rather than anything new. */
+const HOUSEKEEPING =
+  /^(removed|corrected|deleted|dropped|fixed|resolved|consolidated|restructured|reorgani[sz]ed|replaced|reworded|rephrased|rewrote|clarified|trimmed|merged|split|tightened|softened|converted|standardi[sz]ed|updated (the )?(dates?|wording|formatting|structure))\b/i;
+
 export function fixedSections(m: BriefMaterial): string {
   const out: string[] = [];
   if (m.stories.length) {
@@ -339,32 +343,44 @@ export function fixedSections(m: BriefMaterial): string {
           .join("\n")
     );
   }
-  if (m.revised.length) {
-    out.push(
-      `## Entries that changed\n\n` +
-        m.revised
-          .map((r) => {
-            // Split on a literal \n as well as a real one. A changelog that
-            // came back double-escaped carries no line break to find, so the
-            // whole list became "line one" and the trim below cut it
-            // mid-word — "…as i" and "…for Chinese wor", both published on
-            // 19 September. unescapeModelJson now repairs this on the way
-            // in; the guard stays because a brief is assembled from rows
-            // written long before it, and the old ones are still there.
-            const first = (r.changelog ?? "")
-              .split(/\r?\n|\\n/)
-              .map((l) => l.replace(/^\s*[-*•]\s*/, "").trim())
-              .filter(Boolean)[0];
-            return `- ${r.entity}${first ? `: ${trimTo(first, 220)}` : ""}`;
-          })
-          .join("\n")
-    );
-  }
+  const revised = m.revised
+    .map((r) => {
+      // Split on a literal \n as well as a real one. A changelog that
+      // came back double-escaped carries no line break to find, so the
+      // whole list became "line one" and the trim below cut it
+      // mid-word — "…as i" and "…for Chinese wor", both published on
+      // 19 September. unescapeModelJson now repairs this on the way
+      // in; the guard stays because a brief is assembled from rows
+      // written long before it, and the old ones are still there.
+      const lines = (r.changelog ?? "")
+        .split(/\r?\n|\\n/)
+        .map((l) => l.replace(/^\s*[-*•]\s*/, "").trim())
+        .filter(Boolean);
+      // What the entry learned, not how it was tidied. The 27 September
+      // brief listed 25 changes, most of them the verifier taking out a line
+      // ("Removed the unsupported claim that Kuala Lumpur is the capital of
+      // Malaysia"). An entry whose revision only tidied is left out.
+      const news = lines.find((l) => !HOUSEKEEPING.test(l));
+      return news ? `- ${r.entity}: ${trimTo(news, 220)}` : null;
+    })
+    .filter((line): line is string => line !== null);
+  if (revised.length) out.push(`## Entries that changed\n\n` + revised.join("\n"));
   if (m.problems.length) {
-    out.push(
-      `## Did not come in\n\n` +
-        m.problems.map((p) => `- "${p.title.replace(/\s+/g, " ").trim()}" from ${p.feed}: ${p.note ?? "failed"}`).join("\n")
-    );
+    // One line per feed once a feed fails more than twice: fourteen lines of
+    // "Election Law Blog: Nothing readable was found" were most of the 27
+    // September brief, and said one thing.
+    const byFeed = new Map<string, typeof m.problems>();
+    for (const p of m.problems) byFeed.set(p.feed, [...(byFeed.get(p.feed) ?? []), p]);
+    const lines: string[] = [];
+    for (const [feed, items] of byFeed) {
+      if (items.length > 2) {
+        const notes = [...new Set(items.map((p) => p.note ?? "failed"))];
+        lines.push(`- ${items.length} items from ${feed}: ${notes.length === 1 ? notes[0] : "several failures"}`);
+      } else {
+        for (const p of items) lines.push(`- "${p.title.replace(/\s+/g, " ").trim()}" from ${p.feed}: ${p.note ?? "failed"}`);
+      }
+    }
+    out.push(`## Did not come in\n\n` + lines.join("\n"));
   }
   return out.join("\n\n");
 }

@@ -64,6 +64,10 @@ topics this source belongs to.
   review"). Not every source has all three, and three is plenty. Never invent
   a tag to fill a slot, and do not tag a source with a topic it merely
   mentions in passing.
+- A REGION is where the events happen or whose politics they concern. The
+  country an outlet is based in, a wire credit ("The Canadian Press") or a
+  dateline is not a region: a Canadian broadcaster's report on the US Congress
+  is not "Canada". When no region fits, leave that slot empty.
 - Name topics the way a researcher labels a shelf: short, concrete, a subject
   rather than a sentence.`;
 

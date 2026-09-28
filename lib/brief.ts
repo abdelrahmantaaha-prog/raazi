@@ -192,6 +192,31 @@ function specificity(tag: { description: string | null; sources: number }): [num
   return [facet ? FACET_RANK[facet] : 3, tag.sources];
 }
 
+/**
+ * Whether an article is about a region, rather than merely tagged with it.
+ *
+ * A region outranks a theme, which is right for a piece about Ottawa's trade
+ * talks and wrong for CBC's piece on Bill Gates asking Congress for AI rules:
+ * the tagger gave it "Canada" on the strength of a photo credit ("The
+ * Canadian Press"), and the 29 September 2026 brief printed Trump's dinner
+ * with Anthropic's chief executive under Canada. A region claims an article
+ * only if the headline names it or the text does more than once; otherwise
+ * the tag ranks with the unfaceted ones, after the theme.
+ */
+export function namesRegion(region: string, title: string, text: string): boolean {
+  const name = region.trim();
+  if (!name) return false;
+  // "Canad" finds Canada and Canadian, "Chin" China and Chinese, "Ukrain" Ukraine.
+  const stem = name.length >= 5 ? name.slice(0, -1) : name;
+  const re = new RegExp(`\\b${stem.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}`, "g");
+  if (re.test(title)) return true;
+  re.lastIndex = 0;
+  return (text.match(re) ?? []).length >= 2;
+}
+
+/** How much of an article is read to decide whether it names its region. */
+const REGION_TEXT_CHARS = 8_000;
+
 /** Where a sortable date falls against a window, at the precision it carries. */
 export function whenOf(iso: string | null | undefined, from: string, to: string): PassageWhen {
   if (!iso) return "undated";
@@ -307,21 +332,38 @@ export function gather(
   const topicWatches = watches.filter((w) => w.kind === "topic" && w.tag_id);
   const tagIds = topicWatches.map((w) => w.tag_id as number);
 
-  const tagInfo = new Map<number, { description: string | null; sources: number }>();
+  const tagInfo = new Map<number, { name: string; description: string | null; sources: number }>();
   if (tagIds.length) {
     for (const t of db()
       .prepare(
-        `SELECT t.id, t.description, (SELECT COUNT(*) FROM source_tags st WHERE st.tag_id = t.id) AS sources
+        `SELECT t.id, t.name, t.description, (SELECT COUNT(*) FROM source_tags st WHERE st.tag_id = t.id) AS sources
            FROM tags t WHERE t.id IN (${tagIds.map(() => "?").join(",")})`
       )
-      .all(...tagIds) as { id: number; description: string | null; sources: number }[]) {
-      tagInfo.set(t.id, { description: t.description, sources: t.sources });
+      .all(...tagIds) as { id: number; name: string; description: string | null; sources: number }[]) {
+      tagInfo.set(t.id, { name: t.name, description: t.description, sources: t.sources });
     }
   }
   const order = new Map(tagIds.map((id, i) => [id, i]));
-  const moreSpecific = (a: number, b: number) => {
-    const [fa, na] = specificity(tagInfo.get(a) ?? { description: null, sources: 0 });
-    const [fb, nb] = specificity(tagInfo.get(b) ?? { description: null, sources: 0 });
+  const opening = db().prepare(
+    `SELECT s.title, (SELECT substr(group_concat(text, ' '), 1, ${REGION_TEXT_CHARS})
+                        FROM (SELECT c.text FROM chunks c WHERE c.source_id = s.id ORDER BY c.seq LIMIT 12)) AS text
+       FROM sources s WHERE s.id = ?`
+  );
+  const openings = new Map<number, { title: string; text: string }>();
+  const rankFor = (sourceId: number, tagId: number): [number, number] => {
+    const info = tagInfo.get(tagId) ?? { name: "", description: null, sources: 0 };
+    const [facet, sources] = specificity(info);
+    if (facet !== FACET_RANK.region) return [facet, sources];
+    if (!openings.has(sourceId)) {
+      const row = opening.get(sourceId) as { title: string | null; text: string | null } | undefined;
+      openings.set(sourceId, { title: row?.title ?? "", text: row?.text ?? "" });
+    }
+    const o = openings.get(sourceId)!;
+    return namesRegion(info.name, o.title, o.text) ? [facet, sources] : [3, sources];
+  };
+  const moreSpecificFor = (sourceId: number) => (a: number, b: number) => {
+    const [fa, na] = rankFor(sourceId, a);
+    const [fb, nb] = rankFor(sourceId, b);
     return fa - fb || na - nb || (order.get(a) ?? 0) - (order.get(b) ?? 0);
   };
 
@@ -338,7 +380,7 @@ export function gather(
       .all(params) as { source_id: number; tag_id: number }[];
     const options = new Map<number, number[]>();
     for (const r of rows) options.set(r.source_id, [...(options.get(r.source_id) ?? []), r.tag_id]);
-    for (const [sourceId, tags] of options) filedUnder.set(sourceId, [...tags].sort(moreSpecific)[0]);
+    for (const [sourceId, tags] of options) filedUnder.set(sourceId, [...tags].sort(moreSpecificFor(sourceId))[0]);
   }
 
   // All the readable passages of those sources, once, with the width of
@@ -539,7 +581,7 @@ export function gather(
       `SELECT i.title, i.note, f.title AS feed
          FROM feed_items i JOIN feeds f ON f.id = i.feed_id
         WHERE i.state = 'failed' AND i.seen_at >= @from AND i.seen_at < @to
-        ORDER BY i.id DESC LIMIT 15`
+        ORDER BY i.id DESC LIMIT 60`
     )
     .all(params) as BriefMaterial["problems"];
 

@@ -1,7 +1,7 @@
 import { Type, type Schema } from "@google/genai";
 import { db, tx } from "./db";
 import { generateJson } from "./ai/client";
-import { COMMON_NAMES, STOP, mergeStories, shingle, titleSimilarity, titlesAgree } from "./stories";
+import { COMMON_NAMES, STOP, mayFold, mergeStories, shingle, titleSimilarity, titlesAgree } from "./stories";
 
 /**
  * The inbox pass: group everything related, deterministically, on request.
@@ -456,14 +456,22 @@ export function applyGroups(accounts: HeldAccount[], pairs: RelatedPair[]): Grou
             .run(first.title, shingle(first.title), first.at, first.at).lastInsertRowid
         );
       }
+      // A story opened days apart from the kept one is another event, however
+      // related one held account makes them look; it and its accounts stay.
+      const apart = new Set<number>();
       for (const id of storyIds) {
         if (id === keep) continue;
         if (members.some((m) => m.storyId === id && m.namedBy === "user")) continue;
+        if (!mayFold(keep, id)) {
+          apart.add(id);
+          continue;
+        }
         mergeStories(keep, id);
         folded++;
       }
       for (const m of members) {
         if (m.storyId === keep) continue;
+        if (m.storyId !== null && apart.has(m.storyId)) continue;
         if (m.storyId !== null && members.some((x) => x.storyId === m.storyId && x.namedBy === "user")) continue;
         link.run(keep, m.sourceId, because.get(m.sourceId) ?? "Grouped with the inbox's related accounts.");
         touch.run(m.at, keep);

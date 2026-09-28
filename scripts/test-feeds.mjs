@@ -529,6 +529,58 @@ section("A heading is the day on that beat, not the last article filed under it"
   check("entries that changed carry the first line of the changelog", fixed.includes("- The Court: Added the ruling."), fixed);
   check("and what did not come in is listed", fixed.includes('## Did not come in\n\n- "A post" from Some blog: Nothing readable'), fixed);
   check("a window with none of these appends nothing", fixedSections({ ...m2, stories: [], revised: [], problems: [] }) === "");
+
+  const tidy = fixedSections({
+    ...m2,
+    stories: [],
+    revised: [
+      { entity_id: 1, entity: "Malaysia", changelog: "- Removed the unsupported claim that Kuala Lumpur is the capital.", updated_at: "" },
+      { entity_id: 2, entity: "Ted Cruz", changelog: "- Corrected a date.\n- Added a section on diesel exports.", updated_at: "" },
+    ],
+    problems: [
+      ...[1, 2, 3, 4].map((i) => ({ title: `Post ${i}`, note: "Nothing readable was found in that source.", feed: "Law Blog" })),
+      { title: "One piece", note: "Timed out.", feed: "Other feed" },
+    ],
+  });
+  check("a revision that only tidied the entry is not listed as a change", !tidy.includes("Malaysia"), tidy);
+  check("one that learned something shows what it learned, not the tidying", tidy.includes("- Ted Cruz: Added a section on diesel exports."), tidy);
+  check("a feed that failed many times is one line", tidy.includes("- 4 items from Law Blog: Nothing readable") && !tidy.includes("Post 1"), tidy);
+  check("a single failure is still listed by title", tidy.includes('- "One piece" from Other feed: Timed out.'), tidy);
+}
+
+section("A region claims an article only if the article is about it");
+{
+  const now = new Date();
+  const at = (h) => new Date(now.getTime() - h * 3600_000).toISOString();
+  check("a photo credit does not make a piece Canadian", !brief.namesRegion("Canada", "Gates wants AI rules from Congress", "Bill Gates urged Congress to act. (Photo: The Canadian Press)"));
+  check("the headline naming it does", brief.namesRegion("Canada", "Canada sets AI rules", ""));
+  check("and so does text that keeps returning to it", brief.namesRegion("China", "Summit ends", "China and the US agreed. Chinese officials said more talks would follow."));
+
+  const tag = (name, description) => Number(db().prepare("INSERT INTO tags (name, description) VALUES (?,?)").run(name, description).lastInsertRowid);
+  const region = tag("Canada", "Region: Politics of Canada.");
+  const theme = tag("AI rules", "Theme: Regulation of artificial intelligence.");
+  watchlist.watch({ tagId: region });
+  watchlist.watch({ tagId: theme });
+  const person = Number(db().prepare("INSERT INTO entities (type, canonical_name, normalized) VALUES ('person', 'Bill Gates', 'bill gates')").run().lastInsertRowid);
+  const mk = (title, text) => {
+    const id = Number(
+      db()
+        .prepare("INSERT INTO sources (title, kind, status, outlet, published_at, kept_at, triage) VALUES (?, 'url','ready','CBC',?,?,'kept')")
+        .run(title, at(2), at(1.5)).lastInsertRowid
+    );
+    const chunk = Number(db().prepare("INSERT INTO chunks (source_id, seq, text) VALUES (?, 0, ?)").run(id, text).lastInsertRowid);
+    db()
+      .prepare("INSERT INTO mentions (entity_id, chunk_id, source_id, surface, quote, claim, claim_kind) VALUES (?,?,?,?,?,?,'fact')")
+      .run(person, chunk, id, "Gates", text.split(".")[0] + ".", "Called for rules");
+    for (const t of [region, theme]) db().prepare("INSERT INTO source_tags (source_id, tag_id) VALUES (?,?)").run(id, t);
+    return id;
+  };
+  const us = mk("Bill Gates joins call for AI safeguards", "Bill Gates urged Congress on Sunday to pass AI rules. (Photo credits: The Canadian Press, Reuters)");
+  const ca = mk("Canada sets AI rules for federal agencies", "Ottawa published AI rules on Sunday, and Bill Gates welcomed them.");
+  const m = brief.gather(new Date(now.getTime() - 24 * 3600_000), new Date(now.getTime() + 60_000));
+  const under = (label) => new Set((m.watched.find((w) => w.label === label)?.passages ?? []).map((p) => p.source_id));
+  check("a Canadian outlet's piece on Congress goes under the theme", under("AI rules").has(us) && !under("Canada").has(us), JSON.stringify(m.watched.map((w) => [w.label, w.passages.map((p) => p.source_id)])));
+  check("a piece about Canada still goes under Canada", under("Canada").has(ca));
 }
 
 /* ------------------------------------------------- a day off costs nothing */
@@ -709,6 +761,118 @@ section("Stories opened twice are folded together");
   const after = db().prepare("SELECT story_id FROM story_sources WHERE source_id IN (?, ?)").all(g, n);
   check("and both accounts are in it", after.length === 2 && after[0].story_id === after[1].story_id, JSON.stringify(after));
   check("a second pass has nothing to do", stories.regroupRecent({ hours: 48 }) === 0);
+}
+
+section("A story closes, and a big one does not agree with everything");
+{
+  const soon = (hoursAgo) => new Date(Date.now() - hoursAgo * 3600e3).toISOString();
+  const mk = (title, at, outlet) =>
+    Number(
+      db()
+        .prepare("INSERT INTO sources (title, kind, status, outlet, published_at) VALUES (?, 'url', 'chunked', ?, ?)")
+        .run(title, outlet, at).lastInsertRowid
+    );
+  const ent = (name) =>
+    Number(db().prepare("INSERT INTO entities (type, canonical_name, normalized) VALUES ('person', ?, ?)").run(name, name.toLowerCase()).lastInsertRowid);
+  const mention = (sourceId, ...entityIds) => {
+    const chunk = Number(db().prepare("INSERT INTO chunks (source_id, seq, text, locator_json) VALUES (?, 0, 'x', '{}')").run(sourceId).lastInsertRowid);
+    for (const e of entityIds)
+      db().prepare("INSERT INTO mentions (entity_id, chunk_id, source_id, surface, quote) VALUES (?,?,?,'x','x')").run(e, chunk, sourceId);
+  };
+  check(
+    "sharing only the beat's words is no overlap",
+    stories.titleSimilarity("Republican presses White House for more AI oversight", "White House TV pool in limbo amid high stakes Xi visit") === 0
+  );
+  check(
+    "while two rewrites of one event still agree",
+    stories.titlesAgree("Trump says he's banning CNN, MS NOW and Politico from the White House", "Donald Trump says he is banning CNN, Politico from White House")
+  );
+  check(
+    "including when one says 'ban' and the other 'banning'",
+    stories.titlesAgree("Trump says he's banning CNN, MS NOW and Politico from the White House", "Trump Bans CNN, MS NOW, & Politico From White House")
+  );
+  for (let i = 0; i < 12; i++)
+    db().prepare("INSERT INTO stories (title, shingle, first_seen, last_seen) VALUES (?, '', ?, ?)").run(`Zorbia war item ${i} ${"abcdefghijkl"[i]}xx`, soon(24), soon(24));
+  stories.forgetBeat();
+  const weigh = stories.titleWeights();
+  check("a word in many of the week's headlines weighs less than a rare one", weigh("zorbia") < weigh("hassett"), `${weigh("zorbia")} ${weigh("hassett")}`);
+  check(
+    "so two headlines sharing only the beat's words do not resemble each other",
+    stories.titleSimilarity("Hassett on Zorbia war: the president had to act", "Zorbia war's peacemakers have skin in the game", weigh) < 0.34,
+    String(stories.titleSimilarity("Hassett on Zorbia war: the president had to act", "Zorbia war's peacemakers have skin in the game", weigh))
+  );
+  check(
+    "while one that shares every word it has still agrees",
+    stories.titlesAgree("Zorbia bans CNN and Politico", "Zorbia says it is banning CNN, Politico", weigh)
+  );
+  db().prepare("DELETE FROM stories WHERE title LIKE 'Zorbia war item %'").run();
+  stories.forgetBeat();
+  const kessler = ent("Anna Kessler");
+  const port = ent("Port Halden");
+
+  // A story opened ten days ago that an account kept alive until yesterday.
+  const old = mk("Kessler blocks Port Halden dredging permit", soon(240), "A");
+  mention(old, kessler, port);
+  const s = stories.fileSource(old);
+  const lately = mk("Port Halden dredging row continues", soon(20), "B");
+  db().prepare("INSERT INTO story_sources (story_id, source_id) VALUES (?, ?)").run(s.storyId, lately);
+  db().prepare("UPDATE stories SET last_seen = ? WHERE id = ?").run(soon(20), s.storyId);
+  const fresh = mk("Kessler opens Port Halden ferry terminal", soon(5), "C");
+  mention(fresh, kessler, port);
+  const f = stories.fileSource(fresh);
+  check("an account cannot join a story opened more than a week before it", f.storyId !== s.storyId, JSON.stringify([s, f]));
+
+  // A recent story whose fourth account brought in names its first three never had.
+  const base = mk("Vance tours Ohio steel mill", soon(30), "D");
+  const story = stories.fileSource(base).storyId;
+  for (const [title, h] of [["Vance visits Ohio steel mill", 29], ["Vance at Ohio mill", 28], ["Ohio steel mill hosts Vance", 27]]) {
+    const id = mk(title, soon(h), "E");
+    db().prepare("INSERT INTO story_sources (story_id, source_id) VALUES (?, ?)").run(story, id);
+    if (h === 27) mention(id, ent("Rosa Lind"), ent("Marek Tal"));
+  }
+  const other = mk("Ohio steel union backs Lind and Tal", soon(3), "F");
+  mention(other, ...db().prepare("SELECT id FROM entities WHERE canonical_name IN ('Rosa Lind','Marek Tal')").all().map((r) => r.id));
+  check("names from late accounts do not pull an unrelated piece in", stories.fileSource(other).storyId !== story);
+
+  // One held account related to an old story and a new one does not join them.
+  check("stories opened days apart may not be folded", !stories.mayFold(s.storyId, story));
+  check("stories opened the same day may", stories.mayFold(story, stories.fileSource(other).storyId));
+}
+
+section("A story that grew past one event is taken apart");
+{
+  const soon = (hoursAgo) => new Date(Date.now() - hoursAgo * 3600e3).toISOString();
+  const mk = (title, at) =>
+    Number(
+      db()
+        .prepare("INSERT INTO sources (title, kind, status, outlet, published_at) VALUES (?, 'url', 'chunked', 'Wire', ?)")
+        .run(title, at).lastInsertRowid
+    );
+  const a1 = mk("Senate confirms Halvorsen as fisheries envoy", soon(300));
+  const a2 = mk("Halvorsen confirmed as fisheries envoy by Senate", soon(296));
+  const b1 = mk("Quebec ferry strike ends after nine days", soon(20));
+  const b2 = mk("Ferry strike in Quebec ends", soon(18));
+  const runaway = Number(
+    db().prepare("INSERT INTO stories (title, shingle, first_seen, last_seen) VALUES (?, '', ?, ?)").run("Senate confirms Halvorsen as fisheries envoy", soon(300), soon(18)).lastInsertRowid
+  );
+  for (const id of [a1, a2, b1, b2]) db().prepare("INSERT INTO story_sources (story_id, source_id) VALUES (?, ?)").run(runaway, id);
+  const named = Number(db().prepare("INSERT INTO stories (title, shingle, named_by, first_seen, last_seen) VALUES ('My long story', '', 'user', ?, ?)").run(soon(400), soon(1)).lastInsertRowid);
+  const n1 = mk("A thing happened", soon(400));
+  const n2 = mk("Another thing happened", soon(1));
+  for (const id of [n1, n2]) db().prepare("INSERT INTO story_sources (story_id, source_id) VALUES (?, ?)").run(named, id);
+
+  const result = stories.splitRunaways();
+  const storyOf = (id) => db().prepare("SELECT story_id FROM story_sources WHERE source_id = ?").get(id)?.story_id;
+  check("the runaway is gone", !db().prepare("SELECT 1 FROM stories WHERE id = ?").get(runaway), JSON.stringify(result));
+  check("its first event's accounts are one story again", storyOf(a1) && storyOf(a1) === storyOf(a2));
+  check("its second event's accounts are another", storyOf(b1) && storyOf(b1) === storyOf(b2) && storyOf(b1) !== storyOf(a1));
+  check("a story you named is left alone however long it runs", storyOf(n1) === named && storyOf(n2) === named);
+  check("a second pass has nothing to do", stories.splitRunaways().stories === 0);
+
+  const rebuilt = stories.rebuildStories(soon(24 * 30));
+  check("a rebuild files every account again", rebuilt.accounts >= 4, JSON.stringify(rebuilt));
+  check("and comes back to the same grouping", storyOf(a1) === storyOf(a2) && storyOf(b1) === storyOf(b2) && storyOf(a1) !== storyOf(b1));
+  check("without touching the story you named", storyOf(n1) === named && storyOf(n2) === named);
 }
 
 /* ------------------------------------------------------------- dedupe */
