@@ -194,13 +194,101 @@ export function localStatus(): LocalStatus {
 const SYNC_DIR = path.join(DATA_DIR, "sync");
 const BACKUPS_DIR = path.join(DATA_DIR, "backups");
 
-/** A consistent copy of the database, written while it stays in use. */
-export function snapshot(): string {
+/** A copy in data/sync older than this is what a failed or abandoned sync left behind. */
+const STALE_COPY_MS = 60 * 60_000;
+/** After a copy fails, the next is refused for this long — a follower asks again every few seconds. */
+const COPY_RETRY_AFTER_MS = 5 * 60_000;
+/** Room kept free beyond the copy itself, so a copy never fills the drive. */
+const COPY_HEADROOM_BYTES = 512 * 1024 * 1024;
+
+/**
+ * Deletes copies a failed or abandoned sync left in data/sync. Each can be as
+ * large as the library: on 28 Sep 2026 a follower retrying every ten seconds
+ * against a nearly full drive left 1.3 GB of half-written ones there.
+ */
+export function sweepStaleCopies(now = Date.now()): number {
+  let removed = 0;
+  let names: string[];
+  try {
+    names = fs.readdirSync(SYNC_DIR);
+  } catch {
+    return 0;
+  }
+  for (const name of names) {
+    const m = /^(?:snapshot|received|incoming)-(\d+)\.db(?:-journal|-wal|-shm)?$/.exec(name);
+    if (!m || now - Number(m[1]) < STALE_COPY_MS) continue;
+    try {
+      fs.unlinkSync(path.join(SYNC_DIR, name));
+      removed++;
+    } catch {
+      /* still open somewhere; the next sweep has it */
+    }
+  }
+  return removed;
+}
+
+function removeCopy(file: string): void {
+  for (const f of [file, `${file}-journal`, `${file}-wal`, `${file}-shm`]) {
+    try {
+      fs.unlinkSync(f);
+    } catch {
+      /* never written */
+    }
+  }
+}
+
+let copyFailed: { at: number; message: string } | null = null;
+
+/**
+ * A consistent copy of the database, written while it stays in use.
+ *
+ * SQLite's online backup, a hundred pages at a time, handing the event loop
+ * back between steps. It used to be one VACUUM INTO statement, and
+ * better-sqlite3 runs statements synchronously: the whole server stood still
+ * for as long as copying 200-odd MB took — no page, no answer to a window's
+ * check-in — so every open window put up "The Corpus server is down" while a
+ * follower took its copy. The worker writes through the same connection, so
+ * its writes reach the copy as it is made rather than restarting it.
+ *
+ * A copy that fails is deleted, and a drive without room for one is refused
+ * before a byte is written. After a failure the next copy waits five minutes,
+ * whoever asks: a follower on an older version retries on every tick.
+ */
+export async function snapshot(): Promise<string> {
   fs.mkdirSync(SYNC_DIR, { recursive: true });
+  sweepStaleCopies();
+  if (copyFailed && Date.now() - copyFailed.at < COPY_RETRY_AFTER_MS) {
+    const next = new Date(copyFailed.at + COPY_RETRY_AFTER_MS).toLocaleTimeString();
+    throw new Error(`The last copy of this library failed (${copyFailed.message}). The next is allowed at ${next}.`);
+  }
+  const conn = db();
+  const need =
+    (conn.pragma("page_count", { simple: true }) as number) * (conn.pragma("page_size", { simple: true }) as number);
+  const disk = fs.statfsSync(SYNC_DIR);
+  const free = disk.bavail * disk.bsize;
+  if (free < need + COPY_HEADROOM_BYTES) {
+    const mb = (n: number) => `${Math.round(n / 1024 / 1024)} MB`;
+    const message = `the drive has ${mb(free)} free; a copy needs ${mb(need)} and leaves ${mb(COPY_HEADROOM_BYTES)} spare`;
+    copyFailed = { at: Date.now(), message };
+    throw new Error(`Not enough room for a copy of this library: ${message}.`);
+  }
   const file = path.join(SYNC_DIR, `snapshot-${Date.now()}.db`);
-  // VACUUM INTO writes a complete, checkpointed copy in one statement and
-  // needs no lock on the source beyond a read; the worker carries on.
-  db().prepare("VACUUM INTO ?").run(file);
+  try {
+    await conn.backup(file);
+    // The copy carries the source's WAL mode in its header; a single file in
+    // rollback mode is what gets sent and installed.
+    const copy = new Database(file);
+    try {
+      copy.pragma("journal_mode = DELETE");
+    } finally {
+      copy.close();
+    }
+  } catch (err) {
+    removeCopy(file);
+    copyFailed = { at: Date.now(), message: (err as Error).message.slice(0, 200) };
+    throw err;
+  }
+  copyFailed = null;
   return file;
 }
 
@@ -401,8 +489,16 @@ async function download(peer: Peer): Promise<string> {
   fs.mkdirSync(SYNC_DIR, { recursive: true });
   const file = path.join(SYNC_DIR, `incoming-${Date.now()}.db`);
   const res = await peerFetch(peer, "/api/sync/snapshot", {}, 30 * 60_000);
-  if (!res.ok || !res.body) throw new Error(`The peer answered ${res.status} to a snapshot request.`);
-  await pipeline(Readable.fromWeb(res.body as import("node:stream/web").ReadableStream), fs.createWriteStream(file));
+  if (!res.ok || !res.body) {
+    const said = ((await res.json().catch(() => ({}))) as { error?: string }).error;
+    throw new Error(said ?? `The peer answered ${res.status} to a snapshot request.`);
+  }
+  try {
+    await pipeline(Readable.fromWeb(res.body as import("node:stream/web").ReadableStream), fs.createWriteStream(file));
+  } catch (err) {
+    removeCopy(file);
+    throw err;
+  }
   return file;
 }
 
@@ -643,8 +739,11 @@ export async function uploadTo(
 ): Promise<{ fingerprint: Fingerprint; filesSent: number; bytesSent: number }> {
   if (syncing) throw new Error(`A sync is already running (${syncing}).`);
   syncing = `sending to ${peer.url}`;
-  const file = snapshot();
+  let file = "";
   try {
+    // Inside the try: a copy that fails must still clear `syncing`, or every
+    // later sync on this machine reports one already running.
+    file = await snapshot();
     const query = new URLSearchParams({ from: os.hostname() });
     if (opts.expect) query.set("expect", opts.expect);
     if (opts.force) query.set("force", "1");
@@ -691,11 +790,7 @@ export async function uploadTo(
     return { fingerprint: fingerprint(), filesSent, bytesSent };
   } finally {
     syncing = null;
-    try {
-      fs.unlinkSync(file);
-    } catch {
-      /* already gone */
-    }
+    if (file) removeCopy(file);
   }
 }
 

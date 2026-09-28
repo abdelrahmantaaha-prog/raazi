@@ -76,6 +76,12 @@ export interface FollowTick {
 
 let lastTick: FollowTick | null = null;
 let ticking = false;
+/**
+ * When a copy from the primary last failed. Only a successful pull used to
+ * start the wait between copies, so a failing one was retried on every tick —
+ * every few seconds — and each try had the primary make a whole copy.
+ */
+let pullFailedAt: number | null = null;
 
 /** Tells the primary this follower exists, and whether it is about to send work back. */
 async function checkIn(peer: Peer, bringingWork: boolean): Promise<void> {
@@ -169,11 +175,19 @@ export async function followTick(opts: { resolve?: "keep-local" | "keep-primary"
         return report("behind", `${host} has moved on; this copy catches up within a few minutes.`);
       case "first-sync":
       case "pull":
+        if (!opts.resolve && pullFailedAt !== null && Date.now() - pullFailedAt < FOLLOW_PULL_EVERY_MS) {
+          const next = new Date(pullFailedAt + FOLLOW_PULL_EVERY_MS).toLocaleTimeString();
+          return report("behind", `The last copy from ${host} failed; the next try is at ${next}.`);
+        }
         try {
           await pullFrom(peer, { force: true });
         } catch (err) {
-          if (!/already the same/.test((err as Error).message)) throw err;
+          if (!/already the same/.test((err as Error).message)) {
+            pullFailedAt = Date.now();
+            throw err;
+          }
         }
+        pullFailedAt = null;
         record("pull");
         return report("pulled", `Brought up to date from ${host}.`);
       case "push": {

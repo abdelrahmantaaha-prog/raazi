@@ -72,7 +72,7 @@ section("Files are listed and resolved inside data/ only");
 
 section("A snapshot is a whole library");
 {
-  const file = sync.snapshot();
+  const file = await sync.snapshot();
   check("the snapshot exists", fs.existsSync(file));
   const probe = new Database(file, { readonly: true });
   check("it carries the rows", probe.prepare("SELECT COUNT(*) AS n FROM sources").get().n === 2);
@@ -81,12 +81,35 @@ section("A snapshot is a whole library");
   fs.unlinkSync(file);
 }
 
+section("Making a copy never stops the server answering");
+{
+  // Enough rows that the copy takes many steps: a VACUUM INTO of the live
+  // library held the whole server for its length, and every window said the
+  // server was down while a follower took its copy.
+  db().exec("CREATE TABLE IF NOT EXISTS __ballast (x TEXT)");
+  const put = db().prepare("INSERT INTO __ballast (x) VALUES (?)");
+  db().transaction(() => {
+    for (let i = 0; i < 3000; i++) put.run("x".repeat(2000));
+  })();
+  let ticks = 0;
+  const every = setInterval(() => ticks++, 0);
+  const file = await sync.snapshot();
+  clearInterval(every);
+  check("other work runs while the copy is made", ticks >= 3, `${ticks} ticks`);
+  const probe = new Database(file, { readonly: true });
+  check("and the copy is whole", probe.prepare("SELECT COUNT(*) AS n FROM __ballast").get().n === 3000);
+  check("in one file, not a WAL pair", probe.pragma("journal_mode", { simple: true }) === "delete");
+  probe.close();
+  fs.unlinkSync(file);
+  db().exec("DROP TABLE __ballast");
+}
+
 section("Installing a snapshot swaps the library and keeps the old one");
 {
   // The "peer": a library with a different source, and a path recorded on
   // another machine.
   const peerFile = path.join(SANDBOX, "peer.db");
-  const seed = sync.snapshot();
+  const seed = await sync.snapshot();
   fs.renameSync(seed, peerFile);
   const peer = new Database(peerFile);
   peer.prepare("DELETE FROM sources").run();
@@ -166,7 +189,7 @@ section("A primary that cannot be reached is reported down");
 section("A copy sent back is checked before it is installed");
 {
   const { Readable } = await import("node:stream");
-  const sent = sync.snapshot();
+  const sent = await sync.snapshot();
   const peer = new Database(sent);
   peer.prepare("INSERT INTO sources (title, kind, status) VALUES ('Sent back', 'text', 'ready')").run();
   peer.close();
@@ -231,6 +254,82 @@ section("A follower's copy never runs the worker");
   check("kicking it does nothing on a copy", worker.workerStatus().running === false);
   check("and the copy knows it is one", follow.isFollower() === true && follow.followView().follower === true);
   delete process.env.CORPUS_FOLLOWER;
+}
+
+// Last: a failed copy holds the next one off for five minutes, which would
+// refuse every copy a later section asked for.
+section("A failed copy leaves nothing behind, and the next waits");
+{
+  const dir = path.join(SANDBOX, "sync");
+  fs.mkdirSync(dir, { recursive: true });
+  for (const n of fs.readdirSync(dir)) fs.rmSync(path.join(dir, n), { force: true });
+  const old = Date.now() - 2 * 60 * 60_000;
+  for (const n of [`snapshot-${old}.db`, `snapshot-${old}.db-journal`, `incoming-${old}.db`, `received-${Date.now()}.db`]) {
+    fs.writeFileSync(path.join(dir, n), "half a copy");
+  }
+  check("copies an earlier failure left are swept", sync.sweepStaleCopies() === 3);
+  check("one still being received is not", fs.readdirSync(dir).some((n) => n.startsWith("received-")));
+
+  const proto = Object.getPrototypeOf(db());
+  const realBackup = proto.backup;
+  proto.backup = async function (file) {
+    fs.writeFileSync(file, "half a copy");
+    throw new Error("disk full");
+  };
+  let first = null;
+  try {
+    await sync.snapshot();
+  } catch (err) {
+    first = err;
+  }
+  proto.backup = realBackup;
+  check("a copy that fails says why", first?.message === "disk full", first?.message);
+  check("and its half-written file is gone", !fs.readdirSync(dir).some((n) => n.startsWith("snapshot-")));
+  let second = null;
+  try {
+    await sync.snapshot();
+  } catch (err) {
+    second = err;
+  }
+  check("the next copy is refused for a while, without trying", /last copy of this library failed/.test(second?.message ?? ""), second?.message);
+}
+
+section("A follower whose copy failed waits before asking again");
+{
+  const http = await import("node:http");
+  let asked = 0;
+  const token = "t".repeat(64);
+  // A primary that answers its status and refuses the copy, as one out of room does.
+  const primary = http.createServer((req, res) => {
+    if (req.url.startsWith("/api/sync/status")) {
+      res.setHeader("content-type", "application/json");
+      const f = { ...sync.fingerprint(), workKey: "moved-on", key: "moved-on" };
+      res.end(JSON.stringify({ ...sync.localStatus(), host: "office", fingerprint: f }));
+    } else if (req.url.startsWith("/api/sync/snapshot")) {
+      asked++;
+      res.statusCode = 503;
+      res.setHeader("content-type", "application/json");
+      res.end(JSON.stringify({ error: "Not enough room for a copy of this library." }));
+    } else {
+      res.statusCode = 204;
+      res.end();
+    }
+  });
+  await new Promise((r) => primary.listen(0, "127.0.0.1", r));
+  const url = `http://127.0.0.1:${primary.address().port}`;
+  follow.saveFollowSettings({
+    primaryUrl: url,
+    primaryToken: token,
+    last: { at: new Date().toISOString(), localKey: sync.fingerprint().workKey, primaryKey: "before", direction: "pull" },
+    pulledAt: new Date(Date.now() - 10 * 60_000).toISOString(),
+    offlineSince: null,
+  });
+  const first = await follow.followTick();
+  check("the primary's reason reaches the follower", first.state === "error" && /Not enough room/.test(first.message), JSON.stringify(first));
+  const second = await follow.followTick();
+  check("the next tick does not ask again", asked === 1 && second.state === "behind" && /next try/.test(second.message), `${asked} asks, ${second.message}`);
+  follow.saveFollowSettings({ primaryUrl: "", primaryToken: "" });
+  await new Promise((r) => primary.close(r));
 }
 
 console.log(`\n${passed} passed, ${failed} failed`);
