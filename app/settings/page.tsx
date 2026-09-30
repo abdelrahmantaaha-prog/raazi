@@ -9,6 +9,7 @@ import { LessonsCard } from "./Lessons";
 import { Disciplines } from "./Disciplines";
 import { LanCard, SyncCard } from "./SyncCard";
 import { ClaudePlanCard } from "./ClaudePlan";
+import { PLAN_MODELS, STAGE_PLAN_ADVICE, planModelName } from "@/lib/claude-models";
 
 /** The languages entries can be written in. Quotes stay in their own. */
 const ENTRY_LANGUAGES: [string, string][] = [
@@ -37,6 +38,7 @@ interface Settings {
   keys: KeyRow[];
   keyRetryMinutes: number;
   routing: Partial<Record<Stage, ProviderId>>;
+  stageModels?: Partial<Record<Stage, string>>;
   model: string;
   tier: "free" | "paid";
   requestsPerMinute: number;
@@ -601,7 +603,28 @@ function RoutingCard({
             <div className="min-w-[13rem] flex-1">
               <div className="text-sm font-medium">{STAGE_LABEL[stage]}</div>
               <div className="text-xs text-[var(--color-muted)]">{STAGE_NOTE[stage]}</div>
+              {cfg.routing?.[stage] === "claude-code" && STAGE_PLAN_ADVICE[stage] ? (
+                <div className="text-xs text-[var(--color-muted)]">
+                  Suggested: {planModelName(STAGE_PLAN_ADVICE[stage].model)} — {STAGE_PLAN_ADVICE[stage].why}.
+                </div>
+              ) : null}
             </div>
+            {cfg.routing?.[stage] === "claude-code" ? (
+              <select
+                className={`${inputClass} max-w-[11rem]`}
+                aria-label="Which Claude for this stage"
+                disabled={busy}
+                value={cfg.stageModels?.[stage] ?? ""}
+                onChange={(e) => onSave({ stageModels: { [stage]: e.target.value } })}
+              >
+                <option value="">As on the Claude card ({planModelName(cfg.claudeModel ?? "claude-sonnet-5-5")})</option>
+                {PLAN_MODELS.map((m) => (
+                  <option key={m.id} value={m.id}>
+                    {m.name}
+                  </option>
+                ))}
+              </select>
+            ) : null}
             <select
               className={`${inputClass} max-w-[13rem]`}
               disabled={busy || choices.length < 2}

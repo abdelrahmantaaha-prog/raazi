@@ -20,6 +20,21 @@ export function isPlanModel(v: unknown): v is PlanModel {
   return PLAN_MODELS.some((m) => m.id === v);
 }
 
+/**
+ * Which Claude suits each stage, as Settings suggests it: the quickest where
+ * the calls number in thousands and the work is mechanical, the default where
+ * judgement matters, the strongest for the few calls you read and present.
+ */
+export const STAGE_PLAN_ADVICE: Record<string, { model: string; why: string }> = {
+  extract: { model: "claude-haiku-4-5", why: "thousands of calls, and reading a passage into a set shape is mechanical" },
+  resolve: { model: "claude-sonnet-5-5", why: "small and occasional, but telling two people apart takes judgement" },
+  entry: { model: "claude-sonnet-5-5", why: "writes well; Opus writes better and uses the allowance faster" },
+  verify: { model: "claude-sonnet-5-5", why: "as many calls as writing, and it has to catch what the writer missed" },
+  tag: { model: "claude-haiku-4-5", why: "one short call per source" },
+  brief: { model: "claude-opus-5-5", why: "a handful of calls a week, and the one you present" },
+  group: { model: "claude-haiku-4-5", why: "sorting headlines into piles is quick work" },
+};
+
 export function planModelName(id: string | null | undefined): string {
   return PLAN_MODELS.find((m) => m.id === id)?.name ?? id ?? "";
 }

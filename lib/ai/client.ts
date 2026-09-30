@@ -272,11 +272,15 @@ const MAX_INVALID_PER_CALL = 2;
  * The other providers do not meter per model, so there the caller's model
  * simply stands.
  */
-export function modelOfCall(k: ApiKey, opts: { model?: string }, quality = false, cheap = false): string {
+export function modelOfCall(k: ApiKey, opts: { model?: string; stage?: string }, quality = false, cheap = false): string {
   const provider = k.provider ?? "gemini";
   // Claude on the plan: the key's own model, else the one chosen in Settings.
   // A caller's model is a Gemini name and means nothing to Claude Code.
-  if (spec(provider).kind === "claude-code") return k.model?.trim() || getConfig().claudeModel || modelFor(k);
+  // A stage can have its own Claude (Settings → routing).
+  if (spec(provider).kind === "claude-code") {
+    const cfg = getConfig();
+    return k.model?.trim() || (opts.stage && cfg.stageModels?.[opts.stage as Stage]) || cfg.claudeModel || modelFor(k);
+  }
   if (spec(provider).kind !== "gemini") return k.model?.trim() || opts.model || modelFor(k, { quality, cheap });
   const wanted = opts.model && !(quality && isLiteModel(opts.model)) ? opts.model : undefined;
   return wanted && !modelSpent(provider, wanted) ? wanted : modelFor(k, { quality, cheap });

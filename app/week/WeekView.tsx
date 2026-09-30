@@ -253,6 +253,11 @@ export default function WeekView({
       ) : null}
 
       <nav className="flex flex-wrap items-center gap-3 border-t border-[var(--color-rule)] pt-4 text-sm">
+        {brief?.state === "done" ? (
+          <a href={`/api/export?format=pdf&brief=${encodeURIComponent(week)}`} className="rounded border border-[var(--color-rule)] px-2 py-0.5 hover:border-[var(--color-accent)]">
+            PDF
+          </a>
+        ) : null}
         <Link href={`/week?week=${previous.replace("week:", "")}`} className="hover:text-[var(--color-accent)]">
           ← the week before
         </Link>

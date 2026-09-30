@@ -67,6 +67,7 @@ export async function POST(req: Request) {
     keyAction?: "remove" | "revive" | "rename" | "disable" | "enable";
     /** Routing. */
     routing?: Partial<Record<Stage, ProviderId>>;
+    stageModels?: Record<string, string | null>;
     /** Everything else. */
     model?: string;
     tier?: "free" | "paid";
@@ -168,6 +169,19 @@ export async function POST(req: Request) {
     (patch as Record<string, unknown>)[k] = accepted;
   }
 
+  // { stageModels: { brief: "claude-opus-5-5", extract: "" } } — "" goes back to the plan's model.
+  if (body.stageModels !== undefined) {
+    if (body.stageModels === null || typeof body.stageModels !== "object") return badRequest("stageModels must be an object of stage → model.");
+    const next: Partial<Record<Stage, string>> = { ...(getConfig().stageModels ?? {}) };
+    for (const [stage, model] of Object.entries(body.stageModels)) {
+      if (!isStage(stage)) return badRequest(`stageModels: unknown stage ${stage}.`);
+      if (model === "" || model === null) delete next[stage];
+      else if (isPlanModel(model)) next[stage] = model;
+      else return badRequest(`stageModels: ${String(model)} is not a Claude the plan offers.`);
+    }
+    patch.stageModels = next;
+    note = "Routing updated.";
+  }
   if (body.routing !== undefined) {
     if (body.routing === null || typeof body.routing !== "object") {
       return badRequest("routing must be an object of stage → provider.");

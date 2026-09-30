@@ -6,6 +6,7 @@ import { citationOf, evidenceFor, listEntities } from "@/lib/queries";
 import { formatCitation } from "@/lib/citation";
 import { formatLocator } from "@/lib/chunk";
 import type { Locator } from "@/lib/types";
+import { briefDoc, entryDoc, toPdf } from "@/lib/pdf-export";
 
 export const dynamic = "force-dynamic";
 
@@ -23,6 +24,20 @@ export async function GET(req: Request) {
   }
 
   switch (format) {
+    // A designed PDF of one entry (?entity=) or one brief (?brief=<day key>); see lib/pdf-export.ts.
+    case "pdf": {
+      const briefDay = url.searchParams.get("brief");
+      const doc = briefDay ? briefDoc(briefDay) : entityId !== null ? entryDoc(entityId) : null;
+      if (!doc) return notFound(briefDay ? "That brief has not been written." : "That entry has not been written.");
+      try {
+        const pdf = await toPdf(doc.html);
+        return new NextResponse(new Uint8Array(pdf), {
+          headers: { "content-type": "application/pdf", "content-disposition": attachment(`${doc.name}.pdf`) },
+        });
+      } catch (e) {
+        return badRequest(e instanceof Error ? e.message : String(e));
+      }
+    }
     case "markdown":
       return text(entriesMarkdown(entityId ?? undefined), "corpus-entries.md");
     case "quotes":

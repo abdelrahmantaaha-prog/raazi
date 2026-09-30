@@ -62,6 +62,12 @@ export interface Config {
   briefHours: number;
   /** Which Claude "Claude (your plan)" asks for. See lib/claude-models.ts. */
   claudeModel: string;
+  /**
+   * The Claude each stage asks the plan for, when that stage is routed to
+   * "Claude (your plan)"; a stage left out uses claudeModel. So the brief can
+   * have Opus while the thousands of reading calls run on Haiku.
+   */
+  stageModels: Partial<Record<Stage, string>>;
 }
 
 const DEFAULTS: Config = {
@@ -83,10 +89,11 @@ const DEFAULTS: Config = {
   dailyBrief: true,
   briefHours: 24,
   claudeModel: "claude-sonnet-5-5",
+  stageModels: {},
 };
 
 /** Settings that are about the tooling rather than the subject. */
-const SHARED_FIELDS = ["routing", "model", "embedModel", "claudeModel"] as const;
+const SHARED_FIELDS = ["routing", "model", "embedModel", "claudeModel", "stageModels"] as const;
 
 export function getConfig(): Config {
   // API keys are not part of this — they live on the ring in lib/keys.ts,
@@ -129,6 +136,7 @@ export function publicConfig() {
     model: c.model,
     embedModel: c.embedModel,
     claudeModel: c.claudeModel,
+    stageModels: c.stageModels ?? {},
     tier: c.tier,
     requestsPerMinute: c.requestsPerMinute,
     entryThreshold: c.entryThreshold,

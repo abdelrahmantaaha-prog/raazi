@@ -193,11 +193,19 @@ export function EntityView({
           <Button variant="primary" onClick={generate} disabled={busy}>
             {entry ? (entity.entry_state === "stale" ? "Update entry" : "Regenerate") : "Write entry"}
           </Button>
+          {entry ? (
+            <a
+              href={`/api/export?format=pdf&entity=${entity.id}`}
+              className="rounded border border-[var(--color-rule)] bg-white px-3 py-1.5 text-sm font-medium hover:bg-[var(--color-accent-soft)]"
+            >
+              PDF
+            </a>
+          ) : null}
           <a
             href={`/api/export?format=markdown&entity=${entity.id}`}
             className="rounded border border-[var(--color-rule)] bg-white px-3 py-1.5 text-sm font-medium hover:bg-[var(--color-accent-soft)]"
           >
-            Export
+            Markdown
           </a>
         </div>
       </div>

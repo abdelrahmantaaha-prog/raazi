@@ -336,6 +336,14 @@ export function BriefView({
               Rewrite {formatDate(brief.day)}
             </button>
           ) : null}
+          {brief && brief.state === "done" ? (
+            <a
+              href={`/api/export?format=pdf&brief=${encodeURIComponent(brief.day)}`}
+              className="rounded border border-[var(--color-rule)] px-3 py-1.5 text-sm hover:border-[var(--color-accent)]"
+            >
+              PDF
+            </a>
+          ) : null}
           <Link
             href="/feeds"
             className="rounded border border-[var(--color-rule)] px-3 py-1.5 text-sm hover:border-[var(--color-accent)]"
