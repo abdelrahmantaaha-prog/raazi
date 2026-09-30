@@ -102,7 +102,7 @@ export const PROVIDERS: Record<ProviderId, ProviderSpec> = {
     // Text only: the adapter sends one prompt through Claude Code, so pages
     // and recordings stay on Gemini.
     capabilities: { json: true, vision: false, audio: false, embed: false },
-    note: "Claude on your Claude subscription, through Claude Code on this machine — no per-token bill, but every call counts against the same five-hour and weekly limits as your own chats. Claude Code must be installed and signed in; any text works as the key. Worth it for the brief and for writing entries; reading passages would spend the week's allowance in a book or two.",
+    note: "Claude on your Claude subscription, through Claude Code on this machine — no per-token bill, but every call counts against the same five-hour and weekly limits as your own chats. Claude Code must be installed and signed in on this computer; there is no key to paste — add it, then sign in or switch account in its card. Worth it for the brief and for writing entries; reading passages would spend the week's allowance in a book or two.",
     freeTier: "no bill — your plan's usage limits, shared with your own Claude use; when they run out the work moves to Gemini until they reset",
     keysMultiply: false,
   },

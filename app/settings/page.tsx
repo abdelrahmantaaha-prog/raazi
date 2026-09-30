@@ -216,13 +216,16 @@ export default function SettingsPage() {
                 </option>
               ))}
             </select>
-            <input
-              className={`${inputClass} min-w-[10rem] flex-1`}
-              type="password"
-              placeholder="Paste the key"
-              value={key}
-              onChange={(e) => setKey(e.target.value)}
-            />
+            {/* The plan has no key: Claude Code on this computer is already signed in. */}
+            {provider !== "claude-code" && (
+              <input
+                className={`${inputClass} min-w-[10rem] flex-1`}
+                type="password"
+                placeholder="Paste the key"
+                value={key}
+                onChange={(e) => setKey(e.target.value)}
+              />
+            )}
             <input
               className={`${inputClass} max-w-[9rem]`}
               placeholder="Label (optional)"
@@ -232,12 +235,15 @@ export default function SettingsPage() {
           </div>
 
           <div className="mt-2 flex flex-wrap gap-2">
-            <input
-              className={`${inputClass} min-w-[12rem] flex-1`}
-              placeholder={`Model (default: ${PROVIDERS[provider].defaultModel})`}
-              value={keyModel}
-              onChange={(e) => setKeyModel(e.target.value)}
-            />
+            {/* The plan's model is picked in its own card, once it is added. */}
+            {provider !== "claude-code" && (
+              <input
+                className={`${inputClass} min-w-[12rem] flex-1`}
+                placeholder={`Model (default: ${PROVIDERS[provider].defaultModel})`}
+                value={keyModel}
+                onChange={(e) => setKeyModel(e.target.value)}
+              />
+            )}
             {provider === "ollama" && (
               <input
                 className={`${inputClass} min-w-[12rem] flex-1`}
@@ -248,11 +254,12 @@ export default function SettingsPage() {
             )}
             <Button
               variant="primary"
-              disabled={busy || !key.trim()}
+              disabled={busy || (provider !== "claude-code" && !key.trim())}
               onClick={() => {
                 void save(
                   {
-                    addKey: key.trim(),
+                    // The ring wants a value; the plan has none, so it gets a fixed one.
+                    addKey: provider === "claude-code" ? "claude-plan" : key.trim(),
                     label: label.trim() || undefined,
                     provider,
                     keyModel: keyModel.trim() || undefined,
@@ -264,7 +271,7 @@ export default function SettingsPage() {
                 setKeyModel("");
               }}
             >
-              {busy ? "Checking…" : "Add key"}
+              {busy ? "Checking…" : provider === "claude-code" ? "Add Claude (your plan)" : "Add key"}
             </Button>
           </div>
 
