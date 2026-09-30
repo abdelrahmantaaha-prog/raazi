@@ -60,6 +60,8 @@ export interface Config {
   dailyBrief: boolean;
   /** How many hours back a brief looks. A day, unless you read less often. */
   briefHours: number;
+  /** Which Claude "Claude (your plan)" asks for. See lib/claude-models.ts. */
+  claudeModel: string;
 }
 
 const DEFAULTS: Config = {
@@ -80,10 +82,11 @@ const DEFAULTS: Config = {
   feedReview: true,
   dailyBrief: true,
   briefHours: 24,
+  claudeModel: "claude-sonnet-5-5",
 };
 
 /** Settings that are about the tooling rather than the subject. */
-const SHARED_FIELDS = ["routing", "model", "embedModel"] as const;
+const SHARED_FIELDS = ["routing", "model", "embedModel", "claudeModel"] as const;
 
 export function getConfig(): Config {
   // API keys are not part of this — they live on the ring in lib/keys.ts,
@@ -125,6 +128,7 @@ export function publicConfig() {
     keyRetryMinutes: c.keyRetryMinutes,
     model: c.model,
     embedModel: c.embedModel,
+    claudeModel: c.claudeModel,
     tier: c.tier,
     requestsPerMinute: c.requestsPerMinute,
     entryThreshold: c.entryThreshold,

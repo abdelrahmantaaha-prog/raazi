@@ -143,6 +143,18 @@ const plan = keys.listKeys().find((k) => k.provider === "claude-code");
 const rest = plan?.exhaustedUntil ? new Date(plan.exhaustedUntil).getTime() - Date.now() : 0;
 check("the key rests for hours, not the usual one", rest > 7 * 3_600_000 && rest <= 8 * 3_600_000 + 60_000, String(plan?.exhaustedUntil));
 
+section("The model chosen in Settings");
+{
+  const { modelOfCall } = await import("../lib/ai/client.ts");
+  const planKey = keys.listKeys().find((k) => k.provider === "claude-code");
+  saveConfig({ claudeModel: "claude-opus-5-5" });
+  check("the plan asks for the chosen model", modelOfCall(planKey, { model: "gemini-3.8-flash" }) === "claude-opus-5-5");
+  saveConfig({ claudeModel: "claude-sonnet-5-5" });
+  keys.markModelSpent("claude-code", "claude-sonnet-5-5", 600);
+  keys.forgetPlanLimit();
+  check("signing in to another account lets go of a spent plan", !keys.modelSpent("claude-code", "claude-sonnet-5-5"));
+}
+
 keys.clearSpentModels();
 fs.rmSync(SANDBOX, { recursive: true, force: true });
 

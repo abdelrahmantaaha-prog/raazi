@@ -93,7 +93,7 @@ export function readResult(stdout: string): CliAnswer {
   }
   const said = String(r.result ?? "").trim();
   if (r.is_error) {
-    if (r.api_error_status === 429 || /hit your .*limit|usage limit|limit reached/i.test(said)) {
+    if (r.api_error_status === 429 || /hit your .*limit|usage limit|limit reached|requires usage credits/i.test(said)) {
       throw new SubscriptionLimitError(said, parseReset(said));
     }
     if (r.api_error_status === 401 || /\/login|not logged|authenticat/i.test(said)) {

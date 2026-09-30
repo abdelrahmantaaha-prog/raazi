@@ -8,6 +8,7 @@ import { CorrectionsCard } from "./Corrections";
 import { LessonsCard } from "./Lessons";
 import { Disciplines } from "./Disciplines";
 import { LanCard, SyncCard } from "./SyncCard";
+import { ClaudePlanCard } from "./ClaudePlan";
 
 /** The languages entries can be written in. Quotes stay in their own. */
 const ENTRY_LANGUAGES: [string, string][] = [
@@ -49,6 +50,7 @@ interface Settings {
   briefHours: number;
   morningHour: number;
   entryLanguage?: string;
+  claudeModel?: string;
 }
 
 export default function SettingsPage() {
@@ -304,6 +306,14 @@ export default function SettingsPage() {
             above.
           </span>
         </p>
+      )}
+
+      {cfg.keys.some((k) => k.provider === "claude-code") && (
+        <ClaudePlanCard
+          model={cfg.claudeModel ?? "claude-sonnet-5-5"}
+          busy={busy}
+          onModel={(m) => void save({ claudeModel: m }, "Model updated.")}
+        />
       )}
 
       <RoutingCard cfg={cfg} busy={busy} onSave={save} />

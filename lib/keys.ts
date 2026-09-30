@@ -528,3 +528,16 @@ export function publicKeys() {
     fromEnv: k.id === "env",
   }));
 }
+
+/**
+ * A new Claude account was signed in to: its plan has its own allowance, so
+ * nothing set aside because the last one was spent stays set aside.
+ */
+export function forgetPlanLimit(): void {
+  for (const k of [...spentModels().keys()]) if (k.startsWith("claude-code:")) spentModels().delete(k);
+  for (const k of listKeys()) {
+    if (k.provider === "claude-code" && (k.exhaustedUntil || k.cooldownUntil || k.invalid)) {
+      update(k.id, { exhaustedUntil: null, cooldownUntil: null, invalid: false, quotaStrikes: 0, lastError: null });
+    }
+  }
+}
