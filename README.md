@@ -324,6 +324,17 @@ Extra keys multiply your quota on Gemini, whose limits are per project. Anthropi
 bills the account, so a second key there is a second label on one bill, and Ollama
 has no quota at all — any text works as its key. Settings says so under each.
 
+**Claude (your plan)** is Claude on a Claude subscription instead of an API key. Corpus
+runs Claude Code on this machine (`claude -p`, no tools, no settings, no session kept),
+so there is no per-token bill — but every call counts against the plan's five-hour and
+weekly limits, the same ones your own chats use. Claude Code has to be installed and
+signed in; any text works as the key. When the plan is spent, Claude Code says when it
+resets, the model is set aside until then, and the work falls through to Gemini. An
+`ANTHROPIC_API_KEY` in the environment is removed from the child process, so this never
+quietly bills the API. Route the brief (and, if the allowance holds, writing entries)
+here; reading passages is thousands of calls and would spend a week's allowance on a
+book or two.
+
 The key is stored server-side in `data/config.json`, not in your browser. That is
 deliberate: ingesting a book takes hundreds of calls over a long stretch, and the
 background worker has to keep going with no tab open, so it needs to reach the key

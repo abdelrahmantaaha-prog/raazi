@@ -14,10 +14,12 @@
  * Gemini and Ollama each have an adapter; Ollama speaks the OpenAI Chat
  * Completions API, so pointing that adapter at another local server is a base
  * URL, not code. Anthropic needed a third adapter — its request shape is
- * neither of the other two.
+ * neither of the other two. Claude on the Claude plan is a fourth: the same
+ * model, reached through Claude Code rather than the API, so it is limited
+ * by the subscription instead of billed by the token.
  */
 
-export type ProviderId = "gemini" | "anthropic" | "ollama";
+export type ProviderId = "gemini" | "anthropic" | "claude-code" | "ollama";
 
 export interface Capabilities {
   /** Reliable structured output against a supplied JSON schema. */
@@ -34,7 +36,7 @@ export interface ProviderSpec {
   id: ProviderId;
   label: string;
   /** How the request is shaped. */
-  kind: "gemini" | "openai" | "anthropic";
+  kind: "gemini" | "openai" | "anthropic" | "claude-code";
   baseUrl: string;
   defaultModel: string;
   keysUrl: string;
@@ -88,6 +90,22 @@ export const PROVIDERS: Record<ProviderId, ProviderSpec> = {
     // label on the same bill.
     keysMultiply: false,
   },
+  "claude-code": {
+    id: "claude-code",
+    label: "Claude (your plan)",
+    kind: "claude-code",
+    baseUrl: "",
+    // By its full name: the "sonnet" alias answered with Sonnet 5 on a Pro plan
+    // (30 Sep 2026). Claude Code reports the version that answered on every call.
+    defaultModel: "claude-sonnet-5-5",
+    keysUrl: "",
+    // Text only: the adapter sends one prompt through Claude Code, so pages
+    // and recordings stay on Gemini.
+    capabilities: { json: true, vision: false, audio: false, embed: false },
+    note: "Claude on your Claude subscription, through Claude Code on this machine — no per-token bill, but every call counts against the same five-hour and weekly limits as your own chats. Claude Code must be installed and signed in; any text works as the key. Worth it for the brief and for writing entries; reading passages would spend the week's allowance in a book or two.",
+    freeTier: "no bill — your plan's usage limits, shared with your own Claude use; when they run out the work moves to Gemini until they reset",
+    keysMultiply: false,
+  },
   ollama: {
     id: "ollama",
     label: "Local (Ollama)",
@@ -106,6 +124,14 @@ export const PROVIDERS: Record<ProviderId, ProviderSpec> = {
 };
 
 export const PROVIDER_IDS = Object.keys(PROVIDERS) as ProviderId[];
+
+/**
+ * The providers Settings offers a new key for. The pay-per-token Claude API
+ * is not one of them any more: Claude is reached on your plan, through Claude
+ * Code, and two rows both called Claude — one free, one billed — was a trap.
+ * The adapter stays, so a key already on the ring keeps working.
+ */
+export const OFFERED_PROVIDER_IDS: ProviderId[] = PROVIDER_IDS.filter((id) => id !== "anthropic");
 
 /**
  * The models a provider will answer with, best first.
@@ -151,6 +177,7 @@ export const MODEL_RING: Partial<Record<ProviderId, string[]>> = {
   // One model each, and neither meters the way Gemini's free tier does: Claude
   // bills rather than refuses, and Ollama is a file on this disk.
   anthropic: ["claude-sonnet-5"],
+  "claude-code": ["claude-sonnet-5-5"],
   ollama: ["qwen3.5:9b"],
 };
 

@@ -25,6 +25,7 @@ import { unescapeModelJson } from "./escapes";
 import { withLessons } from "../lessons";
 import { chatJson, chatText, validateOpenAiKey } from "./openai";
 import { anthropicJson, anthropicText, validateAnthropicKey, EFFORT } from "./anthropic";
+import { claudeCodeJson, claudeCodeText, validateClaudeCode } from "./claude-code";
 import {
   AllKeysExhaustedError,
   SchemaUnsupportedError,
@@ -432,7 +433,10 @@ export async function withRotation<T>(
           // only when that model was in the ring. A refusal on a model the
           // ring did not list (the embedding model, say) was charged to the
           // key instead, and the next key met the same wall.
-          const minutes = getConfig().keyRetryMinutes;
+          // The Claude plan says when it resets, and that beats a guess.
+          const minutes = failure.resetAt
+            ? Math.max(1, Math.ceil((failure.resetAt.getTime() - Date.now()) / 60_000))
+            : getConfig().keyRetryMinutes;
           markModelSpent(provider, model, minutes);
 
           // A model nothing can stand in for: the ring has no answer, and
@@ -731,6 +735,20 @@ export async function generateJson<T>(opts: {
       });
     }
 
+    if (spec(provider).kind === "claude-code") {
+      // The same model and the same effort per stage as the API path, paid
+      // for by the plan instead — see lib/ai/claude-code.ts.
+      return claudeCodeJson<T>({
+        apiKey: "",
+        model,
+        system,
+        prompt: partsToPrompt(opts.parts),
+        schema: opts.schema,
+        effort: EFFORT[opts.stage ?? ""],
+        timeoutMs,
+      });
+    }
+
     const ai = gemini(k, timeoutMs);
     const res = await ai.models.generateContent({
       model,
@@ -807,6 +825,21 @@ export async function generateText(opts: {
         apiKey: k.key,
         model,
         baseUrl: k.baseUrl,
+        system: opts.system,
+        prompt: partsToPrompt(opts.parts),
+        effort: EFFORT[opts.stage ?? ""],
+        timeoutMs,
+      });
+    }
+
+    if (spec(provider).kind === "claude-code") {
+      // Text only, like the Anthropic key; the router never sends it a page or a recording.
+      if (opts.parts.some((p) => typeof p !== "string" && !("text" in p))) {
+        throw new SchemaUnsupportedError("Claude through Claude Code takes text only; images stay on Gemini.");
+      }
+      return claudeCodeText({
+        apiKey: "",
+        model,
         system: opts.system,
         prompt: partsToPrompt(opts.parts),
         effort: EFFORT[opts.stage ?? ""],
@@ -913,6 +946,9 @@ export async function validateKey(
   }
   if (spec(provider).kind === "anthropic") {
     return validateAnthropicKey(apiKey, model, baseUrl);
+  }
+  if (spec(provider).kind === "claude-code") {
+    return validateClaudeCode();
   }
   try {
     const ai = new GoogleGenAI({ apiKey, httpOptions: { timeout: 30_000 } });

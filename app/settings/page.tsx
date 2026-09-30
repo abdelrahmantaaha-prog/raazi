@@ -2,7 +2,7 @@
 
 import { useEffect, useState } from "react";
 import { Button, Card, Field, inputClass } from "../components/ui";
-import { PROVIDERS, PROVIDER_IDS, STAGES, STAGE_LABEL, STAGE_NOTE, type ProviderId, type Stage } from "@/lib/providers";
+import { OFFERED_PROVIDER_IDS, PROVIDERS, STAGES, STAGE_LABEL, STAGE_NOTE, type ProviderId, type Stage } from "@/lib/providers";
 import { formatDateTime, relativeDate } from "@/lib/dates";
 import { CorrectionsCard } from "./Corrections";
 import { LessonsCard } from "./Lessons";
@@ -208,7 +208,7 @@ export default function SettingsPage() {
                 setBaseUrl("");
               }}
             >
-              {PROVIDER_IDS.map((id) => (
+              {OFFERED_PROVIDER_IDS.map((id) => (
                 <option key={id} value={id}>
                   {PROVIDERS[id].label}
                 </option>
@@ -567,7 +567,7 @@ function RoutingCard({
       {/* Only once there is a Claude key to route to, and only ever a
           suggestion: the stored routing is the reader's, and changing it from
           under them would be a surprise the next run pays for. */}
-      {choices.includes("anthropic") && (
+      {(choices.includes("anthropic") || choices.includes("claude-code")) && (
         <p className="mt-2 rounded bg-[var(--color-accent-soft)] px-3 py-2 text-sm">
           <span className="font-medium">Suggested split.</span>{" "}
           <span className="text-[var(--color-muted)]">

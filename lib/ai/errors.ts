@@ -177,6 +177,19 @@ export class SchemaUnsupportedError extends Error {
   }
 }
 
+/**
+ * The Claude plan's allowance is spent — the five-hour window or the week.
+ * Claude Code says when it resets, and `resetAt` is that moment when it did.
+ * Not the key's fault and not a bill: nothing on this machine will answer
+ * through the plan before then, so the work goes to the next provider.
+ */
+export class SubscriptionLimitError extends Error {
+  constructor(detail: string, readonly resetAt: Date | null) {
+    super(`The Claude plan's limit is spent: ${detail}`);
+    this.name = "SubscriptionLimitError";
+  }
+}
+
 export class SafetyBlockError extends Error {
   constructor(detail: string) {
     super(`Blocked by safety filters: ${detail}`);
@@ -294,12 +307,17 @@ export function isProviderUnavailable(err: unknown): boolean {
  * the next one.
  */
 export type KeyFailure =
-  | { kind: "daily"; reason: string }
+  /** `resetAt`, when the provider said when the allowance comes back. */
+  | { kind: "daily"; reason: string; resetAt?: Date }
   | { kind: "rate"; delayMs: number; reason: string }
   | { kind: "invalid"; reason: string }
   | { kind: "other" };
 
 export function keyFailure(err: unknown): KeyFailure {
+  if (err instanceof SubscriptionLimitError) {
+    return { kind: "daily", reason: err.message, ...(err.resetAt ? { resetAt: err.resetAt } : {}) };
+  }
+
   const status = statusOf(err);
   const raw = (err instanceof Error ? err.message : String(err)).toLowerCase();
   const details = detailsOf(err);

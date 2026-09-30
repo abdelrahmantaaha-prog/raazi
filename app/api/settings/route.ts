@@ -1,7 +1,7 @@
 import { NextResponse } from "next/server";
 import { badRequest, readBody } from "@/lib/http";
 import { getConfig, publicConfig, saveConfig, type Config } from "@/lib/config";
-import { PROVIDER_IDS, STAGES, type ProviderId, type Stage } from "@/lib/providers";
+import { OFFERED_PROVIDER_IDS, PROVIDER_IDS, STAGES, type ProviderId, type Stage } from "@/lib/providers";
 import { validateKey } from "@/lib/ai/client";
 import { addKey, removeKey, reviveKey, setKey } from "@/lib/keys";
 import { wakeParkedRuns } from "@/lib/queue";
@@ -99,6 +99,10 @@ export async function POST(req: Request) {
 
   if (body.addKey?.trim()) {
     const provider = body.provider ?? "gemini";
+    // Claude is offered on your plan now, not by the token; see OFFERED_PROVIDER_IDS.
+    if (!OFFERED_PROVIDER_IDS.includes(provider)) {
+      return badRequest("The Claude API is no longer offered — add Claude (your plan) instead.");
+    }
     const check = await validateKey(
       body.addKey.trim(),
       provider,
