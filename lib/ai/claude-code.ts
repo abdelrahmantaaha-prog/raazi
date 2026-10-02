@@ -121,7 +121,9 @@ export function readResult(stdout: string): CliAnswer {
   };
 }
 
-async function run(opts: AnthropicCall & { schema?: Record<string, unknown> }): Promise<CliAnswer> {
+async function run(
+  opts: AnthropicCall & { schema?: Record<string, unknown>; schemaInPrompt?: boolean }
+): Promise<CliAnswer> {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), "corpus-claude-"));
   const env = { ...process.env };
   delete env.ANTHROPIC_API_KEY;
@@ -130,7 +132,7 @@ async function run(opts: AnthropicCall & { schema?: Record<string, unknown> }): 
   delete env.CLAUDECODE;
 
   const schemaText = opts.schema ? JSON.stringify(opts.schema) : "";
-  const schemaInPrompt = schemaText.length > MAX_SCHEMA_ARG;
+  const schemaInPrompt = opts.schemaInPrompt || schemaText.length > MAX_SCHEMA_ARG;
   const prompt = schemaInPrompt
     ? `${opts.prompt}\n\nAnswer with JSON only, matching this JSON Schema:\n${schemaText}`
     : opts.prompt;
@@ -189,13 +191,32 @@ async function run(opts: AnthropicCall & { schema?: Record<string, unknown> }): 
 
 /** Strips a fence a model sometimes puts round JSON it was told to send bare. */
 function unfence(text: string): string {
-  return text.replace(/^```(?:json)?\s*/i, "").replace(/\s*```$/, "").trim();
+  const bare = text.replace(/^```(?:json)?\s*/i, "").replace(/\s*```$/, "").trim();
+  // And a sentence before or after the object, which a reply sometimes has.
+  if (bare.startsWith("{")) return bare;
+  const from = bare.indexOf("{");
+  const to = bare.lastIndexOf("}");
+  return from >= 0 && to > from ? bare.slice(from, to + 1) : bare;
 }
 
 export async function claudeCodeJson<T>(
   opts: AnthropicCall & { schema: Schema }
 ): Promise<{ data: T; usage: AnthropicUsage; model: string }> {
-  const answer = await run({ ...opts, schema: toJsonSchema(opts.schema) });
+  const schema = toJsonSchema(opts.schema);
+  let answer: CliAnswer;
+  try {
+    answer = await run({ ...opts, schema });
+  } catch (err) {
+    // Claude Code hands a --json-schema answer back through a tool call, and
+    // on a long Markdown body (an entry, 2–4 KB of prose and citation markers)
+    // Opus kept sending that call input that would not parse — five tries,
+    // then "error_max_structured_output_retries". On 2 Oct 2026 that was most
+    // of the day's entries. The same answer written as plain JSON in the reply
+    // comes through, so ask once more that way.
+    if (!/error_max_structured_output_retries/.test(String((err as Error)?.message))) throw err;
+    console.log("[corpus] Claude Code could not send its answer as structured output; asking for plain JSON");
+    answer = await run({ ...opts, schema, schemaInPrompt: true });
+  }
   let parsed: T;
   if (answer.structured !== undefined && answer.structured !== null) {
     parsed = answer.structured as T;
