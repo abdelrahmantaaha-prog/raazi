@@ -28,7 +28,7 @@ export function isPlanModel(v: unknown): v is PlanModel {
 export const STAGE_PLAN_ADVICE: Record<string, { model: string; why: string }> = {
   extract: { model: "claude-haiku-4-5", why: "thousands of calls, and reading a passage into a set shape is mechanical" },
   resolve: { model: "claude-sonnet-5-5", why: "small and occasional, but telling two people apart takes judgement" },
-  entry: { model: "claude-sonnet-5-5", why: "writes well; Opus writes better and uses the allowance faster" },
+  entry: { model: "claude-opus-5-5", why: "the entries are the library itself — every one is written with Opus" },
   verify: { model: "claude-sonnet-5-5", why: "as many calls as writing, and it has to catch what the writer missed" },
   tag: { model: "claude-haiku-4-5", why: "one short call per source" },
   brief: { model: "claude-opus-5-5", why: "a handful of calls a week, and the one you present" },
