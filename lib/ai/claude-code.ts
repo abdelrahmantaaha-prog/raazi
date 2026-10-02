@@ -60,6 +60,8 @@ export function parseReset(message: string, now = new Date()): Date | null {
 
 interface CliResult {
   is_error?: boolean;
+  subtype?: string;
+  errors?: unknown[];
   result?: string;
   api_error_status?: number | null;
   structured_output?: unknown;
@@ -100,7 +102,11 @@ export function readResult(stdout: string): CliAnswer {
       throw new Error(`401 Claude Code is not signed in on this machine. Run \`claude\` once and sign in with your plan. (${said})`);
     }
     const status = r.api_error_status ? `${r.api_error_status} ` : "";
-    throw new Error(`${status}Claude Code: ${said || "failed with no reason given."}`);
+    // With no result text, the reason is in the subtype ("error_max_turns",
+    // "error_max_structured_output_retries", …) and the errors list. Dropping
+    // them left 155 failures in a day saying only "no reason given".
+    const why = [r.subtype, ...(r.errors ?? []).map(String)].filter(Boolean).join(" — ").slice(0, 400);
+    throw new Error(`${status}Claude Code: ${said || (why ? `failed (${why}).` : "failed with no reason given.")}`);
   }
   const u = r.usage ?? {};
   return {
