@@ -199,22 +199,28 @@ function unfence(text: string): string {
   return from >= 0 && to > from ? bare.slice(from, to + 1) : bare;
 }
 
+/** Model + schema pairs whose structured output failed; until a restart they go as plain JSON. */
+const plainJsonFor = new Set<string>();
+
 export async function claudeCodeJson<T>(
   opts: AnthropicCall & { schema: Schema }
 ): Promise<{ data: T; usage: AnthropicUsage; model: string }> {
   const schema = toJsonSchema(opts.schema);
+  const key = `${opts.model} ${JSON.stringify(schema)}`;
   let answer: CliAnswer;
   try {
-    answer = await run({ ...opts, schema });
+    answer = await run({ ...opts, schema, schemaInPrompt: plainJsonFor.has(key) });
   } catch (err) {
     // Claude Code hands a --json-schema answer back through a tool call, and
     // on a long Markdown body (an entry, 2–4 KB of prose and citation markers)
     // Opus kept sending that call input that would not parse — five tries,
     // then "error_max_structured_output_retries". On 2 Oct 2026 that was most
     // of the day's entries. The same answer written as plain JSON in the reply
-    // comes through, so ask once more that way.
-    if (!/error_max_structured_output_retries/.test(String((err as Error)?.message))) throw err;
-    console.log("[corpus] Claude Code could not send its answer as structured output; asking for plain JSON");
+    // comes through, so ask once more that way — and keep asking that way for
+    // this model and shape, since the five failed tries are paid for each time.
+    if (plainJsonFor.has(key) || !/error_max_structured_output_retries/.test(String((err as Error)?.message))) throw err;
+    console.log("[corpus] Claude Code could not send its answer as structured output; asking for plain JSON from now on");
+    plainJsonFor.add(key);
     answer = await run({ ...opts, schema, schemaInPrompt: true });
   }
   let parsed: T;
