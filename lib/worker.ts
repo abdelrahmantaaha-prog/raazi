@@ -1,7 +1,8 @@
 import { classify, explain, type Disposition } from "./ai/errors";
 import { takeModelsUsed } from "./ai/client";
 import { getConfig } from "./config";
-import { queueStaleEntries, refreshInFlight } from "./entries";
+import { queueStaleEntries, queueUpgrade, refreshInFlight } from "./entries";
+import { modelSpent } from "./keys";
 import { pollInFlight, pollPending, queuePolls } from "./pipeline/poll";
 import { nextFeedDueAt } from "./feeds";
 import { briefInFlight, queueBrief } from "./pipeline/brief";
@@ -45,6 +46,7 @@ declare global {
         polledAt?: number;
         briefedAt?: number;
         retriedAt?: number;
+        upgradedAt?: number;
       }
     | undefined;
 }
@@ -369,6 +371,10 @@ export async function startWorker(override?: Record<string, Handler>): Promise<v
         // "after the articles are in" is exactly what an empty queue means.
         if (sweepBrief()) continue;
 
+        // Last of all, one older entry rewritten by the stronger writer, if
+        // that was asked for — so it never stands in front of anything above.
+        if (sweepUpgrade()) continue;
+
         // Nothing to do. Idle briefly in case work arrives, then stand down.
         if (Date.now() - s.idleSince > IDLE_MS) break;
         await sleep(Math.min(1000, IDLE_MS));
@@ -525,6 +531,25 @@ function sweepStaleEntries(): boolean {
 
   s.idleSince = Date.now();
   console.log(`[corpus] refreshing ${queued.queued} out-of-date entr${queued.queued === 1 ? "y" : "ies"}`);
+  return true;
+}
+
+/**
+ * Queues the next entry for the rewrite with a stronger writer (see
+ * queueUpgrade). When there is nothing to queue — the plan is spent, the run
+ * is paused, or it is finished — it looks again a minute later, not every pass.
+ */
+function sweepUpgrade(): boolean {
+  const s = state();
+  // A scratch library is a test; unattended spending stays out of it.
+  if (process.env.CORPUS_DATA_DIR && !process.env.CORPUS_TEST_UPGRADE) return false;
+  if (s.upgradedAt && Date.now() - s.upgradedAt < 60_000) return false;
+  if (!queueUpgrade((model) => modelSpent("claude-code", model))) {
+    s.upgradedAt = Date.now();
+    return false;
+  }
+  s.upgradedAt = undefined;
+  s.idleSince = Date.now();
   return true;
 }
 

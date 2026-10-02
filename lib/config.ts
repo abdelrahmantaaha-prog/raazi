@@ -24,6 +24,11 @@ export interface Config {
    *  Entries that already exist are refreshed whatever their size; the
    *  threshold above only governs whether a *first* entry gets written. */
   autoRefreshEntries: boolean;
+  /**
+   * Rewrite every entry another model wrote with this Claude, one at a time in
+   * the quiet moments, most important first. "" is off. See lib/entries.ts.
+   */
+  upgradeEntriesTo: string;
   /** Run the morning routine (rewrite multi-flagged entries, hunt pictures). */
   morningChores: boolean;
   /** Local hour the routine becomes due. "Seven" means the first chance after seven. */
@@ -79,6 +84,7 @@ const DEFAULTS: Config = {
   requestsPerMinute: 10,
   entryThreshold: 3,
   autoRefreshEntries: true,
+  upgradeEntriesTo: "",
   morningChores: true,
   morningHour: 7,
   lastChores: "",
@@ -141,6 +147,7 @@ export function publicConfig() {
     requestsPerMinute: c.requestsPerMinute,
     entryThreshold: c.entryThreshold,
     autoRefreshEntries: c.autoRefreshEntries,
+    upgradeEntriesTo: c.upgradeEntriesTo,
     defaultBudget: c.defaultBudget,
     morningChores: c.morningChores,
     morningHour: c.morningHour,

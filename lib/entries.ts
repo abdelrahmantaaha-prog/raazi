@@ -1,6 +1,7 @@
 import { db, tx } from "./db";
 import { getConfig } from "./config";
 import { createRun, enqueue } from "./queue";
+import { planModelName } from "./claude-models";
 
 /**
  * Deciding which entries need rewriting.
@@ -93,10 +94,97 @@ export function refreshInFlight(): boolean {
   const open = db()
     .prepare(
       `SELECT COUNT(*) AS n FROM tasks t
-        WHERE t.kind IN ('entry', 'plan_entries') AND t.state IN ('pending', 'running')`
+        WHERE t.kind IN ('entry', 'plan_entries') AND t.state IN ('pending', 'running')
+          AND json_extract(t.payload_json, '$.upgrade') IS NULL`
     )
     .get() as { n: number };
   return open.n > 0;
+}
+
+/**
+ * Rewriting the library with a stronger writer (Settings → upgradeEntriesTo).
+ *
+ * A thousand rewrites queued at once would hold the queue for a week, and the
+ * stale sweep, the morning routine and the brief all wait for an empty queue.
+ * So it is a trickle: one entry each time the queue empties, starred first,
+ * then the best-sourced, all in one run that is reopened each time — pausing
+ * that run in Activity pauses the whole upgrade.
+ *
+ * It settles: an entry is done once the target model wrote it, and an entity
+ * tried in the last day is passed over, so one that will not write (or was
+ * answered by a fallback) cannot loop. It only asks while the entry stage is
+ * routed to the plan and that model is not spent — an entry Gemini rewrote in
+ * Opus's place would be a step backwards, made at Opus's pace.
+ */
+export const UPGRADE_RUN_KIND = "upgrade_entries";
+
+export function upgradeRemaining(model: string): number {
+  return (
+    db()
+      .prepare(
+        `SELECT COUNT(*) AS n FROM entries en JOIN entities e ON e.id = en.entity_id
+          WHERE e.merged_into IS NULL AND (en.model IS NULL OR en.model <> ?)
+            AND EXISTS (SELECT 1 FROM live_mentions m WHERE m.entity_id = e.id)`
+      )
+      .get(model) as { n: number }
+  ).n;
+}
+
+export function nextUpgrade(model: string, runId: number | null): number | null {
+  const row = db()
+    .prepare(
+      `SELECT e.id FROM entries en JOIN entities e ON e.id = en.entity_id
+        WHERE e.merged_into IS NULL AND (en.model IS NULL OR en.model <> @model)
+          AND EXISTS (SELECT 1 FROM live_mentions m WHERE m.entity_id = e.id)
+          AND NOT EXISTS (
+            SELECT 1 FROM tasks t
+             WHERE t.run_id = @runId AND t.kind = 'entry'
+               AND json_extract(t.payload_json, '$.entityId') = e.id
+               AND t.updated_at > datetime('now', '-1 day'))
+        ORDER BY e.starred DESC,
+                 (SELECT COUNT(*) FROM live_mentions m WHERE m.entity_id = e.id) DESC,
+                 e.id
+        LIMIT 1`
+    )
+    .get({ model, runId: runId ?? -1 }) as { id: number } | undefined;
+  return row?.id ?? null;
+}
+
+/** Queues the next entry to upgrade. False when there is nothing to do now. */
+export function queueUpgrade(spent: (model: string) => boolean): boolean {
+  const cfg = getConfig();
+  const model = cfg.upgradeEntriesTo;
+  if (!model) return false;
+  if (cfg.routing?.entry !== "claude-code" || spent(model)) return false;
+
+  const run = db()
+    .prepare(`SELECT id, state FROM runs WHERE kind = ? ORDER BY id DESC LIMIT 1`)
+    .get(UPGRADE_RUN_KIND) as { id: number; state: string } | undefined;
+  // Paused by hand, or still writing (or verifying) the last one.
+  if (run && run.state !== "done" && run.state !== "failed") {
+    const open = db()
+      .prepare("SELECT COUNT(*) AS n FROM tasks WHERE run_id = ? AND state IN ('pending','running')")
+      .get(run.id) as { n: number };
+    if (open.n > 0 || run.state.startsWith("paused")) return false;
+  }
+
+  const entityId = nextUpgrade(model, run?.id ?? null);
+  if (entityId === null) return false;
+  const left = upgradeRemaining(model);
+
+  return tx(() => {
+    const label = `Rewriting older entries with ${planModelName(model)} (${left} left)`;
+    let runId = run?.id;
+    if (runId === undefined) {
+      runId = createRun({ kind: UPGRADE_RUN_KIND, label });
+    } else {
+      db()
+        .prepare("UPDATE runs SET state = 'queued', label = ?, updated_at = datetime('now') WHERE id = ?")
+        .run(label, runId);
+    }
+    enqueue(runId, [{ kind: "entry", payload: { entityId, force: true, upgrade: true } }]);
+    return true;
+  });
 }
 
 /**

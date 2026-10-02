@@ -39,6 +39,7 @@ const RULES: {
   dailyBrief: (v) => (typeof v === "boolean" ? v : undefined),
   briefHours: (v) => integer(v, 1, 24 * 14),
   claudeModel: (v) => (isPlanModel(v) ? v : undefined),
+  upgradeEntriesTo: (v) => (v === "" || isPlanModel(v) ? v : undefined),
   morningHour: (v) => integer(v, 0, 23),
   // A BCP-47 primary language subtag: "en", "ar", "fr". Region and script
   // are not needed — the writer is told a language, not a locale.
