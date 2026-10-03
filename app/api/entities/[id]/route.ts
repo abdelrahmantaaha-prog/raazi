@@ -18,6 +18,7 @@ import { mergeEntities } from "@/lib/pipeline/resolve";
 import { refreshState } from "@/lib/pipeline/entry";
 import { entityDetail } from "@/lib/queries";
 import { setEntityTag } from "@/lib/tags";
+import { canSearchWeb } from "@/lib/ai/client";
 
 export const dynamic = "force-dynamic";
 
@@ -33,7 +34,9 @@ export async function POST(req: Request, ctx: { params: Promise<{ id: string }> 
   const id = asId((await ctx.params).id);
   if (id === null) return badRequest("Not a valid id.");
   const body = await readBody<{
-    action: "generate" | "star" | "rename" | "merge" | "tag";
+    action: "generate" | "webcheck" | "star" | "rename" | "merge" | "tag";
+    /** For webcheck: the entry itself, or its connections. */
+    scope?: "entry" | "connections";
     starred?: boolean;
     name?: string;
     disambiguator?: string | null;
@@ -63,6 +66,24 @@ export async function POST(req: Request, ctx: { params: Promise<{ id: string }> 
       const runId = createRun({ kind: "entry", label: entity.canonical_name });
       // Asking for it by hand always rewrites, even if the evidence is unchanged.
       enqueue(runId, [{ kind: "entry", payload: { entityId: id, force: true } }]);
+      kickWorker();
+      return NextResponse.json({ runId });
+    }
+
+    case "webcheck": {
+      // The entry or its connections, against the open web. Asked for by
+      // hand only: it searches on your plan's allowance.
+      const scope = body.scope === "connections" ? "connections" : "entry";
+      if (!canSearchWeb()) {
+        return badRequest("Checking on the web needs Claude (your plan). Add it in Settings first.");
+      }
+      const running = inFlight("webcheck", { entityId: id, scope });
+      if (running) return accepted(running, "This is already being checked.");
+      const runId = createRun({
+        kind: "webcheck",
+        label: `Web check: ${entity.canonical_name}${scope === "connections" ? " (connections)" : ""}`,
+      });
+      enqueue(runId, [{ kind: "webcheck", payload: { entityId: id, scope } }]);
       kickWorker();
       return NextResponse.json({ runId });
     }

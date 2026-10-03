@@ -79,6 +79,8 @@ export interface CliAnswer {
   structured?: unknown;
   usage: AnthropicUsage;
   model?: string;
+  /** On a web call: every address the searches returned or a fetch opened. */
+  seen?: string[];
 }
 
 /**
@@ -121,8 +123,73 @@ export function readResult(stdout: string): CliAnswer {
   };
 }
 
+/**
+ * One address in the form two spellings of it share, so a link the answer
+ * gives can be matched against the links the searches actually returned.
+ */
+export function sameUrl(raw: string): string {
+  try {
+    const u = new URL(raw.trim());
+    const host = u.hostname.toLowerCase().replace(/^www\./, "");
+    return `${host}${u.pathname.replace(/\/+$/, "")}${u.search}`;
+  } catch {
+    return raw.trim().toLowerCase();
+  }
+}
+
+/**
+ * A web call's transcript, as Claude Code streams it: the answer, and every
+ * address the model was actually shown — the links each search returned and
+ * the pages it fetched. A source the answer names that is on neither list was
+ * not read; it was remembered, or made up.
+ */
+export function readStream(stdout: string): CliAnswer {
+  const lines = stdout.split(/\r?\n/).filter((l) => l.trim().startsWith("{"));
+  const seen = new Set<string>();
+  const take = (text: string) => {
+    for (const m of text.matchAll(/https?:\/\/[^\s"'<>\\)\]]+/g)) seen.add(sameUrl(m[0].replace(/[.,;:]+$/, "")));
+  };
+  let result: string | undefined;
+  for (const line of lines) {
+    let ev: {
+      type?: string;
+      message?: { content?: { type?: string; name?: string; input?: { url?: string }; content?: unknown }[] };
+    };
+    try {
+      ev = JSON.parse(line);
+    } catch {
+      continue;
+    }
+    if (ev.type === "result") result = line;
+    for (const c of ev.message?.content ?? []) {
+      if (c.type === "tool_use" && c.name === "WebFetch" && c.input?.url) take(c.input.url);
+      if (c.type === "tool_result") take(typeof c.content === "string" ? c.content : JSON.stringify(c.content ?? ""));
+    }
+  }
+  if (!result) throw new Error(`Claude Code did not finish its answer: ${stdout.trim().slice(-200) || "nothing"}`);
+  return { ...readResult(result), seen: [...seen] };
+}
+
+/** A page or picture for Claude to look at, and the extension that says what it is. */
+export interface Attachment {
+  ext: string;
+  data: Buffer;
+}
+
+/** Corpus's research tool server, and the keys it may use. */
+export interface ResearchTools {
+  server: string;
+  keys: Record<string, string>;
+}
+
 async function run(
-  opts: AnthropicCall & { schema?: Record<string, unknown>; schemaInPrompt?: boolean }
+  opts: AnthropicCall & {
+    schema?: Record<string, unknown>;
+    schemaInPrompt?: boolean;
+    web?: boolean;
+    research?: ResearchTools;
+    files?: Attachment[];
+  }
 ): Promise<CliAnswer> {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), "corpus-claude-"));
   const env = { ...process.env };
@@ -131,22 +198,68 @@ async function run(
   delete env.ANTHROPIC_BASE_URL;
   delete env.CLAUDECODE;
 
+  // Pages and pictures to look at — a scanned page, a photographed document —
+  // go into this call's own folder, and Claude may open files there and
+  // nowhere else: a read outside it is refused (checked 3 Oct 2026).
+  const attached: string[] = [];
+  for (const [i, f] of (opts.files ?? []).entries()) {
+    const name = `attachment-${i + 1}${f.ext}`;
+    fs.writeFileSync(path.join(dir, name), f.data);
+    attached.push(name);
+  }
+  const looked = attached.length
+    ? `Open and read ${attached.length === 1 ? "this file" : "these files"} in the current folder first: ${attached.join(", ")}.\n\n`
+    : "";
+
   const schemaText = opts.schema ? JSON.stringify(opts.schema) : "";
   const schemaInPrompt = opts.schemaInPrompt || schemaText.length > MAX_SCHEMA_ARG;
-  const prompt = schemaInPrompt
-    ? `${opts.prompt}\n\nAnswer with JSON only, matching this JSON Schema:\n${schemaText}`
-    : opts.prompt;
+  const prompt =
+    looked +
+    (schemaInPrompt ? `${opts.prompt}\n\nAnswer with JSON only, matching this JSON Schema:\n${schemaText}` : opts.prompt);
 
+  // A web call gets search and page-reading and nothing else — no files, no
+  // shell — and streams its turns so the addresses it was shown can be kept.
+  // With research tools, Corpus's own tool server is started beside it for the
+  // length of the call (research/mcp-server.mjs), and its tools are allowed too.
+  const web = Boolean(opts.web || opts.research);
+  const tools = [...(web ? ["WebSearch", "WebFetch"] : []), ...(attached.length ? ["Read"] : [])];
+  const allowed = [
+    ...(web ? ["WebSearch", "WebFetch"] : []),
+    ...(opts.research ? ["mcp__research"] : []),
+    ...(attached.length ? ["Read(./**)"] : []),
+  ];
   const args = [
     "-p",
     "--model", opts.model,
-    "--output-format", "json",
+    "--output-format", web ? "stream-json" : "json",
+    ...(web ? ["--verbose"] : []),
     "--effort", opts.effort ?? "medium",
-    "--tools", "",
+    "--tools", tools.join(","),
+    ...(allowed.length ? ["--allowedTools", allowed.join(",")] : []),
     "--setting-sources", "",
     "--strict-mcp-config",
     "--no-session-persistence",
   ];
+  if (opts.research) {
+    // The keys ride in the server's own environment, in a file inside this
+    // call's temporary folder, which is removed when the call ends.
+    const file = path.join(dir, "research.json");
+    fs.writeFileSync(
+      file,
+      JSON.stringify({
+        mcpServers: {
+          research: {
+            type: "stdio",
+            command: process.execPath,
+            args: [opts.research.server],
+            env: { CORPUS_RESEARCH_KEYS: JSON.stringify(opts.research.keys) },
+          },
+        },
+      }),
+      "utf8"
+    );
+    args.push("--mcp-config", file);
+  }
   // Long system prompts, the stage's lessons included, go in a file: a
   // Windows command line stops at 32,767 characters.
   if (opts.system) {
@@ -183,9 +296,16 @@ async function run(
       });
       child.stdin.end(prompt, "utf8");
     });
-    return readResult(stdout);
+    return web ? readStream(stdout) : readResult(stdout);
   } finally {
-    fs.rmSync(dir, { recursive: true, force: true });
+    // Windows can hold the folder a moment after the process exits. A throw
+    // here replaced a finished answer with EPERM and failed the task, so a
+    // folder left behind in Temp is the lesser harm.
+    try {
+      fs.rmSync(dir, { recursive: true, force: true, maxRetries: 3, retryDelay: 200 });
+    } catch {
+      /* left for Windows to clear */
+    }
   }
 }
 
@@ -203,8 +323,8 @@ function unfence(text: string): string {
 const plainJsonFor = new Set<string>();
 
 export async function claudeCodeJson<T>(
-  opts: AnthropicCall & { schema: Schema }
-): Promise<{ data: T; usage: AnthropicUsage; model: string }> {
+  opts: AnthropicCall & { schema: Schema; web?: boolean; research?: ResearchTools }
+): Promise<{ data: T; usage: AnthropicUsage; model: string; seen?: string[] }> {
   const schema = toJsonSchema(opts.schema);
   const key = `${opts.model} ${JSON.stringify(schema)}`;
   let answer: CliAnswer;
@@ -236,11 +356,16 @@ export async function claudeCodeJson<T>(
       throw new TruncatedOutputError();
     }
   }
-  return { data: dropNulls(unescapeModelJson(parsed)), usage: answer.usage, model: answer.model ?? opts.model };
+  return {
+    data: dropNulls(unescapeModelJson(parsed)),
+    usage: answer.usage,
+    model: answer.model ?? opts.model,
+    seen: answer.seen,
+  };
 }
 
 export async function claudeCodeText(
-  opts: AnthropicCall
+  opts: AnthropicCall & { files?: Attachment[] }
 ): Promise<{ data: string; usage: AnthropicUsage; model: string }> {
   const answer = await run(opts);
   if (!answer.text) throw new Error("Empty response from Claude Code.");

@@ -107,7 +107,7 @@ const p = PROVIDERS["claude-code"];
 check("the app knows it", PROVIDER_IDS.includes("claude-code"));
 check("it has its own adapter", p.kind === "claude-code");
 check("it asks for Sonnet", modelsFor("claude-code")[0] === "claude-sonnet-5-5");
-check("it takes text only", !p.capabilities.vision && !p.capabilities.audio && !p.capabilities.embed);
+check("it reads pages and pictures, not recordings", p.capabilities.vision && !p.capabilities.audio && !p.capabilities.embed);
 check("it does not claim a bill", !/\$/.test(p.freeTier));
 check(
   "Settings offers the plan and not the API",
@@ -157,6 +157,38 @@ section("The model chosen in Settings");
   keys.markModelSpent("claude-code", "claude-sonnet-5-5", 600);
   keys.forgetPlanLimit();
   check("signing in to another account lets go of a spent plan", !keys.modelSpent("claude-code", "claude-sonnet-5-5"));
+}
+
+section("A web check keeps only the pages it was shown");
+{
+  const { readStream, sameUrl } = await import("../lib/ai/claude-code.ts");
+  check("www, case and a trailing slash do not make two pages", sameUrl("https://WWW.Britannica.com/place/Riyadh/") === sameUrl("https://britannica.com/place/Riyadh"));
+  check("a different page is a different page", sameUrl("https://britannica.com/place/Jeddah") !== sameUrl("https://britannica.com/place/Riyadh"));
+
+  // The shape Claude Code streams (3 Oct 2026): a search's links inside a
+  // tool result, a fetch's address in its call, the answer in a result line —
+  // and a bookkeeping line after it, so the answer is not simply the last line.
+  const lines = [
+    { type: "system", subtype: "init" },
+    { type: "assistant", message: { content: [{ type: "tool_use", name: "WebSearch", input: { query: "Riyadh" } }] } },
+    { type: "user", message: { content: [{ type: "tool_result", content: 'Links: [{"title":"Riyadh","url":"https://www.britannica.com/place/Riyadh"}]' }] } },
+    { type: "assistant", message: { content: [{ type: "tool_use", name: "WebFetch", input: { url: "https://saudipedia.com/en/riyadh-city" } }] } },
+    { type: "user", message: { content: [{ type: "tool_result", content: [{ type: "text", text: "Riyadh is the capital." }] }] } },
+    { type: "result", subtype: "success", is_error: false, result: "", structured_output: { ok: true }, usage: { input_tokens: 5, output_tokens: 7 }, modelUsage: { "claude-sonnet-5-5": {} } },
+    { type: "system", subtype: "task_summary", detail: null },
+  ];
+  const a = readStream(lines.map((l) => JSON.stringify(l)).join("\n"));
+  check("the answer is found though it is not the last line", a.structured?.ok === true && a.usage.tokensOut === 7);
+  check("a search's links are kept", a.seen.includes(sameUrl("https://britannica.com/place/Riyadh")));
+  check("a fetched page is kept", a.seen.includes(sameUrl("https://saudipedia.com/en/riyadh-city")));
+  check("a page never shown is not", !a.seen.includes(sameUrl("https://example.com/made-up")));
+  let threw = false;
+  try {
+    readStream(lines.slice(0, 3).map((l) => JSON.stringify(l)).join("\n"));
+  } catch {
+    threw = true;
+  }
+  check("a stream that never finished is an error, not an empty answer", threw);
 }
 
 keys.clearSpentModels();

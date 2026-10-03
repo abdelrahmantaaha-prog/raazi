@@ -15,7 +15,7 @@ interface Found {
   text: string;
   score: number;
   strength: "close" | "related" | "loose" | null;
-  via: "meaning" | "words" | "both";
+  via: "meaning" | "words" | "both" | "reader";
 }
 
 interface Coverage {
@@ -39,6 +39,7 @@ const VIA: Record<Found["via"], string> = {
   both: " · holds your word",
   words: " · found by your word",
   meaning: "",
+  reader: "",
 };
 
 /**
@@ -62,11 +63,17 @@ export function Meaning() {
   const [busy, setBusy] = useState(false);
   const [indexing, setIndexing] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  /** Whether meaning search can run; without it Claude searches instead. */
+  const [canEmbed, setCanEmbed] = useState(true);
+  const [by, setBy] = useState<"meaning" | "reader" | null>(null);
 
   useEffect(() => {
     void fetch("/api/ask", { cache: "no-store" })
       .then((r) => r.json())
-      .then((d) => setCov(d.coverage))
+      .then((d) => {
+        setCov(d.coverage);
+        setCanEmbed(d.canEmbed !== false);
+      })
       .catch(() => setCov(null));
   }, []);
 
@@ -84,6 +91,7 @@ export function Meaning() {
       const data = await res.json();
       if (!res.ok) throw new Error(data.error ?? "The search did not work.");
       setResults(data.results ?? []);
+      setBy(data.by ?? null);
       setCov(data.coverage ?? cov);
       setAsked(question);
     } catch (err) {
@@ -145,6 +153,15 @@ export function Meaning() {
         </Button>
       </div>
 
+      {!canEmbed ? (
+      <p className="text-xs text-[var(--color-muted)]">
+        Passages from your own sources — not an answer written about them. Search by meaning needs a
+        Gemini key, so Claude searches for you instead: it turns your question into several searches
+        of the library, in English and Arabic, then reads what they find and picks the passages that
+        bear on the question, best first. It takes a little longer, and every passage is still exactly
+        as it stands in its source.
+      </p>
+      ) : (
       <p className="text-xs text-[var(--color-muted)]">
         Passages from your own sources, ranked by how close they are to the question — not an answer
         written about them. A rare word of yours, like a name or a figure, lifts the passages that hold
@@ -172,6 +189,7 @@ export function Meaning() {
           </>
         )}
       </p>
+      )}
 
       {error && (
         <p className="rounded border border-red-200 bg-red-50 px-3 py-2 text-sm text-red-800">{error}</p>
@@ -182,7 +200,9 @@ export function Meaning() {
           <p className="text-sm text-[var(--color-muted)]">
             {results.length === 0
               ? `Nothing in the library came close to “${asked}”.`
-              : `${results.length} passage${results.length === 1 ? "" : "s"} for “${asked}”`}
+              : `${results.length} passage${results.length === 1 ? "" : "s"} for “${asked}”${
+                  by === "reader" ? ", chosen by Claude from searches of your library" : ""
+                }`}
           </p>
 
           <ol className="space-y-2">

@@ -108,6 +108,9 @@ function assemble(flavour) {
   fs.cpSync(path.join(root, ".next", "static"), path.join(server, ".next", "static"), {
     recursive: true,
   });
+  // The research tool server a web check starts beside Claude Code. It runs as
+  // a program of its own, so nothing imports it and file tracing never finds it.
+  fs.cpSync(path.join(root, "research"), path.join(server, "research"), { recursive: true });
   const pub = path.join(root, "public");
   if (fs.existsSync(pub)) {
     fs.cpSync(pub, path.join(server, "public"), { recursive: true });

@@ -17,6 +17,8 @@ import { handleOcr } from "./ocr";
 import { handleTranscribe } from "./transcribe";
 import { handleTag } from "./tag";
 import { handleFactcheck } from "./factcheck";
+import { handleWebcheck } from "./webcheck";
+import { handleFolderFile } from "./folder";
 import { handlePortrait, handlePlanPortraits } from "./portrait";
 import { handlePlanPolls, handlePoll, handleFetchItem } from "./poll";
 import { handleBrief } from "./brief";
@@ -59,6 +61,8 @@ async function handlePlanEntries(task: Task): Promise<void> {
 export const handlers: Record<string, Handler> = {
   tag: handleTag,
   factcheck: handleFactcheck,
+  webcheck: handleWebcheck,
+  folder_file: handleFolderFile,
   extract: handleExtract,
   enhance: handleEnhance,
   sweep: handleSweep,

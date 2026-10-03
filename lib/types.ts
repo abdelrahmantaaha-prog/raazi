@@ -87,6 +87,11 @@ export type TaskKind =
   | "tag"
   /** Checks a draft against the library. Reports; never edits. */
   | "factcheck"
+  /** Checks an entry, or its connections, against the open web, on request.
+   *  Reports; never edits. See lib/pipeline/webcheck.ts. */
+  | "webcheck"
+  /** Reads one file of a folder you brought in whole. See lib/folders.ts. */
+  | "folder_file"
   /** Finds a picture for one entity. Costs no tokens; costs patience. */
   | "portrait"
   /** Decides which entries deserve a picture and queues them. */

@@ -76,8 +76,10 @@ export interface Found {
    * question. Null when the library is too small for that to mean anything.
    */
   strength: "close" | "related" | "loose" | null;
-  /** Found by meaning alone, or lifted by a rare word of yours it contains. */
-  via: "meaning" | "words" | "both";
+  /** Found by meaning alone, or lifted by a rare word of yours it contains —
+   *  or, with no meaning search to hand, chosen by Claude from word searches
+   *  (lib/ask-reader.ts). */
+  via: "meaning" | "words" | "both" | "reader";
 }
 
 export interface Coverage {

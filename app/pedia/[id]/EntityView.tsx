@@ -15,6 +15,7 @@ import { ConnectionsGraph } from "../../components/ConnectionsGraph";
 import { Portrait } from "./Portrait";
 import { WhereCard } from "../../components/MapView";
 import { DiscardButton, RestoreButton } from "./Discard";
+import { WebCheckButton, WebCheckReport } from "./WebCheck";
 import { reasonLabel } from "@/lib/discard-reasons";
 import { EntityDrawer } from "../../components/EntityDrawer";
 import { NameLinks } from "../../components/NameLinks";
@@ -78,7 +79,7 @@ export function EntityView({
   /** Another subject, opened over this one rather than instead of it. */
   const [openEntity, setOpenEntity] = useState<number | null>(null);
 
-  const { entity, entry, tags, evidence, evidenceBySource, aliases, events, relations, network, revisions, contradictions, merges, discarded, flags } = detail;
+  const { entity, entry, tags, evidence, evidenceBySource, aliases, events, relations, network, revisions, contradictions, merges, discarded, flags, webChecks } = detail;
 
   const citationMap = useMemo(() => new Map(citations.map((c) => [c.id, c])), [citations]);
   const citeOrder = useMemo(
@@ -99,7 +100,8 @@ export function EntityView({
       const data = (await res.json().catch(() => ({}))) as { error?: string; runId?: number; run?: { id?: number } };
       if (!res.ok) throw new Error(data.error ?? "Failed.");
       setMessage(note);
-      if ((body as { action?: string }).action === "generate") {
+      const action = (body as { action?: string }).action;
+      if (action === "generate" || action === "webcheck") {
         setRun(data.runId ?? data.run?.id ?? null);
       }
       router.refresh();
@@ -114,6 +116,14 @@ export function EntityView({
     post(
       { action: "generate" },
       entry ? "Queued a revision." : "Queued. The entry will appear here when the run finishes."
+    );
+
+  const webCheck = (scope: "entry" | "connections") =>
+    post(
+      { action: "webcheck", scope },
+      scope === "entry"
+        ? "Checking the entry on the web. The verdicts will appear under the entry in a few minutes."
+        : "Checking the connections on the web. The verdicts will appear on the Connections tab in a few minutes."
     );
 
   const openCount = contradictions.filter((c) => !c.resolved).length;
@@ -201,6 +211,12 @@ export function EntityView({
               PDF
             </a>
           ) : null}
+          <WebCheckButton
+            hasEntry={Boolean(entry)}
+            connections={relations.length}
+            disabled={busy}
+            onCheck={webCheck}
+          />
           <a
             href={`/api/export?format=markdown&entity=${entity.id}`}
             className="rounded border border-[var(--color-rule)] bg-white px-3 py-1.5 text-sm font-medium hover:bg-[var(--color-accent-soft)]"
@@ -406,6 +422,15 @@ export function EntityView({
                     </li>
                   ))}
               </ol>
+
+              {webChecks.entry && (
+                <WebCheckReport
+                  report={webChecks.entry}
+                  writtenAt={entry.updated_at}
+                  onRecheck={() => webCheck("entry")}
+                  busy={busy}
+                />
+              )}
             </>
           )}
 
@@ -563,6 +588,13 @@ export function EntityView({
             </Card>
           ) : (
             <>
+              {webChecks.connections && (
+                <WebCheckReport
+                  report={webChecks.connections}
+                  onRecheck={() => webCheck("connections")}
+                  busy={busy}
+                />
+              )}
               <ConnectionsGraph
                 centreName={entity.canonical_name}
                 centreType={entity.type}

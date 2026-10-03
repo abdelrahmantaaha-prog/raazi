@@ -6,6 +6,7 @@ import { OFFERED_PROVIDER_IDS, PROVIDERS, STAGES, STAGE_LABEL, STAGE_NOTE, type 
 import { formatDateTime, relativeDate } from "@/lib/dates";
 import { CorrectionsCard } from "./Corrections";
 import { LessonsCard } from "./Lessons";
+import { ResearchToolsCard } from "./ResearchTools";
 import { Disciplines } from "./Disciplines";
 import { LanCard, SyncCard } from "./SyncCard";
 import { ClaudePlanCard } from "./ClaudePlan";
@@ -535,6 +536,8 @@ export default function SettingsPage() {
           </Field>
         </div>
       </Card>
+
+      <ResearchToolsCard />
 
       <LanCard />
 

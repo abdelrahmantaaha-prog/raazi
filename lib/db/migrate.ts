@@ -38,6 +38,9 @@ export function migrate(db: Database.Database) {
   addColumn(db, "sources", "bookmark_offset", "REAL");
   addColumn(db, "sources", "read_at", "TEXT");
 
+  // The folder a source was read from, when it came in a zip or a folder.
+  addColumn(db, "sources", "folder_id", "INTEGER");
+
   // Your own answer to "what kind of thing is this", overriding the guess made
   // from file type and length. Null means "keep guessing".
   addColumn(db, "sources", "shelf", "TEXT");
@@ -351,6 +354,60 @@ export function migrate(db: Database.Database) {
       created_at  TEXT    NOT NULL DEFAULT (datetime('now'))
     );
     CREATE INDEX IF NOT EXISTS idx_entry_flags_entity ON entry_flags(entity_id);
+
+    -- An entry, or its connections, checked against the open web on request.
+    -- The one place Corpus looks outside your sources; it reports and never
+    -- edits. The latest check of each kind is kept. See lib/pipeline/webcheck.ts.
+    CREATE TABLE IF NOT EXISTS web_checks (
+      id          INTEGER PRIMARY KEY,
+      entity_id   INTEGER NOT NULL REFERENCES entities(id) ON DELETE CASCADE,
+      -- 'entry' or 'connections'.
+      scope       TEXT    NOT NULL,
+      report_json TEXT    NOT NULL,
+      checked_at  TEXT    NOT NULL DEFAULT (datetime('now')),
+      UNIQUE (entity_id, scope)
+    );
+
+    -- The Research inbox: what a web check turned up along the way — a page,
+    -- a record, a public post, a shipment worth tracking — that the library
+    -- does not have yet. Apart from the news inbox on purpose: these were
+    -- looked for, about one subject, and nothing reaches the library until you
+    -- keep it. 'new', 'kept' (then source_id says where it went) or 'dismissed'.
+    CREATE TABLE IF NOT EXISTS research_finds (
+      id          INTEGER PRIMARY KEY,
+      entity_id   INTEGER NOT NULL REFERENCES entities(id) ON DELETE CASCADE,
+      scope       TEXT    NOT NULL,
+      url         TEXT    NOT NULL,
+      title       TEXT,
+      why         TEXT    NOT NULL,
+      kind        TEXT    NOT NULL DEFAULT 'source',
+      state       TEXT    NOT NULL DEFAULT 'new',
+      source_id   INTEGER REFERENCES sources(id) ON DELETE SET NULL,
+      created_at  TEXT    NOT NULL DEFAULT (datetime('now')),
+      UNIQUE (entity_id, url)
+    );
+    CREATE INDEX IF NOT EXISTS idx_research_finds_state ON research_finds(state, created_at);
+
+    -- A zip or a folder of documents, brought in whole. Its files land first,
+    -- listed and unread, and are read when you say so. See lib/folders.ts.
+    CREATE TABLE IF NOT EXISTS folders (
+      id          INTEGER PRIMARY KEY,
+      name        TEXT    NOT NULL,
+      origin      TEXT    NOT NULL,
+      created_at  TEXT    NOT NULL DEFAULT (datetime('now'))
+    );
+    -- 'waiting', 'queued', 'added' (source_id says which source it became),
+    -- 'skipped' by you, 'unsupported' (a kind of file Corpus cannot read), 'failed'.
+    CREATE TABLE IF NOT EXISTS folder_files (
+      id          INTEGER PRIMARY KEY,
+      folder_id   INTEGER NOT NULL REFERENCES folders(id) ON DELETE CASCADE,
+      rel_path    TEXT    NOT NULL,
+      size        INTEGER NOT NULL DEFAULT 0,
+      state       TEXT    NOT NULL DEFAULT 'waiting',
+      source_id   INTEGER REFERENCES sources(id) ON DELETE SET NULL,
+      error       TEXT,
+      UNIQUE (folder_id, rel_path)
+    );
 
     -- One-off repairs, so they do not fight the user afterwards.
     CREATE TABLE IF NOT EXISTS applied (

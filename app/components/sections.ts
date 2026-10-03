@@ -78,6 +78,8 @@ export const SECTIONS: Section[] = [
     label: "Library",
     tabs: [
       { href: "/", label: "Sources", exact: true, also: ["/sources"] },
+      // Zips and folders brought in whole, waiting to be read or already read.
+      { href: "/folders", label: "Folders" },
       { href: "/quotes", label: "Quotes" },
       { href: "/tags", label: "Topics" },
     ],
@@ -88,6 +90,9 @@ export const SECTIONS: Section[] = [
     tabs: [
       { href: "/pedia", label: "Entries" },
       { href: "/network", label: "Network" },
+      // What web checks turned up about these subjects. Apart from the news
+      // inbox: this was looked for, one subject at a time.
+      { href: "/research", label: "Research inbox" },
     ],
   },
   {

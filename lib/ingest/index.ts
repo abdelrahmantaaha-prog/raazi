@@ -10,6 +10,9 @@ import type { Piece } from "../chunk";
 import { parseText } from "./text";
 import { parsePdf } from "./pdf";
 import { parseEpub } from "./epub";
+import { IMAGE_EXTENSIONS, OFFICE_EXTENSIONS, parseOffice } from "./office";
+export { IMAGE_EXTENSIONS } from "./office";
+import { PDFDocument } from "pdf-lib";
 import { parseUrl } from "./web";
 import { setSourceTags } from "../tags";
 import { guessReadMode, queueExtractions } from "../reading";
@@ -35,6 +38,43 @@ interface Provenance {
 /** Pages per OCR call. Small enough that a failure costs little, large enough
  *  that a 400-page scan isn't 400 requests. */
 const OCR_BATCH = 4;
+
+/**
+ * Files that would otherwise fall through to "text" and be read as gibberish:
+ * refused, with what to do instead.
+ */
+const UNREADABLE: Record<string, string> = Object.fromEntries([
+  ...[".doc", ".xls", ".ppt"].map((e) => [
+    e,
+    `Old ${e} files (from before 2007) cannot be read. Open it and save it as ${e}x, then add that.`,
+  ]),
+  ...[".webp", ".gif", ".bmp", ".tif", ".tiff", ".heic", ".heif"].map((e) => [
+    e,
+    "Corpus reads pictures saved as PNG or JPG. Save it as one of those, then add it.",
+  ]),
+  ...[".zip", ".rar", ".7z"].map((e) => [e, "An archive is added as a folder: Add source → Folder or zip."]),
+  ...[".exe", ".dll", ".msi", ".iso", ".bin"].map((e) => [e, "That is a program or disk image, not a document."]),
+]);
+
+/** One picture as a one-page PDF, so the page reader can take it like a scan. */
+async function imageToPdf(bytes: Buffer, ext: string): Promise<Buffer> {
+  // What the picture is, by its first bytes rather than its name: a ".jpg"
+  // that is really a PNG is common. And a fresh copy, because the PDF library
+  // reads the whole memory block a Node buffer may share with other data,
+  // and missed the start of a JPEG that sat partway into one (3 Oct 2026).
+  const data = new Uint8Array(bytes);
+  const isPng = data[0] === 0x89 && data[1] === 0x50 && data[2] === 0x4e && data[3] === 0x47;
+  const isJpg = data[0] === 0xff && data[1] === 0xd8;
+  if (!isPng && !isJpg) throw new Error(`That ${ext} file is not a picture Corpus can read. Save it as PNG or JPG.`);
+  const pdf = await PDFDocument.create();
+  const image = isPng ? await pdf.embedPng(data) : await pdf.embedJpg(data);
+  // Scaled to fit an A4-ish page at most, never enlarged.
+  const scale = Math.min(1, 1600 / Math.max(image.width, image.height));
+  const w = image.width * scale;
+  const h = image.height * scale;
+  pdf.addPage([w, h]).drawImage(image, { x: 0, y: 0, width: w, height: h });
+  return Buffer.from(await pdf.save());
+}
 
 export function kindFor(filename: string): SourceKind {
   const ext = path.extname(filename).toLowerCase();
@@ -64,9 +104,16 @@ export async function addFile(opts: Provenance & {
   /** Chosen by you at add time. Left empty, the AI files it instead. */
   tags?: number[];
 }): Promise<AddResult> {
-  const kind = kindFor(opts.filename);
-  const ext = path.extname(opts.filename) || ".bin";
-  const fallbackTitle = opts.title?.trim() || path.basename(opts.filename, ext);
+  const givenExt = path.extname(opts.filename).toLowerCase();
+  if (UNREADABLE[givenExt]) throw new Error(UNREADABLE[givenExt]);
+  // A photograph of a page becomes a one-page scanned document, read by the
+  // same page reader as a scanned PDF — so it is stored as that PDF.
+  const photo = IMAGE_EXTENSIONS.includes(givenExt);
+  if (photo) opts = { ...opts, bytes: await imageToPdf(opts.bytes, givenExt) };
+  const office = OFFICE_EXTENSIONS.includes(givenExt);
+  const kind: SourceKind = photo ? "pdf" : kindFor(opts.filename);
+  const ext = photo ? ".pdf" : path.extname(opts.filename) || ".bin";
+  const fallbackTitle = opts.title?.trim() || path.basename(opts.filename, path.extname(opts.filename));
 
   const sourceId = Number(
     db()
@@ -82,6 +129,24 @@ export async function addFile(opts: Provenance & {
   applyMeta(sourceId, { publishedAt: opts.publishedAt, outlet: opts.outlet });
 
   try {
+    if (photo) {
+      return finish(sourceId, [], opts.budgetCap, opts.tags, {
+        runId: opts.runId,
+        scannedPages: [1],
+        note: "A picture: its text is read off it like a scanned page.",
+      });
+    }
+    if (office) {
+      const parsed = parseOffice(givenExt, opts.bytes);
+      applyMeta(sourceId, {
+        title: opts.title?.trim() || parsed.meta.title || fallbackTitle,
+        author: opts.author?.trim() || parsed.meta.author,
+      });
+      return finish(sourceId, parsed.pieces, opts.budgetCap, opts.tags, {
+        runId: opts.runId,
+        note: [`${parsed.pieces.length} section(s) read.`, parsed.note].filter(Boolean).join(" "),
+      });
+    }
     switch (kind) {
       case "pdf": {
         const parsed = await parsePdf(opts.bytes);

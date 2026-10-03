@@ -28,6 +28,10 @@ export function parseText(raw: string): Piece[] {
     charStart = cursor;
   };
 
+  // A short line taken for a heading that nothing followed: it was text after
+  // all, and became the label of an empty section and vanished. The last row
+  // of a table ("KAVITA | Palau") went that way (3 Oct 2026).
+  let guessed: string | null = null;
   for (const line of lines) {
     const heading = /^(#{1,3})\s+(.*\S)\s*$/.exec(line);
     // An underlined or ALL-CAPS short line reads as a heading in plain text too.
@@ -38,14 +42,18 @@ export function parseText(raw: string): Piece[] {
     if (heading) {
       flush();
       label = heading[2];
+      guessed = null;
     } else if (plainHeading && buf.length > 6) {
       flush();
       label = line.trim();
+      guessed = line;
     } else {
       buf.push(line);
+      if (line.trim()) guessed = null;
     }
     cursor += line.length + 1;
   }
+  if (guessed !== null && !buf.some((l) => l.trim())) buf.push(guessed);
   flush();
 
   return pieces.length ? pieces : [{ text, label: "Text", locator: { charStart: 0, charEnd: text.length } }];

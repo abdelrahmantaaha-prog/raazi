@@ -23,9 +23,10 @@ import {
 import { spec, type ProviderId, type Stage } from "../providers";
 import { unescapeModelJson } from "./escapes";
 import { withLessons } from "../lessons";
+import { researchKeys, researchServerPath } from "../research/keys";
 import { chatJson, chatText, validateOpenAiKey } from "./openai";
 import { anthropicJson, anthropicText, validateAnthropicKey, EFFORT } from "./anthropic";
-import { claudeCodeJson, claudeCodeText, validateClaudeCode } from "./claude-code";
+import { claudeCodeJson, claudeCodeText, validateClaudeCode, type Attachment } from "./claude-code";
 import {
   AllKeysExhaustedError,
   SchemaUnsupportedError,
@@ -785,6 +786,67 @@ export async function generateJson<T>(opts: {
   return value;
 }
 
+/** A web check searches and reads pages in turn; a dozen claims take minutes. */
+export const WEB_TIMEOUT_MS = 900_000;
+
+/** Whether anything here can search the web: only Claude on your plan can. */
+export function canSearchWeb(): boolean {
+  return listKeys().some((k) => k.provider === "claude-code");
+}
+
+/**
+ * A structured call that may search the web and read what it finds.
+ *
+ * Only Claude on your plan can, through Claude Code's own search and fetch —
+ * there is no fallback, because a checker that quietly answered from memory
+ * instead would hand back exactly the verdicts this exists to replace. The
+ * answer comes with `seen`: every address the searches returned or a fetch
+ * opened, so the caller can keep only the sources that were really read.
+ */
+export async function generateWebJson<T>(opts: {
+  prompt: string;
+  schema: Schema;
+  system?: string;
+  stage?: Stage;
+  timeoutMs?: number;
+  /** Also offer Corpus's research tools — registers, archives, public accounts, ships. */
+  research?: boolean;
+}): Promise<CallResult<T> & { seen: string[] }> {
+  if (!canSearchWeb()) {
+    throw new Error("Checking on the web needs Claude (your plan). Add it in Settings, then try again.");
+  }
+  const { value, key } = await withRotation(
+    ["claude-code"],
+    (k, model) =>
+      claudeCodeJson<T>({
+        apiKey: "",
+        model,
+        system: opts.system,
+        prompt: opts.prompt,
+        schema: opts.schema,
+        effort: EFFORT[opts.stage ?? ""],
+        timeoutMs: opts.timeoutMs ?? WEB_TIMEOUT_MS,
+        web: true,
+        research: opts.research
+          ? { server: researchServerPath(), keys: researchKeys() as Record<string, string> }
+          : undefined,
+      }),
+    { modelOf: (k) => modelOfCall(k, opts) }
+  );
+  bill(key.id, value.usage);
+  noteModel(value.model);
+  return { ...value, seen: value.seen ?? [] };
+}
+
+/** What Claude Code can open as a page or a picture, by type. */
+const ATTACHABLE: Record<string, string> = {
+  "application/pdf": ".pdf",
+  "image/png": ".png",
+  "image/jpeg": ".jpg",
+  "image/gif": ".gif",
+  "image/webp": ".webp",
+};
+
 /** Plain-text call. `need` forces a provider that can read images or audio. */
 export async function generateText(opts: {
   parts: (string | Part)[];
@@ -840,9 +902,16 @@ export async function generateText(opts: {
     }
 
     if (spec(provider).kind === "claude-code") {
-      // Text only, like the Anthropic key; the router never sends it a page or a recording.
-      if (opts.parts.some((p) => typeof p !== "string" && !("text" in p))) {
-        throw new SchemaUnsupportedError("Claude through Claude Code takes text only; images stay on Gemini.");
+      // Pages and pictures go along as files Claude opens in the call's own
+      // folder. A recording, or a file already uploaded to Gemini, cannot.
+      const files: Attachment[] = [];
+      for (const p of opts.parts) {
+        if (typeof p === "string" || "text" in p) continue;
+        const ext = "inlineData" in p ? ATTACHABLE[p.inlineData.mimeType] : undefined;
+        if (!ext || !("inlineData" in p)) {
+          throw new SchemaUnsupportedError("Claude on your plan reads pages and pictures, not recordings; those stay on Gemini.");
+        }
+        files.push({ ext, data: Buffer.from(p.inlineData.data, "base64") });
       }
       return claudeCodeText({
         apiKey: "",
@@ -851,6 +920,7 @@ export async function generateText(opts: {
         prompt: partsToPrompt(opts.parts),
         effort: EFFORT[opts.stage ?? ""],
         timeoutMs,
+        files,
       });
     }
 

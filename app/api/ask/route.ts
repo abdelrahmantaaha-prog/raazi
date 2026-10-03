@@ -1,6 +1,7 @@
 import { NextResponse } from "next/server";
 import { badRequest, optionalId, readBody } from "@/lib/http";
 import { askLibrary, coverage, embedPassages } from "@/lib/meaning-search";
+import { askWithReader, canEmbed } from "@/lib/ask-reader";
 
 export const dynamic = "force-dynamic";
 
@@ -17,7 +18,7 @@ export const dynamic = "force-dynamic";
  */
 export async function GET(req: Request) {
   const sourceId = optionalId(new URL(req.url).searchParams.get("sourceId"));
-  return NextResponse.json({ coverage: coverage(sourceId ?? undefined) });
+  return NextResponse.json({ coverage: coverage(sourceId ?? undefined), canEmbed: canEmbed() });
 }
 
 export async function POST(req: Request) {
@@ -37,10 +38,19 @@ export async function POST(req: Request) {
 
   const question = typeof body.question === "string" ? body.question : "";
   if (!question.trim()) return badRequest("Ask something.");
+  const limit = typeof body.limit === "number" ? body.limit : undefined;
+  // Meaning search needs Gemini to turn the question into a vector. Without a
+  // usable key — or when it fails — Claude searches instead (lib/ask-reader.ts).
+  if (canEmbed()) {
+    try {
+      return NextResponse.json({ ...(await askLibrary(question, { limit, sourceId })), by: "meaning" });
+    } catch {
+      /* fall through to the reader */
+    }
+  }
   try {
-    const limit = typeof body.limit === "number" ? body.limit : undefined;
-    const found = await askLibrary(question, { limit, sourceId });
-    return NextResponse.json(found);
+    const results = await askWithReader(question, { limit, sourceId });
+    return NextResponse.json({ results, coverage: coverage(sourceId), by: "reader" });
   } catch (err) {
     return badRequest((err as Error).message);
   }

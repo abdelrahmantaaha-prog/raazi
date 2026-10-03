@@ -84,14 +84,16 @@ export async function searchTerms(question: string): Promise<string[]> {
       parts: [`QUESTION: ${asked}`],
       schema: QUERY_SCHEMA,
       system: QUERY_SYSTEM,
-      // Deliberately no stage, which means Gemini first and the local model
-      // only behind it. A search is something you are sitting and waiting for,
-      // and the local model is a single GPU that the worker keeps busy for
-      // three minutes at a time writing entries — routing an interactive call
-      // there puts you in a queue behind the background. Twenty seconds is the
-      // whole budget: past that the question goes to the catalogues as typed,
-      // which is a worse search and an immediate one.
-      timeoutMs: 20_000,
+      // Routed with the other small, quick jobs, so it goes wherever you sent
+      // those — Claude, if that is where you put them. It had no stage at all,
+      // which meant Gemini first whatever Settings said, and nothing at all
+      // with no Gemini key. Kept off the local model's queue by the same
+      // routing: a search is something you sit and wait for. The budget is the
+      // whole wait: past it the question goes to the catalogues as typed,
+      // which is a worse search and an immediate one. Claude Code needs a few
+      // seconds just to start, hence more than the twenty Gemini needed.
+      stage: "group",
+      timeoutMs: 45_000,
     });
     const queries = (data.queries ?? [])
       .map((q) => q.replace(/["?]/g, "").trim())

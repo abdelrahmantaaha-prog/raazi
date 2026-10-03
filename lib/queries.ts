@@ -3,6 +3,7 @@ import { formatCitation } from "./citation";
 import { formatLocator } from "./chunk";
 import { tagFilterSql, tagsForEntity } from "./tags";
 import { quoteKeyOf } from "./audit";
+import { webChecksFor } from "./web-checks";
 import type { EntityType, Locator } from "./types";
 
 /** Read-side helpers shared by the API routes and the server components. */
@@ -358,6 +359,9 @@ export function entityDetail(id: number) {
       note: string | null;
       mention_ids: string;
     }[],
+    // The entry and its connections as checked against the open web, when
+    // you have asked for that.
+    webChecks: webChecksFor(id),
   };
 }
 

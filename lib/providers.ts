@@ -99,9 +99,10 @@ export const PROVIDERS: Record<ProviderId, ProviderSpec> = {
     // (30 Sep 2026). Claude Code reports the version that answered on every call.
     defaultModel: "claude-sonnet-5-5",
     keysUrl: "",
-    // Text only: the adapter sends one prompt through Claude Code, so pages
-    // and recordings stay on Gemini.
-    capabilities: { json: true, vision: false, audio: false, embed: false },
+    // Pages and pictures go along as files Claude opens in the call's own
+    // folder (scanned pages, photographed documents). Recordings and
+    // embeddings stay on Gemini.
+    capabilities: { json: true, vision: true, audio: false, embed: false },
     note: "Claude on your Claude subscription, through Claude Code on this machine — no per-token bill, but every call counts against the same five-hour and weekly limits as your own chats. Claude Code must be installed and signed in on this computer; there is no key to paste — add it, then sign in or switch account in its card. Worth it for the brief and for writing entries; reading passages would spend the week's allowance in a book or two.",
     freeTier: "no bill — your plan's usage limits, shared with your own Claude use; when they run out the work moves to Gemini until they reset",
     keysMultiply: false,

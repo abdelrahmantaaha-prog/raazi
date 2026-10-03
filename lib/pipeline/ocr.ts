@@ -52,6 +52,10 @@ export async function handleOcr(task: Task): Promise<void> {
 
   const { data: text, usage } = await generateText({
     need: "vision",
+    // Transcribing is reading, so it follows the reading stage's routing: with
+    // reading on Claude, a scanned page goes to Claude first rather than
+    // waiting on a Gemini key that may not be there.
+    stage: "extract",
     system: SYSTEM,
     temperature: 0,
     parts: [
