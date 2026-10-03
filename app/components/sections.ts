@@ -110,6 +110,13 @@ export const SECTIONS: Section[] = [
     ],
   },
   {
+    // What the background worker is doing and what is waiting. It was the
+    // bottom of the Library, under every shelf.
+    id: "activity",
+    label: "Activity",
+    tabs: [{ href: "/activity", label: "Activity" }],
+  },
+  {
     id: "settings",
     label: "Settings",
     tabs: [{ href: "/settings", label: "Settings" }],

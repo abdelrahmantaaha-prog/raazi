@@ -13,8 +13,12 @@ export const dynamic = "force-dynamic";
  * launcher now does that once with POST /api/worker/kick, and every action
  * that queues work kicks the worker itself.
  */
-export async function GET() {
+export async function GET(req: Request) {
   const runs = listRuns();
+  // The Activity page wants the queue alone, not every source in the library.
+  if (new URL(req.url).searchParams.get("only") === "runs") {
+    return NextResponse.json({ runs, worker: workerStatus() });
+  }
 
   const sources = db()
     .prepare(

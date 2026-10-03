@@ -41,6 +41,9 @@ export function migrate(db: Database.Database) {
   // The folder a source was read from, when it came in a zip or a folder.
   addColumn(db, "sources", "folder_id", "INTEGER");
 
+  // "Do this first" on a batch in Activity: its reading goes ahead of the rest.
+  addColumn(db, "runs", "first", "INTEGER NOT NULL DEFAULT 0");
+
   // Your own answer to "what kind of thing is this", overriding the guess made
   // from file type and length. Null means "keep guessing".
   addColumn(db, "sources", "shelf", "TEXT");

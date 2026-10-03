@@ -2,7 +2,7 @@
 
 import { useCallback, useEffect, useRef, useState } from "react";
 import Link from "next/link";
-import { Badge, Button, Card, Empty, Progress } from "./components/ui";
+import { Empty } from "./components/ui";
 import { AddSource } from "./components/AddSource";
 import { SourceCover } from "./components/SourceCover";
 import { READING_STATES, readingStateOf, shelfOf } from "@/lib/shelves";
@@ -58,23 +58,6 @@ interface Totals {
   entries: number;
   stale: number;
 }
-
-interface StaleInfo {
-  total: number;
-  rewrites: number;
-  newEntries: number;
-}
-
-const STATE_LABEL: Record<string, { text: string; tone: "running" | "warn" | "danger" | "ok" | "quiet" }> = {
-  queued: { text: "Queued", tone: "quiet" },
-  running: { text: "Running", tone: "running" },
-  paused_quota: { text: "Out of quota", tone: "warn" },
-  paused_user: { text: "Paused", tone: "quiet" },
-  paused_budget: { text: "Budget spent", tone: "warn" },
-  paused_key: { text: "Key problem", tone: "danger" },
-  done: { text: "Done", tone: "ok" },
-  failed: { text: "Finished with errors", tone: "danger" },
-};
 
 const SHELF_ORDER = ["books", "reading", "watching"] as const;
 
@@ -166,40 +149,16 @@ const isActive = (r: Run) => r.state !== "done" && r.state !== "failed";
  * has spent, the form for adding more — used to sit above the collection, so
  * the page opened on machinery and you scrolled past it to reach the reading.
  * That ordering is right for a job runner and wrong for a library. The books
- * come first now; the machinery is at the bottom, where you go when you want it.
+ * come first now, and the queue has a page of its own (Activity); the count of
+ * what is running stays here and leads there.
  */
 export default function Library() {
   const [runs, setRuns] = useState<Run[]>([]);
   const [sources, setSources] = useState<SourceRow[]>([]);
   const [totals, setTotals] = useState<Totals | null>(null);
-  const [stale, setStale] = useState<StaleInfo | null>(null);
-  const [pictures, setPictures] = useState<{
-    entries: number;
-    withPicture: number;
-    checked: number;
-    pending: number;
-  } | null>(null);
   const [loaded, setLoaded] = useState(false);
   const timer = useRef<ReturnType<typeof setTimeout> | null>(null);
   const busyRef = useRef(false);
-
-  /**
-   * The stale-entries and portrait badges, fetched apart from the run list.
-   *
-   * These were on the 1.5-second poll, and they are the two most expensive
-   * reads in the app — staleCount substring-scans every entry body against
-   * every mention. Nothing about them changes at poll speed: they move when a
-   * run finishes, so that is when they are asked for (plus once on mount, and
-   * after the buttons that change them).
-   */
-  const loadBadges = useCallback(async () => {
-    try {
-      setStale(await (await fetch("/api/entries/refresh", { cache: "no-store" })).json());
-      setPictures(await (await fetch("/api/portraits", { cache: "no-store" })).json());
-    } catch {
-      // Keep showing the last numbers rather than blanking the badges.
-    }
-  }, []);
 
   const load = useCallback(async () => {
     try {
@@ -209,12 +168,9 @@ export default function Library() {
       setRuns(data.runs ?? []);
       setSources(data.sources ?? []);
       setTotals(data.totals ?? null);
-      const busy = (data.runs ?? []).some(
+      busyRef.current = (data.runs ?? []).some(
         (r: Run) => r.state === "running" || r.state === "queued"
       );
-      // Work finishing is what changes the badges, so that edge refreshes them.
-      if (busyRef.current && !busy) void loadBadges();
-      busyRef.current = busy;
     } catch {
       // A server restart or a laptop waking from sleep drops one request. The
       // last numbers stay on screen and the next tick asks again — this used
@@ -222,7 +178,7 @@ export default function Library() {
     } finally {
       setLoaded(true);
     }
-  }, [loadBadges]);
+  }, []);
 
   // Poll while anything is moving; back off to a slow tick when it isn't. The
   // busy flag is a ref rather than state because the effect runs once and would
@@ -254,33 +210,14 @@ export default function Library() {
     };
     document.addEventListener("visibilitychange", onVisibility);
     void tick();
-    void loadBadges();
     return () => {
       cancelled = true;
       document.removeEventListener("visibilitychange", onVisibility);
       if (timer.current) clearTimeout(timer.current);
     };
-  }, [load, loadBadges]);
+  }, [load]);
 
   const [error, setError] = useState<string | null>(null);
-
-  const act = async (runId: number, action: string, budgetCap?: number) => {
-    setError(null);
-    try {
-      const res = await fetch(`/api/runs/${runId}`, {
-        method: "POST",
-        headers: { "content-type": "application/json" },
-        body: JSON.stringify({ action, budgetCap }),
-      });
-      if (!res.ok) {
-        const data = await res.json().catch(() => ({}));
-        throw new Error(data.error ?? `Could not ${action} that run.`);
-      }
-    } catch (err) {
-      setError((err as Error).message);
-    }
-    void load();
-  };
 
   const setReadingState = async (id: number, readingState: string | null) => {
     // Optimistic: the shelf regroups as you choose, rather than after a round
@@ -321,7 +258,6 @@ export default function Library() {
   };
 
   const active = runs.filter(isActive);
-  const failedRuns = runs.filter((r) => r.state === "failed");
   const paused = active.filter((r) => r.state.startsWith("paused"));
   const shelves = SHELF_ORDER.map((shelf) => ({
     shelf,
@@ -353,10 +289,10 @@ export default function Library() {
             </>
           )}
           {active.length > 0 && (
-            <a
-              href="#activity"
+            <Link
+              href="/activity"
               className="rounded-full border border-[var(--color-rule)] px-3 py-1 text-xs hover:bg-[var(--color-accent-soft)]"
-              title="Jump to what the queue is doing"
+              title="What the queue is doing"
             >
               {paused.length > 0 ? (
                 <span className="text-amber-700">
@@ -366,7 +302,7 @@ export default function Library() {
               ) : (
                 <span className="text-[var(--color-muted)]">{active.length} running</span>
               )}
-            </a>
+            </Link>
           )}
         </div>
       </div>
@@ -468,101 +404,7 @@ export default function Library() {
         </div>
       )}
 
-      {/* ------------------------------------------------------------------ */}
-      {/* Below the fold: housekeeping, the queue, and the way to add more.   */}
-      {/* ------------------------------------------------------------------ */}
-
-      <div id="activity" className="space-y-4 border-t border-[var(--color-rule)] pt-8">
-        <h2 className="font-serif text-lg font-semibold">Activity</h2>
-
-        {error && <p className="text-sm text-red-700">{error}</p>}
-
-        {stale && stale.total > 0 && (
-          <div className="flex flex-wrap items-center justify-between gap-3 rounded-lg border border-[var(--color-rule)] bg-white px-4 py-3">
-            <p className="text-sm">
-              <span className="font-medium">
-                {stale.rewrites > 0
-                  ? `${stale.rewrites} entr${stale.rewrites === 1 ? "y is" : "ies are"} out of date`
-                  : `${stale.newEntries} entit${stale.newEntries === 1 ? "y has" : "ies have"} earned an entry`}
-              </span>
-              <span className="text-[var(--color-muted)]">
-                {stale.rewrites > 0 && stale.newEntries > 0
-                  ? `, and ${stale.newEntries} new one${stale.newEntries === 1 ? "" : "s"} to write. `
-                  : ". "}
-                These are picked up on their own once the queue is clear — this just does it now.
-              </span>
-            </p>
-            <Button
-              onClick={async () => {
-                await fetch("/api/entries/refresh", { method: "POST" });
-                void load();
-              }}
-            >
-              Update now
-            </Button>
-          </div>
-        )}
-
-        {pictures && pictures.pending > 0 && (
-          <div className="flex flex-wrap items-center justify-between gap-3 rounded-lg border border-[var(--color-rule)] bg-white px-4 py-3">
-            <p className="text-sm">
-              <span className="font-medium">
-                {pictures.pending} entr{pictures.pending === 1 ? "y has" : "ies have"} no picture yet
-              </span>
-              <span className="text-[var(--color-muted)]">
-                {" "}
-                — {pictures.withPicture} found so far. Looked up on Wikidata, which costs no tokens
-                but wants a second and a half between questions, so it runs in the background like
-                anything else.
-              </span>
-            </p>
-            <Button
-              onClick={async () => {
-                await fetch("/api/portraits", { method: "POST" });
-                void load();
-              }}
-            >
-              Find pictures
-            </Button>
-          </div>
-        )}
-
-        {paused.length > 0 && (
-          <div className="rounded-lg border border-amber-200 bg-amber-50 p-4">
-            <p className="text-sm font-medium text-amber-900">
-              {paused.length === 1 ? "A run is paused" : `${paused.length} runs are paused`}
-            </p>
-            <p className="mt-1 text-sm text-amber-800">{paused[0].last_error}</p>
-            <div className="mt-3 flex flex-wrap gap-2">
-              {paused.map((r) => (
-                <Button key={r.id} onClick={() => act(r.id, "resume")}>
-                  Resume &ldquo;{r.label ?? r.source_title ?? `run ${r.id}`}&rdquo;
-                </Button>
-              ))}
-            </div>
-          </div>
-        )}
-
-        {active.length === 0 ? (
-          <p className="text-sm text-[var(--color-muted)]">The queue is empty.</p>
-        ) : (
-          active.map((r) => <RunCard key={r.id} run={r} onAct={act} />)
-        )}
-
-        {/* Finished badly is still finished: these are not running and offer
-            Retry, not Pause. They used to sit in the active list and keep the
-            header at "1 running" for ever. */}
-        {failedRuns.length > 0 && (
-          <div className="space-y-3">
-            <h3 className="text-xs uppercase tracking-[0.14em] text-[var(--color-muted)]">
-              Finished with errors ({failedRuns.length})
-            </h3>
-            {failedRuns.map((r) => (
-              <RunCard key={r.id} run={r} onAct={act} />
-            ))}
-          </div>
-        )}
-      </div>
+      {error && <p className="text-sm text-red-700">{error}</p>}
 
       <div className="border-t border-[var(--color-rule)] pt-8">
         <h2 className="mb-3 font-serif text-lg font-semibold">Add to the library</h2>
@@ -779,85 +621,5 @@ function Stat({ label, value, tone }: { label: string; value: number; tone?: "am
       </div>
       <div className="text-xs text-[var(--color-muted)]">{label}</div>
     </div>
-  );
-}
-
-function RunCard({
-  run,
-  onAct,
-}: {
-  run: Run;
-  onAct: (id: number, action: string, budgetCap?: number) => void;
-}) {
-  const label = STATE_LABEL[run.state] ?? { text: run.state, tone: "quiet" as const };
-  const isPaused = run.state.startsWith("paused");
-  const isFailed = run.state === "failed";
-  const tokens = run.tokens_in + run.tokens_out;
-
-  return (
-    <Card>
-      <div className="flex flex-wrap items-center justify-between gap-3">
-        <div className="min-w-0">
-          <div className="flex items-center gap-2">
-            <span className="truncate font-medium">
-              {run.label ?? run.source_title ?? `Run ${run.id}`}
-            </span>
-            <Badge tone={label.tone}>{label.text}</Badge>
-          </div>
-          <p className="mt-1 text-sm text-[var(--color-muted)]">
-            {run.done} of {run.total} steps
-            {run.failed > 0 && ` · ${run.failed} failed`}
-            {tokens > 0 && ` · ${tokens.toLocaleString()} tokens`}
-            {run.budget_cap ? ` of ${run.budget_cap.toLocaleString()}` : ""}
-            {run.models && (
-              <>
-                {" · "}
-                <Badge>{run.models}</Badge>
-              </>
-            )}
-          </p>
-        </div>
-        <div className="flex gap-2">
-          {isFailed ? (
-            <Button variant="primary" onClick={() => onAct(run.id, "retry")}>
-              Retry{run.failed > 0 ? ` ${run.failed} failed` : ""}
-            </Button>
-          ) : isPaused ? (
-            <Button variant="primary" onClick={() => onAct(run.id, "resume")}>
-              Resume
-            </Button>
-          ) : (
-            <Button onClick={() => onAct(run.id, "pause")}>Pause</Button>
-          )}
-          {!isFailed && run.failed > 0 && (
-            <Button onClick={() => onAct(run.id, "retry")}>Retry {run.failed} failed</Button>
-          )}
-          {run.state === "paused_budget" && (
-            <Button
-              onClick={() => {
-                const next = prompt(
-                  "New token cap for this run (blank = no cap):",
-                  String((run.budget_cap ?? 0) * 2)
-                );
-                if (next !== null) onAct(run.id, "budget", Number(next) || 0);
-              }}
-            >
-              Raise cap
-            </Button>
-          )}
-        </div>
-      </div>
-
-      <div className="mt-3">
-        <Progress value={run.done} total={run.total} tone={isPaused || isFailed ? "amber" : "accent"} />
-      </div>
-
-      {run.last_error && <p className="mt-2 text-sm text-[var(--color-muted)]">{run.last_error}</p>}
-      {run.resume_at && !isFailed && (
-        <p className="mt-1 text-sm text-amber-700">
-          Will retry on its own {relativeDate(run.resume_at)} ({formatDateTime(run.resume_at)}).
-        </p>
-      )}
-    </Card>
   );
 }

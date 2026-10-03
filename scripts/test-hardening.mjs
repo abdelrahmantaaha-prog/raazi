@@ -789,5 +789,54 @@ section("The pedia list is bounded but not silently");
   check("a big limit is allowed through", Array.isArray(listEntities({ limit: 100000 })));
 }
 
+section("Reading goes ahead of entry writing, and the brief ahead of both");
+{
+  const { createRun, enqueue, claimNext } = await import("../lib/queue.ts");
+  const { db } = await import("../lib/db/index.ts");
+  db().prepare("UPDATE tasks SET state='done' WHERE state IN ('pending','running')").run();
+  // The batch that asked for entries came first; the article and the brief later.
+  const early = createRun({ kind: "ingest", label: "kept articles" });
+  enqueue(early, [{ kind: "entry", payload: { entityId: 1 } }, { kind: "entry", payload: { entityId: 2 } }]);
+  const later = createRun({ kind: "ingest", label: "another article" });
+  enqueue(later, [{ kind: "tag", payload: { sourceId: 9 } }, { kind: "extract", payload: { chunkId: 9 } }]);
+  const brief = createRun({ kind: "brief", label: "brief" });
+  enqueue(brief, [{ kind: "brief", payload: {} }]);
+  const order = [];
+  for (let t = claimNext(); t; t = claimNext()) order.push(t.kind);
+  check("brief, then reading, then entries", order.join() === "brief,tag,extract,entry,entry", order.join());
+}
+
+section("Do this first: a batch's reading jumps the line, its entries do not");
+{
+  const { createRun, enqueue, claimNext, setRunFirst } = await import("../lib/queue.ts");
+  const { db } = await import("../lib/db/index.ts");
+  db().prepare("UPDATE tasks SET state='done' WHERE state IN ('pending','running')").run();
+  const older = createRun({ kind: "ingest", label: "articles" });
+  enqueue(older, [{ kind: "extract", payload: { chunkId: 1 } }]);
+  const folder = createRun({ kind: "folder", label: "Folder: papers" });
+  enqueue(folder, [{ kind: "folder_file", payload: { fileId: 1 } }, { kind: "entry", payload: { entityId: 5 } }]);
+  const brief = createRun({ kind: "brief", label: "brief" });
+  enqueue(brief, [{ kind: "brief", payload: {} }]);
+  setRunFirst(folder, true);
+  const order = [];
+  for (let t = claimNext(); t; t = claimNext()) order.push(`${t.kind}${t.run_id === folder ? "*" : ""}`);
+  check("brief, then the folder's reading, then the rest, entries last", order.join() === "brief,folder_file*,extract,entry*", order.join());
+}
+
+section("An unfinished run stays on the Activity list, however many came after");
+{
+  const { createRun, enqueue, listRuns } = await import("../lib/queue.ts");
+  const { db } = await import("../lib/db/index.ts");
+  const old = createRun({ kind: "ingest", label: "waiting since morning" });
+  enqueue(old, [{ kind: "extract", payload: { chunkId: 1 } }]);
+  for (let i = 0; i < 60; i++) {
+    const r = createRun({ kind: "poll", label: `feed check ${i}` });
+    db().prepare("UPDATE runs SET state='done' WHERE id=?").run(r);
+  }
+  const listed = listRuns();
+  check("the waiting run is listed", listed.some((r) => r.id === old));
+  check("beside the newest fifty", listed.filter((r) => r.kind === "poll").length === 50, String(listed.length));
+}
+
 console.log(`\n${passed} passed, ${failed} failed`);
 process.exit(failed > 0 ? 1 : 0);

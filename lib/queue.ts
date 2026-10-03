@@ -79,14 +79,33 @@ export const PRIORITY: Record<string, number> = {
   // Asked for with a click on the brief, and wanted while you are still reading it.
   expand: 0,
   fetch_item: 1,
+  // Writing an entry is the slow step — minutes a time with Opus — and it
+  // queued inside the batch that asked for it, so 27 entries from four kept
+  // articles held seven later articles and a whole folder unread for hours
+  // (3 Oct 2026). Reading comes first now and entries follow, in the quiet.
+  // The brief is untouched: it stays at the front.
+  entry: 3,
   portrait: 3,
   plan_portraits: 3,
 };
 const DEFAULT_PRIORITY = 2;
 
-const PRIORITY_SQL = `CASE t.kind ${Object.entries(PRIORITY)
+const KIND_PRIORITY_SQL = `CASE t.kind ${Object.entries(PRIORITY)
   .map(([kind, p]) => `WHEN '${kind}' THEN ${p}`)
   .join(" ")} ELSE ${DEFAULT_PRIORITY} END`;
+
+/**
+ * A batch you marked "Do this first" has its reading taken right after the
+ * brief and the news fetching, ahead of every other batch. Its entries still
+ * wait their turn at the back: what you are in a hurry for is the reading.
+ */
+const PRIORITY_SQL = `CASE WHEN r.first = 1 AND t.kind <> 'entry' AND ${KIND_PRIORITY_SQL} > 0
+  THEN 0.5 ELSE ${KIND_PRIORITY_SQL} END`;
+
+/** Puts a batch's reading ahead of every other batch's, or back in line. */
+export function setRunFirst(runId: number, first: boolean) {
+  db().prepare("UPDATE runs SET first=? WHERE id=?").run(first ? 1 : 0, runId);
+}
 
 export function claimNext(): Task | undefined {
   // A task waiting out a retry (not_before) is passed over, not slept on:
@@ -472,10 +491,22 @@ function tidyModels(row: RunProgress): RunProgress {
   return row;
 }
 
+/**
+ * Every run still to finish, however old, and the newest `limit` beside them.
+ * It used to be the newest fifty only, and the morning's feed checks make a
+ * run each — sixty-seven of them between 11:37 and 19:45 on 3 Oct 2026 — so
+ * nine runs still waiting to be read fell off the Activity list while they
+ * were still in the queue.
+ */
 export function listRuns(limit = 50): RunProgress[] {
   return (
     db()
-      .prepare(`${RUN_PROGRESS_SQL} ORDER BY r.id DESC LIMIT ?`)
+      .prepare(
+        `${RUN_PROGRESS_SQL}
+          WHERE r.state NOT IN ('done', 'failed')
+             OR r.id IN (SELECT id FROM runs ORDER BY id DESC LIMIT ?)
+          ORDER BY r.id DESC`
+      )
       .all(limit) as RunProgress[]
   ).map(tidyModels);
 }

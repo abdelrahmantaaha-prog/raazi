@@ -35,6 +35,7 @@ const ICONS: Record<string, (p: IconProps) => ReactElement> = {
   pedia: Cards,
   write: Pen,
   search: Glass,
+  activity: Pulse,
   settings: Gear,
 };
 
@@ -173,6 +174,14 @@ function Glass({ active }: IconProps) {
     <svg {...box} strokeWidth={active ? 2 : 1.7}>
       <circle cx="10.8" cy="10.8" r="6.3" />
       <path d="m20 20-4.7-4.7" />
+    </svg>
+  );
+}
+
+function Pulse({ active }: IconProps) {
+  return (
+    <svg {...box} strokeWidth={active ? 2 : 1.7}>
+      <path d="M3 12h4l2.5-6 5 12 2.5-6h4" />
     </svg>
   );
 }

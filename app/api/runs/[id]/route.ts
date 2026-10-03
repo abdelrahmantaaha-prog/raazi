@@ -1,7 +1,7 @@
 import { NextResponse } from "next/server";
 import { asId, badRequest, exists, notFound, readBody } from "@/lib/http";
 import { db } from "@/lib/db";
-import { getRun, pauseRun, resumeRun, retryFailedTasks } from "@/lib/queue";
+import { getRun, pauseRun, resumeRun, retryFailedTasks, setRunFirst } from "@/lib/queue";
 import { kickWorker } from "@/lib/worker";
 
 export const dynamic = "force-dynamic";
@@ -10,7 +10,7 @@ export async function POST(req: Request, ctx: { params: Promise<{ id: string }> 
   const runId = asId((await ctx.params).id);
   if (runId === null) return badRequest("Not a valid id.");
   const parsed = await readBody<{
-    action: "pause" | "resume" | "retry" | "budget";
+    action: "pause" | "resume" | "retry" | "budget" | "first" | "unfirst";
     budgetCap?: number | null;
   }>(req);
   if (parsed === null) return badRequest("Malformed JSON body.");
@@ -55,6 +55,12 @@ export async function POST(req: Request, ctx: { params: Promise<{ id: string }> 
       }
       break;
     }
+
+    case "first":
+    case "unfirst":
+      setRunFirst(runId, action === "first");
+      kickWorker();
+      break;
 
     default:
       return badRequest("Unknown action.");
