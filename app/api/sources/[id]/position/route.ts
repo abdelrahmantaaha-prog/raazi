@@ -32,10 +32,14 @@ export async function POST(req: Request, ctx: { params: Promise<{ id: string }> 
   const parsed = await readBody<{
     chunkId: number | null;
     offset?: number;
-    /** Passages dwelled on since the last save. */
+    /** Passages finished since the last save. */
     read?: number[];
+    /** Passages read partway since the last save, and how far into each. */
+    partly?: { chunkId: number; share: number }[];
     /** Set when you said outright that you have read this far. */
     through?: number;
+    /** How far into `through` you had got, 0 to 1. A whole passage if absent. */
+    throughShare?: number;
   }>(req);
   if (parsed === null) return badRequest("Malformed JSON body.");
 
@@ -49,12 +53,25 @@ export async function POST(req: Request, ctx: { params: Promise<{ id: string }> 
     return badRequest("read must be a list of passage ids.");
   }
   const read = (parsed.read ?? []).map((n) => asId(n)).filter((n): n is number => n !== null);
+  if (parsed.partly !== undefined && !Array.isArray(parsed.partly)) {
+    return badRequest("partly must be a list of { chunkId, share }.");
+  }
+  const partly = (parsed.partly ?? []).flatMap((p) => {
+    const id = asId(p?.chunkId);
+    return id !== null && typeof p.share === "number" && Number.isFinite(p.share)
+      ? [{ chunkId: id, share: p.share }]
+      : [];
+  });
+  const throughShare = parsed.throughShare === undefined ? 1 : parsed.throughShare;
+  if (typeof throughShare !== "number" || !Number.isFinite(throughShare)) {
+    return badRequest("throughShare must be a number.");
+  }
 
   if (!exists("sources", id)) return notFound("No such source.");
 
-  if (through) markReadThrough(id, through);
+  if (through) markReadThrough(id, through, throughShare);
 
-  recordPosition(id, { chunkId: chunkId ?? null, offset, read });
+  recordPosition(id, { chunkId: chunkId ?? null, offset, read, partly });
 
   const along = readAlong(id);
   if (along.queued > 0) kickWorker();

@@ -426,6 +426,12 @@ export function migrate(db: Database.Database) {
   // fact-check reads, so neither has to be derived from the other at read time.
   addColumn(db, "drafts", "body_html", "TEXT NOT NULL DEFAULT ''");
 
+  // How much of a passage you have read, 0 to 1. A passage of a book runs to
+  // several pages, so whole passages were far too coarse a unit: "Read to here"
+  // counted the rest of the passage you stopped in, and reading mode counted
+  // nothing until its last paragraph. Rows from before this were whole passages.
+  addColumn(db, "read_passages", "share", "REAL NOT NULL DEFAULT 1");
+
   // Evidence that still counts.
   //
   // Every read that feeds a model, a count, or a page goes through this rather

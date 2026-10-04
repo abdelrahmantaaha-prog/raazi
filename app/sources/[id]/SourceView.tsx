@@ -56,7 +56,14 @@ export function SourceView({
   entities: EntityRow[];
   tags: Tag[];
   unread: number;
-  position: { chunkId: number | null; offset: number; progress: number; read: number[] };
+  position: {
+    chunkId: number | null;
+    offset: number;
+    progress: number;
+    read: number[];
+    /** Passages read only partway, and how far into each. */
+    partly: Record<number, number>;
+  };
   marks: Mark[];
   /** A passage the URL asked for: the reader opens straight away, at it. */
   initialChunk?: number | null;

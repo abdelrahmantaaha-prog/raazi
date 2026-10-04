@@ -78,6 +78,8 @@ export interface Position {
   offset: number;
   /** Passages read since the last save. Progress is computed from these. */
   read?: number[];
+  /** Passages read partway since the last save, and how far into each. */
+  partly?: { chunkId: number; share: number }[];
 }
 
 /**
@@ -95,6 +97,7 @@ export function recordPosition(sourceId: number, pos: Position): void {
   // on. Those are what progress is computed from; the scroll fraction is not
   // stored at all any more, because it was never a measure of reading.
   if (pos.read?.length) markRead(sourceId, pos.read, "read");
+  for (const p of pos.partly ?? []) markRead(sourceId, [p.chunkId], "read", p.share);
 
   // A position in some other book is not a position in this one. Looked up
   // first so a foreign id neither becomes the bookmark nor moves the mark.
@@ -122,40 +125,56 @@ export function recordPosition(sourceId: number, pos: Position): void {
  * Weighted by length when progress is computed, so a book of uneven chapters
  * does not jump five per cent for a half-page passage and one per cent for a
  * long one.
+ *
+ * `share` is how much of each passage, 0 to 1: a passage of a book is several
+ * pages, and stopping a third of the way into one is not having read it. It
+ * only ever rises, for the same reason `furthest_chunk` does — going back to
+ * re-read the top of a passage does not un-read the rest of it.
  */
-export function markRead(sourceId: number, chunkIds: number[], how: "read" | "marked"): number {
+export function markRead(
+  sourceId: number,
+  chunkIds: number[],
+  how: "read" | "marked",
+  share = 1
+): number {
   if (!chunkIds.length) return 0;
+  const s = Number.isFinite(share) ? Math.min(1, share) : 0;
+  // Nothing read of it is not a row: a row is what read-along and "Read
+  // again" take as having been read.
+  if (s <= 0) return 0;
   // Only passages of *this* source. The ids arrive from the browser, and a
   // chunk id from another book satisfies the foreign key just as well — it
   // would count as read here, and read-along would then hand that other book
   // to the model. The ownership check is in the statement, not around it.
   const stmt = db().prepare(
-    `INSERT INTO read_passages (source_id, chunk_id, how)
-     SELECT ?, id, ? FROM chunks WHERE id = ? AND source_id = ?
-       ON CONFLICT(source_id, chunk_id) DO NOTHING`
+    `INSERT INTO read_passages (source_id, chunk_id, how, share)
+     SELECT ?, id, ?, ? FROM chunks WHERE id = ? AND source_id = ?
+       ON CONFLICT(source_id, chunk_id) DO UPDATE SET share = excluded.share
+        WHERE excluded.share > read_passages.share`
   );
   return tx(() => {
     let n = 0;
     for (const id of chunkIds) {
       if (!Number.isInteger(id) || id <= 0) continue;
-      n += stmt.run(sourceId, how, id, sourceId).changes;
+      n += stmt.run(sourceId, how, s, id, sourceId).changes;
     }
     return n;
   });
 }
 
-/** Everything up to and including this passage counts as read. */
-export function markReadThrough(sourceId: number, chunkId: number): number {
-  const ids = (
+/**
+ * Everything before this passage counts as read, and `share` of this one —
+ * the part above where you stopped, not the pages of it still below.
+ */
+export function markReadThrough(sourceId: number, chunkId: number, share = 1): number {
+  const at = seqOf(sourceId, chunkId);
+  if (at === null) return 0;
+  const before = (
     db()
-      .prepare(
-        `SELECT id FROM chunks
-          WHERE source_id = ?
-            AND seq <= (SELECT seq FROM chunks WHERE id = ? AND source_id = ?)`
-      )
-      .all(sourceId, chunkId, sourceId) as { id: number }[]
+      .prepare("SELECT id FROM chunks WHERE source_id = ? AND seq < ?")
+      .all(sourceId, at) as { id: number }[]
   ).map((c) => c.id);
-  const n = markRead(sourceId, ids, "marked");
+  const n = markRead(sourceId, before, "marked") + markRead(sourceId, [chunkId], "marked", share);
   recomputeProgress(sourceId);
   return n;
 }
@@ -176,7 +195,7 @@ export function recomputeProgress(sourceId: number): number {
   const row = db()
     .prepare(
       `SELECT COALESCE(SUM(LENGTH(c.text)), 0) AS total,
-              COALESCE(SUM(CASE WHEN r.chunk_id IS NULL THEN 0 ELSE LENGTH(c.text) END), 0) AS done
+              COALESCE(SUM(LENGTH(c.text) * COALESCE(r.share, 0)), 0) AS done
          FROM chunks c
     LEFT JOIN read_passages r ON r.chunk_id = c.id AND r.source_id = c.source_id
         WHERE c.source_id = ?`
@@ -188,13 +207,21 @@ export function recomputeProgress(sourceId: number): number {
   return progress;
 }
 
-/** Which passages of this source are already read. */
+/** Which passages of this source are already read, in whole or in part. */
 export function readPassages(sourceId: number): number[] {
   return (
     db()
       .prepare("SELECT chunk_id FROM read_passages WHERE source_id=?")
       .all(sourceId) as { chunk_id: number }[]
   ).map((r) => r.chunk_id);
+}
+
+/** The passages read only partway, and how far into each. */
+export function partlyRead(sourceId: number): Record<number, number> {
+  const rows = db()
+    .prepare("SELECT chunk_id, share FROM read_passages WHERE source_id=? AND share < 1")
+    .all(sourceId) as { chunk_id: number; share: number }[];
+  return Object.fromEntries(rows.map((r) => [r.chunk_id, r.share]));
 }
 
 /** Forgets a source's position entirely, for starting it over. */

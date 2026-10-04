@@ -121,7 +121,14 @@ export function Reader({
   title: string;
   author: string | null;
   sourceId: number;
-  position: { chunkId: number | null; offset: number; progress: number; read: number[] };
+  position: {
+    chunkId: number | null;
+    offset: number;
+    progress: number;
+    read: number[];
+    /** Passages read only partway, and how far into each. */
+    partly: Record<number, number>;
+  };
   marks: Mark[];
   /** Whether Corpus reads this source as you go, and how far behind it is. */
   readAlong: { on: boolean; remaining: number };
@@ -156,7 +163,16 @@ export function Reader({
     from: 0,
   }).current;
   const saveTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
-  const lastSaved = useRef<number | null>(null);
+  const lastSaved = useRef<{ id: number; offset: number } | null>(null);
+  /**
+   * Whether reading mode is on, for measurements taken outside a render. In
+   * reading mode the lit paragraph sits a third of the way down the screen,
+   * not on the reading line, and "where you are" has to follow it.
+   */
+  const focusMode = useRef(prefs.mode === "focus");
+  useEffect(() => {
+    focusMode.current = prefs.mode === "focus";
+  }, [prefs.mode]);
   /**
    * Where the reading line was at the last scroll tick. The unmount flush runs
    * after React has detached the scroller ref, so it cannot measure anything —
@@ -164,11 +180,16 @@ export function Reader({
    * before closing was lost whenever you closed within its 600 ms debounce.
    */
   const lastPosition = useRef<{ id: number; offset: number } | null>(null);
-  /** Passages already known to be read, so they are never re-sent. */
-  const read = useRef<Set<number>>(new Set(position.read));
-  /** Read since the last save, waiting to be reported. */
-  const pendingRead = useRef<Set<number>>(new Set());
-  const [readCount, setReadCount] = useState(position.read.length);
+  /**
+   * How much of each passage is known to be read, 0 to 1, so it is never
+   * re-sent. Partway counts: a passage of a book is several pages long.
+   */
+  const read = useRef<Map<number, number>>(
+    new Map(position.read.map((id) => [id, position.partly[id] ?? 1]))
+  );
+  /** Read since the last save, and how far, waiting to be reported. */
+  const pendingRead = useRef<Map<number, number>>(new Map());
+  const [readCount, setReadCount] = useState(() => finishedCount(read.current));
 
   const blocks = useMemo(() => joinPassages(passages), [passages]);
   const theme = THEMES[prefs.theme];
@@ -177,20 +198,25 @@ export function Reader({
    * Every paragraph in the book, in order, each knowing which passage it
    * belongs to and whether it is the last one there.
    *
-   * Reading mode advances a paragraph at a time, but progress is stored per
-   * passage — so finishing the *last* paragraph of a passage is what marks that
-   * passage read. Working it out once here means the advance itself stays a
-   * single increment.
+   * Reading mode advances a paragraph at a time, and progress is stored per
+   * passage as a share of it — so each paragraph carries how much of its
+   * passage is read once it is finished. Working it out once here means the
+   * advance itself stays a single increment.
    */
   const paragraphs = useMemo(() => {
-    const flat: { chunkId: number; blockKey: string; index: number; last: boolean }[] = [];
+    const flat: { chunkId: number; blockKey: string; index: number; upto: number }[] = [];
     for (const b of blocks) {
-      b.paragraphs.forEach((_, i) => {
+      const total = b.paragraphs.reduce((n, p) => n + p.length, 0) || 1;
+      let done = 0;
+      b.paragraphs.forEach((p, i) => {
+        done += p.length;
         flat.push({
           chunkId: b.chunkId,
           blockKey: b.key,
           index: i,
-          last: i === b.paragraphs.length - 1,
+          // Exactly 1 at the end, whatever the rounding, so a finished passage
+          // is finished.
+          upto: i === b.paragraphs.length - 1 ? 1 : done / total,
         });
       });
     }
@@ -256,7 +282,10 @@ export function Reader({
   const currentPassage = useCallback((): { id: number; offset: number } | null => {
     const el = scroller.current;
     if (!el) return null;
-    const line = el.getBoundingClientRect().top + READING_LINE;
+    // In reading mode, the top of the lit paragraph — see `showParagraph`.
+    const line =
+      el.getBoundingClientRect().top +
+      (focusMode.current ? el.clientHeight * 0.32 + 1 : READING_LINE);
 
     let best: { id: number; offset: number } | null = null;
     for (const section of el.querySelectorAll<HTMLElement>("section[data-chunk]")) {
@@ -283,7 +312,7 @@ export function Reader({
     let done = 0;
     for (const p of passages) {
       total += p.text.length;
-      if (read.current.has(p.id)) done += p.text.length;
+      done += p.text.length * (read.current.get(p.id) ?? 0);
     }
     return total > 0 ? done / total : 0;
   }, [passages]);
@@ -291,9 +320,10 @@ export function Reader({
   /**
    * Saves the position, and lets the server read on from there.
    *
-   * Skipped when the passage has not changed and the save was not asked for,
-   * because a scroll within one long passage does not change what Corpus is
-   * allowed to read and is not worth a round trip.
+   * Skipped when you have hardly moved and the save was not asked for. Moving
+   * within a passage does count: a passage of a book is several pages, and
+   * saving only on entering one put you back at its top every time you
+   * came back.
    */
   const save = useCallback(
     async (force = false) => {
@@ -303,15 +333,24 @@ export function Reader({
       const newlyRead = [...pendingRead.current];
       // Nothing moved and nothing was read: no reason to say anything.
       if (!at) return;
-      if (!force && lastSaved.current === at.id && newlyRead.length === 0) return;
-      lastSaved.current = at.id;
+      const was = lastSaved.current;
+      const moved = !was || was.id !== at.id || Math.abs(was.offset - at.offset) > 0.02;
+      if (!force && !moved && newlyRead.length === 0) return;
+      lastSaved.current = at;
       pendingRead.current.clear();
 
       try {
         const res = await fetch(`/api/sources/${sourceId}/position`, {
           method: "POST",
           headers: { "content-type": "application/json" },
-          body: JSON.stringify({ chunkId: at.id, offset: at.offset, read: newlyRead }),
+          body: JSON.stringify({
+            chunkId: at.id,
+            offset: at.offset,
+            read: newlyRead.filter(([, share]) => share >= 1).map(([id]) => id),
+            partly: newlyRead
+              .filter(([, share]) => share < 1)
+              .map(([chunkId, share]) => ({ chunkId, share })),
+          }),
           // Survives the page going away mid-request, which is exactly when
           // the unmount flush sends it.
           keepalive: true,
@@ -321,7 +360,9 @@ export function Reader({
       } catch {
         // Losing a save to a dropped request is survivable — but the passages
         // it was carrying go back in the queue rather than being forgotten.
-        for (const id of newlyRead) pendingRead.current.add(id);
+        for (const [id, share] of newlyRead) {
+          if (share > (pendingRead.current.get(id) ?? 0)) pendingRead.current.set(id, share);
+        }
       }
     },
     [sourceId, currentPassage]
@@ -379,7 +420,7 @@ export function Reader({
 
     const into = asked ? 0 : (target.offsetHeight || 0) * (position.offset ?? 0);
     el.scrollTop = target.offsetTop - READING_LINE + into;
-    lastSaved.current = chunkId;
+    lastSaved.current = { id: chunkId, offset: asked ? 0 : position.offset ?? 0 };
     setProgress(fraction());
 
     const seq = passages.find((p) => p.id === chunkId)?.seq;
@@ -430,19 +471,32 @@ export function Reader({
     };
   }, [ready, save, currentPassage]);
 
-  /** "I have read this far" — everything up to here, whatever you scrolled past. */
+  /**
+   * "I have read this far" — everything above the reading line, whatever you
+   * scrolled past. Not the rest of the passage the line is in: that can be
+   * pages you have not reached.
+   */
   const markThroughHere = useCallback(async () => {
     const at = currentPassage();
     if (!at) return;
     const upTo = passages.find((p) => p.id === at.id)?.seq ?? -1;
-    for (const p of passages) if (p.seq <= upTo) read.current.add(p.id);
-    setReadCount(read.current.size);
+    for (const p of passages) {
+      const share = p.seq < upTo ? 1 : p.id === at.id ? at.offset : 0;
+      if (share > (read.current.get(p.id) ?? 0)) read.current.set(p.id, share);
+    }
+    setReadCount(finishedCount(read.current));
     setProgress(fraction());
+    lastSaved.current = at;
 
     const res = await fetch(`/api/sources/${sourceId}/position`, {
       method: "POST",
       headers: { "content-type": "application/json" },
-      body: JSON.stringify({ chunkId: at.id, offset: at.offset, through: at.id }),
+      body: JSON.stringify({
+        chunkId: at.id,
+        offset: at.offset,
+        through: at.id,
+        throughShare: at.offset,
+      }),
     });
     const data = (await res.json()) as { remaining?: number };
     if (typeof data.remaining === "number") setPending(data.remaining);
@@ -487,9 +541,11 @@ export function Reader({
   /**
    * "I have read this one." The only thing in the reader that records progress.
    *
-   * Advancing past the last paragraph of a passage is what marks that passage
-   * read — and therefore what releases it to the extraction queue on a
-   * read-along book. Both happen here, in one place, because you said so.
+   * Every paragraph counts, as its share of the passage it is in — a passage
+   * runs to several pages, and counting only its last paragraph meant whole
+   * sittings recorded nothing. Recording it is also what releases the passage
+   * to the extraction queue on a read-along book. Both happen here, in one
+   * place, because you said so.
    */
   const finishParagraph = useCallback(() => {
     // Read from the updater rather than from the closure: pressing the button
@@ -499,10 +555,10 @@ export function Reader({
       const current = paragraphs[at];
       if (!current) return at;
 
-      if (current.last && !read.current.has(current.chunkId)) {
-        read.current.add(current.chunkId);
-        pendingRead.current.add(current.chunkId);
-        setReadCount(read.current.size);
+      if (current.upto > (read.current.get(current.chunkId) ?? 0)) {
+        read.current.set(current.chunkId, current.upto);
+        pendingRead.current.set(current.chunkId, current.upto);
+        setReadCount(finishedCount(read.current));
         setProgress(fraction());
         if (saveTimer.current) clearTimeout(saveTimer.current);
         saveTimer.current = setTimeout(() => void save(true), 600);
@@ -711,7 +767,10 @@ export function Reader({
    */
   useEffect(() => {
     if (!ready || prefs.mode !== "focus") return;
-    const firstUnread = paragraphs.findIndex((p) => !read.current.has(p.chunkId));
+    // The first paragraph not wholly inside what is already read of its passage.
+    const firstUnread = paragraphs.findIndex(
+      (p) => (read.current.get(p.chunkId) ?? 0) < p.upto - 1e-6
+    );
     setCursor(firstUnread < 0 ? paragraphs.length - 1 : firstUnread);
     // The scroll itself is the effect above, which follows the cursor.
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -1421,6 +1480,13 @@ interface Block {
   divider: string | null;
   paragraphs: string[];
   mentions: Passage["mentions"];
+}
+
+/** Passages read to the end, as opposed to partway. */
+function finishedCount(read: Map<number, number>): number {
+  let n = 0;
+  for (const share of read.values()) if (share >= 1) n++;
+  return n;
 }
 
 /** The chunk id of the first passage in the document, for positions above it. */

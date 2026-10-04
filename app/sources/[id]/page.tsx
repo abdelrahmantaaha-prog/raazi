@@ -4,7 +4,7 @@ import { formatLocator } from "@/lib/chunk";
 import { listEntities } from "@/lib/queries";
 import { tagsForSource } from "@/lib/tags";
 import type { EntityType, Locator } from "@/lib/types";
-import { readModeOf, readPassages } from "@/lib/reading";
+import { partlyRead, readModeOf, readPassages } from "@/lib/reading";
 import { SourceView } from "./SourceView";
 import { originalOf, translationsOf } from "@/lib/translations";
 import type { Mark, Passage } from "./Reader";
@@ -119,6 +119,7 @@ export default async function SourcePage({
         offset: source.bookmark_offset ?? 0,
         progress: source.progress ?? 0,
         read: readPassages(id),
+        partly: partlyRead(id),
       }}
       marks={marks}
       passages={passages}

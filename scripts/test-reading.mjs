@@ -47,6 +47,7 @@ const {
   markRead,
   markReadThrough,
   readPassages,
+  partlyRead,
 } = await import("../lib/reading.ts");
 
 /** A source with `n` passages, none of them read. */
@@ -153,6 +154,41 @@ section("Position is stored, and only ever moves forward");
   check("starting over forgets all of it",
     row.progress === 0 && row.bookmark_chunk === null && row.furthest_chunk === null);
   check("including which passages were read", readPassages(id).length === 0);
+}
+
+// ---------------------------------------------------------------------------
+section("Partway through a passage counts as partway");
+// ---------------------------------------------------------------------------
+// A passage of a real book averages several pages. Counting only whole ones,
+// "Read to here" counted the rest of the passage you stopped in, and reading
+// mode recorded nothing until a passage's last paragraph.
+{
+  const { id, chunks } = makeSource("Partway", 10, "along");
+  // Equal lengths, so a share of the book is easy to state.
+  db().prepare("UPDATE chunks SET text=? WHERE source_id=?").run("x".repeat(1000), id);
+  const progress = () => db().prepare("SELECT progress FROM sources WHERE id=?").get(id).progress;
+
+  markReadThrough(id, chunks[2], 0.3);
+  check("read to here stops where you stopped", Math.abs(progress() - 0.23) < 1e-6, String(progress()));
+  check("and the passage you stopped in is on the record",
+    partlyRead(id)[chunks[2]] !== undefined && Math.abs(partlyRead(id)[chunks[2]] - 0.3) < 1e-6);
+  check("the ones before it are not partway", partlyRead(id)[chunks[1]] === undefined);
+
+  markReadThrough(id, chunks[2], 0.1);
+  check("marking an earlier spot does not un-read anything", Math.abs(progress() - 0.23) < 1e-6, String(progress()));
+
+  recordPosition(id, { chunkId: chunks[2], offset: 0.6, partly: [{ chunkId: chunks[2], share: 0.6 }] });
+  check("reading on paragraph by paragraph moves it", Math.abs(progress() - 0.26) < 1e-6, String(progress()));
+
+  recordPosition(id, { chunkId: chunks[3], offset: 0, read: [chunks[2]] });
+  check("finishing the passage counts all of it", Math.abs(progress() - 0.3) < 1e-6, String(progress()));
+  check("and it is no longer partway", partlyRead(id)[chunks[2]] === undefined);
+
+  recordPosition(id, { chunkId: chunks[3], offset: 0, partly: [{ chunkId: chunks[3], share: 0 }] });
+  check("nothing of a passage is not a row", !readPassages(id).includes(chunks[3]));
+
+  markReadThrough(id, chunks[4]);
+  check("without a share, through means the whole passage", Math.abs(progress() - 0.5) < 1e-6, String(progress()));
 }
 
 // ---------------------------------------------------------------------------

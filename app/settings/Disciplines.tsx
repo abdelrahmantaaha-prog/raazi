@@ -1,5 +1,6 @@
 "use client";
 
+import { useRouter } from "next/navigation";
 import { useEffect, useState } from "react";
 import { Button } from "../components/ui";
 
@@ -23,6 +24,7 @@ interface Discipline {
  * library is gone before the next is opened, so nothing of it can carry over.
  */
 export function Disciplines() {
+  const router = useRouter();
   const [list, setList] = useState<Discipline[]>([]);
   const [active, setActive] = useState("");
   const [pinned, setPinned] = useState(false);
@@ -57,6 +59,11 @@ export function Disciplines() {
       const data = await res.json();
       if (!res.ok) throw new Error(data.error ?? "That did not work.");
       load(data);
+      // The rail names the open discipline, and a layout is not re-rendered by
+      // moving between pages — so a rename, or a second discipline appearing,
+      // stayed off it until a reload. Not after "open": that server is on its
+      // way out, and the page reloads itself once the next one is up.
+      if (body.action !== "open") router.refresh();
       return data;
     } catch (err) {
       setError((err as Error).message);

@@ -19,6 +19,16 @@ function disciplineName(): string | undefined {
   }
 }
 
+/**
+ * Rendered per request, never at build time.
+ *
+ * Nothing in this layout touches a request, so Next took every page below that
+ * did not either for static, and baked the rail into it as `next build` saw it:
+ * Home, Settings and Activity went on naming whichever discipline was open on
+ * the day of the build, through every switch and restart after it.
+ */
+export const dynamic = "force-dynamic";
+
 export const metadata: Metadata = {
   title: "Corpus",
   description: "A research pedia built from your own sources.",
