@@ -6,10 +6,14 @@ import Link from "next/link";
 import { dirOf } from "@/lib/dir";
 import { EntityDrawer } from "../../components/EntityDrawer";
 import {
+  NATURAL,
+  OnlineSpeaker,
   RATES,
   Speaker,
   groupVoices,
+  isNatural,
   langOf,
+  naturalVoice,
   pickVoice,
   watchVoices,
   type Voice,
@@ -244,7 +248,12 @@ export function Reader({
   /** Reading aloud: whether it is running, and whether it is on hold. */
   const [listening, setListening] = useState(false);
   const [paused, setPaused] = useState(false);
-  const [voices, setVoices] = useState<Voice[]>([]);
+  /** The browser's own voices, and Microsoft's Natural ones through Corpus. */
+  const [machineVoices, setMachineVoices] = useState<Voice[]>([]);
+  const [naturalVoices, setNaturalVoices] = useState<Voice[]>([]);
+  const voices = useMemo(() => [...naturalVoices, ...machineVoices], [naturalVoices, machineVoices]);
+  /** Why a Natural voice just gave way to one on the machine, briefly. */
+  const [voiceNote, setVoiceNote] = useState<string | null>(null);
   /**
    * The voice list as the speaking effect reads it, and the voice it last
    * spoke with. Chrome and Edge fire `voiceschanged` more than once, and with
@@ -254,12 +263,19 @@ export function Reader({
    * there was none to pick from yet.
    */
   const voicesRef = useRef<Voice[]>([]);
+  /** Whether the list held your chosen voice last time it changed. */
+  const hadChosen = useRef(false);
   const spokenVoice = useRef<string | null>(null);
   const [voiceEpoch, setVoiceEpoch] = useState(0);
   const speaker = useRef<Speaker | null>(null);
   if (speaker.current === null && typeof window !== "undefined") {
     speaker.current = new Speaker();
   }
+  const online = useRef<OnlineSpeaker | null>(null);
+  if (online.current === null && typeof window !== "undefined") {
+    online.current = new OnlineSpeaker();
+  }
+  const canSpeak = Boolean(speaker.current?.supported || online.current?.supported);
 
   /** Block key + paragraph number → its position in the whole book. */
   const paraIndex = useMemo(() => {
@@ -616,6 +632,7 @@ export function Reader({
    */
   useEffect(() => {
     const s = speaker.current;
+    const o = online.current;
     if (!listening || !ready || !s) return;
 
     const text = textAt(cursor);
@@ -626,23 +643,50 @@ export function Reader({
       return;
     }
 
+    const onDone = () => {
+      if (cursor >= paragraphs.length - 1) setListening(false);
+      else finishParagraph();
+    };
+    const onMachine = (voice: Voice | null) => {
+      const native =
+        voice && typeof window !== "undefined" && window.speechSynthesis
+          ? window.speechSynthesis.getVoices().find((v) => v.voiceURI === voice.uri) ?? null
+          : null;
+      spokenVoice.current = native?.voiceURI ?? null;
+      s.speak(text, { voice: native, rate: prefs.rate, onDone });
+    };
+
     const wanted = pickVoice(voicesRef.current, langOf(text), prefs.voice);
-    const native =
-      wanted && typeof window !== "undefined"
-        ? window.speechSynthesis.getVoices().find((v) => v.voiceURI === wanted.uri) ?? null
-        : null;
-    spokenVoice.current = native?.voiceURI ?? null;
+    if (wanted && isNatural(wanted) && o?.supported) {
+      spokenVoice.current = wanted.uri;
+      o.speak(text, {
+        voice: wanted.uri.slice(NATURAL.length),
+        rate: prefs.rate,
+        onDone,
+        // The service is unofficial and can go away; the book carries on in a
+        // voice on the machine rather than stopping mid-chapter.
+        onFail: (err) => {
+          console.warn("[corpus] Natural voice unavailable:", err.message);
+          setVoiceNote("The Natural voice could not be reached, so a voice on this machine is reading.");
+          const machine = voicesRef.current.filter((v) => !isNatural(v));
+          onMachine(pickVoice(machine, langOf(text)));
+        },
+      });
+      // The next paragraph, fetched while this one plays, so there is no
+      // pause for the round trip between them.
+      const next = textAt(cursor + 1);
+      const nextVoice = next.trim() ? pickVoice(voicesRef.current, langOf(next), prefs.voice) : null;
+      if (nextVoice && isNatural(nextVoice)) {
+        o.prefetch(next, { voice: nextVoice.uri.slice(NATURAL.length), rate: prefs.rate });
+      }
+    } else {
+      onMachine(wanted);
+    }
 
-    s.speak(text, {
-      voice: native,
-      rate: prefs.rate,
-      onDone: () => {
-        if (cursor >= paragraphs.length - 1) setListening(false);
-        else finishParagraph();
-      },
-    });
-
-    return () => s.stop();
+    return () => {
+      s.stop();
+      o?.stop();
+    };
   }, [
     listening,
     cursor,
@@ -659,8 +703,14 @@ export function Reader({
   useEffect(() => {
     const s = speaker.current;
     if (!s || !listening) return;
-    if (paused) s.pause();
-    else s.resume();
+    // Both, since either may be the one speaking; the idle one ignores it.
+    if (paused) {
+      s.pause();
+      online.current?.pause();
+    } else {
+      s.resume();
+      online.current?.resume();
+    }
   }, [paused, listening]);
 
   /**
@@ -675,7 +725,28 @@ export function Reader({
   }, [listening, cursor, ready, prefs.mode, showParagraph]);
 
   // The voices the machine has, once the browser admits to them.
-  useEffect(() => watchVoices(setVoices), []);
+  useEffect(() => watchVoices(setMachineVoices), []);
+
+  // And the Natural ones, which the server lists. Asking for the list sends
+  // nothing of the book; only choosing one of these voices does.
+  useEffect(() => {
+    let live = true;
+    fetch("/api/speech/voices")
+      .then((res) => (res.ok ? res.json() : { voices: [] }))
+      .then((data: { voices?: { id: string; name: string; lang: string }[] }) => {
+        if (live) setNaturalVoices((data.voices ?? []).map(naturalVoice));
+      })
+      .catch(() => {});
+    return () => {
+      live = false;
+    };
+  }, []);
+
+  useEffect(() => {
+    if (!voiceNote) return;
+    const t = setTimeout(() => setVoiceNote(null), 6000);
+    return () => clearTimeout(t);
+  }, [voiceNote]);
 
   useEffect(() => {
     voicesRef.current = voices;
@@ -685,11 +756,23 @@ export function Reader({
     // Speaking with no voice picked means the list was empty when it began;
     // now that there is one, the right voice may be very different.
     const nowAvailable = using === null && voices.length > 0;
-    if (vanished || nowAvailable) setVoiceEpoch((e) => e + 1);
-  }, [voices, listening]);
+    // The voice you chose arriving after reading began — the Natural list
+    // comes from the server, later than the machine's — takes over at once
+    // rather than a paragraph later.
+    const chosenArrived =
+      Boolean(prefs.voice) && using !== prefs.voice && !hadChosen.current && voices.some((v) => v.uri === prefs.voice);
+    hadChosen.current = voices.some((v) => v.uri === prefs.voice);
+    if (vanished || nowAvailable || chosenArrived) setVoiceEpoch((e) => e + 1);
+  }, [voices, listening, prefs.voice]);
 
   // Leaving the reader must not leave a voice talking to an empty room.
-  useEffect(() => () => speaker.current?.stop(), []);
+  useEffect(
+    () => () => {
+      speaker.current?.stop();
+      online.current?.stop();
+    },
+    []
+  );
 
   const toggleListening = useCallback(() => {
     if (listening) {
@@ -1034,7 +1117,7 @@ export function Reader({
             </button>
           )}
 
-          {speaker.current?.supported && (
+          {canSpeak && (
             <>
               <button
                 onClick={toggleListening}
@@ -1134,7 +1217,7 @@ export function Reader({
                 onChange={(serif) => setPrefs({ ...prefs, serif })}
                 theme={theme}
               />
-              {speaker.current?.supported && (
+              {canSpeak && (
                 <VoicePicker
                   voices={voices}
                   sample={textAt(cursor) || title}
@@ -1227,6 +1310,16 @@ export function Reader({
           </div>
         )}
       </header>
+
+      {voiceNote && (
+        <div
+          className="sticky top-[3.1rem] z-30 mx-auto max-w-5xl px-5 py-2 text-[0.8rem]"
+          style={{ color: theme.muted }}
+          role="status"
+        >
+          {voiceNote}
+        </div>
+      )}
 
       {restored && (
         <div
@@ -1559,6 +1652,10 @@ export function joinPassages(passages: Passage[]): Block[] {
  * "Choose for me" is the default and stays the sensible answer for a mixed
  * library: it follows the script of each paragraph, so an Arabic chapter in an
  * English book is still read by an Arabic voice.
+ *
+ * Microsoft's Natural voices come first, in a group of their own, because they
+ * are the ones worth listening to for long — and because choosing one sends the
+ * text to Microsoft, which the group's name says rather than hides.
  */
 function VoicePicker({
   voices,
@@ -1578,6 +1675,8 @@ function VoicePicker({
   theme: Theme;
 }) {
   const { forThis, others } = groupVoices(voices, langOf(sample));
+  const natural = forThis.filter((v) => isNatural(v));
+  const machine = forThis.filter((v) => !isNatural(v));
 
   if (voices.length === 0) {
     return (
@@ -1598,9 +1697,18 @@ function VoicePicker({
           style={{ border: `1px solid ${theme.rule}`, background: theme.bg, color: theme.fg }}
         >
           <option value="">Choose for me</option>
-          {forThis.length > 0 && (
-            <optgroup label="Reads this book">
-              {forThis.map((v) => (
+          {natural.length > 0 && (
+            <optgroup label="Natural — online, via Microsoft">
+              {natural.map((v) => (
+                <option key={v.uri} value={v.uri}>
+                  {v.name}
+                </option>
+              ))}
+            </optgroup>
+          )}
+          {machine.length > 0 && (
+            <optgroup label={natural.length > 0 ? "On this machine" : "Reads this book"}>
+              {machine.map((v) => (
                 <option key={v.uri} value={v.uri}>
                   {v.name}
                 </option>

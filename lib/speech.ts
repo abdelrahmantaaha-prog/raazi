@@ -24,6 +24,12 @@
  *
  * All three are handled here so the reader can treat speech as: say this, tell
  * me when it is genuinely finished.
+ *
+ * The one exception to "nothing sent anywhere" is a voice you choose from the
+ * Natural list: those are Microsoft's, fetched by Corpus's server (see
+ * lib/edge-voice.ts) so that they work in any browser, not only in Edge — and
+ * choosing one means the paragraphs being read go to Microsoft. `OnlineSpeaker`
+ * plays them. Nothing is sent unless one is chosen.
  */
 
 export interface Voice {
@@ -127,13 +133,38 @@ export function pickVoice(voices: Voice[], lang: "ar" | "en", preferredUri?: str
   const candidates = voices.filter(speaks);
   if (candidates.length === 0) return chosen ?? voices[0] ?? null;
 
+  // Having chosen a Natural voice, an Arabic chapter is read by a Natural
+  // Arabic voice rather than dropping back to the machine's. And without
+  // having chosen one, nothing is sent to Microsoft on Corpus's own initiative.
+  const wantsNatural = chosen ? isNatural(chosen) : false;
+
   return (
     candidates.slice().sort((a, b) => {
+      const family = (v: Voice) => (isNatural(v) === wantsNatural ? 0 : 1);
       // Prefer the default regional form of a language over an unusual one.
       const exact = (v: Voice) => (v.lang.toLowerCase() === lang ? 0 : 1);
-      return exact(a) - exact(b) || Number(b.localService) - Number(a.localService);
+      return (
+        family(a) - family(b) || exact(a) - exact(b) || Number(b.localService) - Number(a.localService)
+      );
     })[0] ?? null
   );
+}
+
+/**
+ * Microsoft's Natural voices, served through Corpus so that any browser can use
+ * them. Their `uri` is the voice's name with this prefix, which keeps them
+ * apart from the browser's own voices in a saved choice.
+ */
+export const NATURAL = "natural:";
+
+export function isNatural(v: Voice | string): boolean {
+  return (typeof v === "string" ? v : v.uri).startsWith(NATURAL);
+}
+
+/** A voice from the server's list, as the menu and `pickVoice` see it. */
+export function naturalVoice(v: { id: string; name: string; lang: string }): Voice {
+  const region = v.lang.split("-")[1] ?? v.lang;
+  return { uri: `${NATURAL}${v.id}`, name: `${v.name} (${region})`, lang: v.lang, localService: false };
 }
 
 /** Voices grouped for a menu: the ones that can read this book first. */
@@ -339,6 +370,217 @@ export class Speaker {
       this.synth?.cancel();
     } catch {
       /* nothing worth doing about it */
+    }
+  }
+}
+
+/**
+ * Speaks a paragraph in a Natural voice, with audio the server fetched.
+ *
+ * The same contract as `Speaker` — say this, report back once and only if it
+ * was allowed to finish — over an audio element instead of the synthesiser.
+ * The paragraph is cut into a few long pieces, all requested at once and
+ * played in order, so the first can start while the rest are on their way.
+ *
+ * A Natural voice costs a round trip before it can begin, which between
+ * paragraphs would be a pause of a second or more. `prefetch` closes it: the
+ * reader asks for the next paragraph while this one is still playing.
+ */
+export class OnlineSpeaker {
+  private run = 0;
+  private done: (() => void) | null = null;
+  private held = false;
+  private el: HTMLAudioElement | null;
+  /** Audio already fetched or on its way, by voice, pace and text. */
+  private cache = new Map<string, Promise<string>>();
+
+  constructor() {
+    this.el = typeof Audio === "undefined" ? null : new Audio();
+  }
+
+  get supported(): boolean {
+    return Boolean(this.el);
+  }
+
+  /**
+   * A paragraph as pieces to fetch: a short first one, then longer ones.
+   *
+   * The service makes audio at about three times the pace it is spoken, and
+   * a piece cannot play until all of it has arrived — so a paragraph sent
+   * whole kept you waiting half a minute before the first word. A sentence or
+   * so arrives in about a second; while it plays, the next pieces are
+   * already on their way, and each lasts several times longer than it takes
+   * to fetch the one after it.
+   */
+  private pieces(text: string): string[] {
+    const clean = text.replace(/\s+/g, " ").trim();
+    const [first] = sentences(clean, 160);
+    if (!first) return [];
+    if (!clean.startsWith(first)) return sentences(clean, 400);
+    return [first, ...sentences(clean.slice(first.length), 400)];
+  }
+
+  /** At most this many requests at once, so a paragraph is not fetched all in a burst. */
+  private static readonly AT_ONCE = 3;
+  private inFlight = 0;
+  private waiting: { key: string; start: () => void; drop: () => void }[] = [];
+
+  private pump(): void {
+    while (this.inFlight < OnlineSpeaker.AT_ONCE && this.waiting.length) {
+      this.inFlight++;
+      this.waiting.shift()!.start();
+    }
+  }
+
+  /** Forgets pieces asked for but not yet sent: you have moved on from them. */
+  private dropWaiting(): void {
+    for (const w of this.waiting.splice(0)) {
+      this.cache.delete(w.key);
+      w.drop();
+    }
+  }
+
+  private fetchPiece(text: string, voice: string, rate: number): Promise<string> {
+    const key = `${voice}\n${rate}\n${text}`;
+    const hit = this.cache.get(key);
+    if (hit) {
+      // Refreshed, so what is dropped below is what was used longest ago.
+      this.cache.delete(key);
+      this.cache.set(key, hit);
+      return hit;
+    }
+    const made = new Promise<string>((resolve, reject) => {
+      const start = () =>
+        fetch("/api/speech", {
+          method: "POST",
+          headers: { "content-type": "application/json" },
+          body: JSON.stringify({ text, voice, rate }),
+        })
+          .then(async (res) => {
+            if (!res.ok) {
+              const why = await res.json().catch(() => null);
+              throw new Error((why as { error?: string } | null)?.error ?? `Speech answered ${res.status}.`);
+            }
+            return URL.createObjectURL(await res.blob());
+          })
+          .then(resolve, reject)
+          .finally(() => {
+            this.inFlight--;
+            this.pump();
+          });
+      const drop = () => reject(Object.assign(new Error("Moved on."), { name: "AbortError" }));
+      this.waiting.push({ key, start, drop });
+      this.pump();
+    });
+    // A failure is not kept: the next try should really try.
+    made.catch(() => this.cache.delete(key));
+    this.cache.set(key, made);
+    while (this.cache.size > 40) {
+      const [oldest, url] = this.cache.entries().next().value!;
+      this.cache.delete(oldest);
+      void url.then((u) => URL.revokeObjectURL(u)).catch(() => {});
+    }
+    return made;
+  }
+
+  /**
+   * Starts fetching the opening of a paragraph you are about to reach — the
+   * part that would otherwise be the pause between the two. The rest of it is
+   * asked for once it starts, which is in plenty of time.
+   */
+  prefetch(text: string, opts: { voice: string; rate?: number }): void {
+    const [first] = this.pieces(text);
+    if (first) void this.fetchPiece(first, opts.voice, opts.rate ?? 1).catch(() => {});
+  }
+
+  /**
+   * Says a paragraph, then calls `onDone` if it was allowed to finish.
+   * `onFail` is called instead when the voice service cannot be reached, so
+   * the reader can fall back to a voice on the machine rather than stop.
+   */
+  speak(
+    text: string,
+    opts: { voice: string; rate?: number; onDone?: () => void; onFail?: (err: Error) => void }
+  ): void {
+    const el = this.el;
+    if (!el) return;
+    this.stop();
+
+    // What was queued for the paragraph before is not needed now; anything
+    // already fetched stays cached, in case you go back to it.
+    this.dropWaiting();
+    const mine = ++this.run;
+    const rate = opts.rate ?? 1;
+    this.done = opts.onDone ?? null;
+    const pieces = this.pieces(text);
+    const urls = pieces.map((p) => this.fetchPiece(p, opts.voice, rate));
+    // Nothing is left hanging on a rejection nobody awaited yet.
+    for (const u of urls) u.catch(() => {});
+
+    const finish = () => {
+      if (mine !== this.run) return;
+      const callback = this.done;
+      this.done = null;
+      callback?.();
+    };
+
+    const playAt = async (i: number): Promise<void> => {
+      if (mine !== this.run) return;
+      if (i >= urls.length) return finish();
+      let url: string;
+      try {
+        url = await urls[i];
+      } catch (err) {
+        if (mine !== this.run) return;
+        this.done = null;
+        opts.onFail?.(err as Error);
+        return;
+      }
+      if (mine !== this.run) return;
+      el.onended = () => void playAt(i + 1);
+      // A piece that will not play is skipped rather than stranding the
+      // reader in silence, as an utterance error is on the other speaker.
+      el.onerror = () => void playAt(i + 1);
+      el.src = url;
+      if (this.held) return;
+      try {
+        await el.play();
+      } catch (err) {
+        // Interrupted by our own stop or pause is not a failure.
+        if (mine === this.run && !this.held && (err as Error).name !== "AbortError") {
+          this.done = null;
+          opts.onFail?.(err as Error);
+        }
+      }
+    };
+
+    if (pieces.length === 0) finish();
+    else void playAt(0);
+  }
+
+  pause(): void {
+    this.held = true;
+    this.el?.pause();
+  }
+
+  resume(): void {
+    this.held = false;
+    const el = this.el;
+    // Only something we were playing: an element with nothing loaded, or one
+    // that has finished, has nothing to carry on with.
+    if (el && el.src && el.paused && !el.ended && this.done) void el.play().catch(() => {});
+  }
+
+  /** Silences it and disowns the callback of whatever was playing. */
+  stop(): void {
+    this.run++;
+    this.done = null;
+    this.held = false;
+    const el = this.el;
+    if (el) {
+      el.onended = null;
+      el.onerror = null;
+      el.pause();
     }
   }
 }

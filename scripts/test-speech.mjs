@@ -29,9 +29,18 @@ const check = (name, cond, detail = "") => {
 };
 const section = (t) => console.log(`\n${t}`);
 
-const { sentences, langOf, pickVoice, groupVoices, Speaker, RATES, maxChars } = await import(
-  "../lib/speech.ts"
-);
+const {
+  sentences,
+  langOf,
+  pickVoice,
+  groupVoices,
+  Speaker,
+  OnlineSpeaker,
+  RATES,
+  maxChars,
+  naturalVoice,
+  isNatural,
+} = await import("../lib/speech.ts");
 
 /* ------------------------------------------------------------- a fake mouth */
 
@@ -531,12 +540,217 @@ section("Without speech support");
   check("and does nothing, quietly", called === 0);
 }
 
-section("Nothing leaves the machine");
+section("The browser talks only to Corpus");
 {
+  // The Natural voices are fetched by Corpus's own server, so the browser
+  // never contacts Microsoft — or anyone — directly.
   const fs = await import("node:fs");
   const src = fs.readFileSync(path.join(root, "lib", "speech.ts"), "utf8");
-  check("no network calls", !/fetch\(|XMLHttpRequest|WebSocket/.test(src));
+  const calls = [...src.matchAll(/\bfetch\(\s*"([^"]*)"/g)].map((m) => m[1]);
+  check(
+    "the only call is to Corpus's own speech route",
+    calls.length === 1 && calls[0] === "/api/speech",
+    calls.join(", ")
+  );
+  check("no other way out", !/XMLHttpRequest|WebSocket|\bfetch\(\s*[^"\s]/.test(src));
   check("no keys or endpoints", !/api[_-]?key|https?:\/\//i.test(src));
+}
+
+section("Natural voices");
+{
+  const ava = naturalVoice({ id: "en-US-AvaNeural", name: "Ava", lang: "en-US" });
+  const salma = naturalVoice({ id: "ar-EG-SalmaNeural", name: "Salma", lang: "ar-EG" });
+  const david = { uri: "david", name: "Microsoft David", lang: "en-US", localService: true };
+  const hoda = { uri: "hoda", name: "Microsoft Hoda", lang: "ar-EG", localService: true };
+  const all = [ava, salma, david, hoda];
+
+  check("named with their region", ava.name === "Ava (US)", ava.name);
+  check("told apart from the machine's", isNatural(ava) && !isNatural(david));
+  check("chosen, one is used", pickVoice(all, "en", ava.uri) === ava);
+  check(
+    "and an Arabic chapter goes to a Natural Arabic voice, not the machine's",
+    pickVoice(all, "ar", ava.uri) === salma,
+    pickVoice(all, "ar", ava.uri)?.name
+  );
+  check("having chosen a machine voice, Arabic stays on the machine", pickVoice(all, "ar", david.uri) === hoda);
+  check(
+    "choosing nothing never sends text away",
+    !isNatural(pickVoice(all, "en")) && !isNatural(pickVoice(all, "ar"))
+  );
+}
+
+/* ----------------------------------------------- a fake player and server */
+
+/** An audio element: plays when told, and ends when the test says so. */
+class FakeAudio {
+  static all = [];
+  constructor() {
+    this.src = "";
+    this.paused = true;
+    this.ended = false;
+    this.played = [];
+    this.onended = null;
+    this.onerror = null;
+    FakeAudio.all.push(this);
+  }
+  play() {
+    this.paused = false;
+    this.ended = false;
+    this.played.push(this.src);
+    return Promise.resolve();
+  }
+  pause() {
+    this.paused = true;
+  }
+  /** The piece now playing runs to its end. */
+  end() {
+    this.ended = true;
+    this.paused = true;
+    this.onended?.();
+  }
+}
+globalThis.Audio = FakeAudio;
+
+let requests = [];
+let unreachable = false;
+globalThis.fetch = async (url, init) => {
+  const body = JSON.parse(init.body);
+  requests.push({ url, ...body });
+  if (unreachable) return { ok: false, status: 502, json: async () => ({ error: "unreachable" }) };
+  return { ok: true, status: 200, blob: async () => new Blob([body.text], { type: "audio/mpeg" }) };
+};
+const tick = () => new Promise((r) => setTimeout(r, 0));
+const paragraph = Array.from({ length: 30 }, (_, i) => `Sentence number ${i} goes on for a little while.`).join(" ");
+
+section("Speaking a paragraph in a Natural voice");
+{
+  requests = [];
+  const o = new OnlineSpeaker();
+  const el = FakeAudio.all.at(-1);
+  let done = 0;
+  let inFlight = 0;
+  let most = 0;
+  const realFetch = globalThis.fetch;
+  globalThis.fetch = async (url, init) => {
+    inFlight++;
+    most = Math.max(most, inFlight);
+    await tick();
+    inFlight--;
+    return realFetch(url, init);
+  };
+  o.speak(paragraph, { voice: "en-US-AvaNeural", rate: 1.15, onDone: () => done++ });
+  for (let i = 0; i < 20; i++) await tick();
+  globalThis.fetch = realFetch;
+
+  // The service makes audio at about three times speaking pace and a piece
+  // plays only once all of it is here: a whole paragraph at once kept you
+  // waiting half a minute for the first word.
+  check("the first piece is short, so speech starts soon", requests[0].text.length <= 160, String(requests[0].text.length));
+  check(
+    "the rest go in longer pieces",
+    requests.slice(1, -1).every((q) => q.text.length <= 400 && q.text.length > 160) && requests.length > 2
+  );
+  check("all of the paragraph, in order", requests.map((q) => q.text).join(" ") === paragraph);
+  check("never more than three requests at once", most <= 3, String(most));
+  check(
+    "to Corpus, with the voice and pace",
+    requests.every((q) => q.url === "/api/speech" && q.voice === "en-US-AvaNeural" && q.rate === 1.15)
+  );
+  check("and the first starts playing", el.played.length === 1);
+  for (let i = 1; i < requests.length; i++) {
+    el.end();
+    await tick();
+  }
+  check("then each next one", el.played.length === requests.length, `${el.played.length} of ${requests.length}`);
+  check("not finished before the last piece is", done === 0);
+  el.end();
+  await tick();
+  check("finished exactly once at the end", done === 1, String(done));
+}
+
+section("Moving on drops what was queued for the paragraph before");
+{
+  requests = [];
+  const o = new OnlineSpeaker();
+  // The old paragraph's first requests are still out when you move on.
+  const held = [];
+  const realFetch = globalThis.fetch;
+  globalThis.fetch = (url, init) => new Promise((r) => held.push(() => r(realFetch(url, init))));
+  o.speak(paragraph, { voice: "en-US-AvaNeural" });
+  await tick();
+  globalThis.fetch = realFetch;
+  o.speak("The next paragraph, short.", { voice: "en-US-AvaNeural" });
+  await tick();
+  for (const release of held) release();
+  for (let i = 0; i < 10; i++) await tick();
+  const sentForOld = requests.filter((q) => paragraph.includes(q.text)).length;
+  check("only what had already been sent is fetched for the old paragraph", sentForOld === 3, String(sentForOld));
+  check("and the new one is fetched", requests.some((q) => q.text === "The next paragraph, short."));
+}
+
+section("Stopping a Natural voice is not finishing");
+{
+  const o = new OnlineSpeaker();
+  const el = FakeAudio.all.at(-1);
+  let done = 0;
+  o.speak("A short one.", { voice: "en-US-AvaNeural", onDone: () => done++ });
+  await tick();
+  const ended = el.onended;
+  o.stop();
+  ended?.();
+  await tick();
+  check("stopping does not advance the book", done === 0);
+}
+
+section("The next paragraph is fetched ahead");
+{
+  requests = [];
+  const o = new OnlineSpeaker();
+  o.prefetch("The paragraph after this one.", { voice: "en-US-AvaNeural", rate: 1 });
+  await tick();
+  o.speak("The paragraph after this one.", { voice: "en-US-AvaNeural", rate: 1 });
+  await tick();
+  check("and not fetched again when it is reached", requests.length === 1, String(requests.length));
+}
+
+section("Holding a Natural voice");
+{
+  const o = new OnlineSpeaker();
+  const el = FakeAudio.all.at(-1);
+  o.speak("Paused before it began.", { voice: "en-US-AvaNeural", onDone: () => {} });
+  o.pause();
+  await tick();
+  check("a paragraph paused while it was being fetched does not start", el.played.length === 0);
+  o.resume();
+  await tick();
+  check("and starts when released", el.played.length === 1);
+}
+
+section("When the voice service cannot be reached");
+{
+  unreachable = true;
+  const o = new OnlineSpeaker();
+  let done = 0;
+  let why = null;
+  o.speak("Nobody home.", { voice: "en-US-AvaNeural", onDone: () => done++, onFail: (e) => (why = e) });
+  await tick();
+  await tick();
+  check("the reader is told, so it can fall back", why?.message === "unreachable", String(why?.message));
+  check("and it is not mistaken for finishing", done === 0);
+  unreachable = false;
+  requests = [];
+  o.speak("Nobody home.", { voice: "en-US-AvaNeural" });
+  await tick();
+  check("a failure is not remembered: the next try really tries", requests.length === 1);
+}
+
+section("Proving to the voice service it is talking to Edge");
+{
+  const { secMsGec } = await import("../lib/edge-voice.ts");
+  const start = 1_790_000_000 - (1_790_000_000 % 300);
+  check("a SHA-256, in capitals", /^[0-9A-F]{64}$/.test(secMsGec(start)));
+  check("the same within a five-minute window", secMsGec(start) === secMsGec(start + 299));
+  check("and different in the next", secMsGec(start) !== secMsGec(start + 300));
 }
 
 console.log(`\n${passed} passed, ${failed} failed`);
