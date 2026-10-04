@@ -97,7 +97,12 @@ export const SCHEMA: Schema = {
       },
     },
   },
-  required: ["entities", "relations", "events"],
+  // Only the entities are required. On a dense passage Claude wrote forty
+  // thousand characters of entities and left out the connections and the
+  // events; Claude Code rejected the answer for the missing keys and had the
+  // whole of it written again, three times, five and a half minutes a
+  // passage (3 Oct 2026). Missing lists are read as empty below anyway.
+  required: ["entities"],
 };
 
 /**

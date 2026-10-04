@@ -1,3 +1,4 @@
+import { AsyncLocalStorage } from "node:async_hooks";
 import { GoogleGenAI } from "@google/genai";
 import type { Schema } from "@google/genai";
 import { getConfig } from "../config";
@@ -184,7 +185,11 @@ declare global {
  */
 function noteModel(model: string | undefined) {
   if (!model) return;
-  (globalThis.__corpusModelsUsed ??= []).push(model);
+  // A task's own list when the worker gave it one: with several passages
+  // read at once, one shared list would hand each the others' models.
+  const own = modelsOfTask.getStore();
+  if (own) own.push(model);
+  else (globalThis.__corpusModelsUsed ??= []).push(model);
 }
 
 /** The models that have answered since the last take, deduplicated. */
@@ -193,6 +198,20 @@ export function takeModelsUsed(): string[] {
   globalThis.__corpusModelsUsed = [];
   return [...new Set(used)];
 }
+
+/** Runs one task's work with a list of its own for the models that answer it. */
+export async function withOwnModels<T>(fn: () => Promise<T>): Promise<{ value: T; models: string[] }> {
+  const own: string[] = [];
+  try {
+    const value = await modelsOfTask.run(own, fn);
+    return { value, models: [...new Set(own)] };
+  } catch (err) {
+    (err as { modelsUsed?: string[] }).modelsUsed = [...new Set(own)];
+    throw err;
+  }
+}
+
+const modelsOfTask = new AsyncLocalStorage<string[]>();
 
 // ---------------------------------------------------------------------------
 // Pacing
@@ -753,7 +772,13 @@ export async function generateJson<T>(opts: {
         prompt: partsToPrompt(opts.parts),
         schema: opts.schema,
         effort: EFFORT[opts.stage ?? ""],
-        timeoutMs,
+        // Claude Code takes most of a minute to start writing a long answer
+        // and two more to write it: a dense passage measured 129 s on 3 Oct
+        // 2026, against a three-minute ceiling meant for Gemini. A caller
+        // that set its own limit (a search you are waiting on) keeps it.
+        timeoutMs: opts.timeoutMs ?? Math.max(timeoutMs, CLAUDE_CODE_TIMEOUT_MS),
+        // Reading writes the longest answers of all; see plainJson.
+        plainJson: opts.stage === "extract",
       });
     }
 
@@ -837,6 +862,9 @@ export async function generateWebJson<T>(opts: {
   noteModel(value.model);
   return { ...value, seen: value.seen ?? [] };
 }
+
+/** The least time a structured answer from Claude Code is given. */
+const CLAUDE_CODE_TIMEOUT_MS = 360_000;
 
 /** What Claude Code can open as a page or a picture, by type. */
 const ATTACHABLE: Record<string, string> = {

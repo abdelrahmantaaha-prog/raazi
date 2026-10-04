@@ -823,6 +823,44 @@ section("Do this first: a batch's reading jumps the line, its entries do not");
   check("brief, then the folder's reading, then the rest, entries last", order.join() === "brief,folder_file*,extract,entry*", order.join());
 }
 
+section("Passages are read three at a time; nothing else overlaps them");
+{
+  const { createRun, enqueue, finishTask, getRun } = await import("../lib/queue.ts");
+  const { startWorker } = await import("../lib/worker.ts");
+  const { db } = await import("../lib/db/index.ts");
+  db().prepare("UPDATE tasks SET state='done' WHERE state IN ('pending','running')").run();
+  const run = createRun({ kind: "folder", label: "a folder of passages" });
+  enqueue(run, [
+    ...Array.from({ length: 7 }, (_, i) => ({ kind: "extract", payload: { n: i } })),
+    { kind: "resolve", payload: { type: "person" } },
+  ]);
+  let now = 0;
+  let most = 0;
+  let overlapped = false;
+  let resolvedAfter = -1;
+  const done = [];
+  const wait = (ms) => new Promise((r) => setTimeout(r, ms));
+  await startWorker({
+    async extract(task) {
+      now++;
+      most = Math.max(most, now);
+      await wait(40);
+      now--;
+      done.push(JSON.parse(task.payload_json).n);
+      finishTask(task.id, task.run_id, { tokensIn: 1, tokensOut: 1 });
+    },
+    async resolve(task) {
+      if (now > 0) overlapped = true;
+      resolvedAfter = done.length;
+      finishTask(task.id, task.run_id, { tokensIn: 0, tokensOut: 0 });
+    },
+  });
+  check("three passages at once, never more", most === 3, String(most));
+  check("every passage read once", done.length === 7 && new Set(done).size === 7, JSON.stringify(done));
+  check("the merging step waited for all of them, and ran alone", resolvedAfter === 7 && !overlapped, String(resolvedAfter));
+  check("the batch finished", getRun(run).state === "done", getRun(run).state);
+}
+
 section("An unfinished run stays on the Activity list, however many came after");
 {
   const { createRun, enqueue, listRuns } = await import("../lib/queue.ts");

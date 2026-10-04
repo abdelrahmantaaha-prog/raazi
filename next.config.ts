@@ -36,6 +36,11 @@ const nextConfig: NextConfig = {
   experimental: {
     // Ingest routes stream large files through; keep the body cap generous.
     serverActions: { bodySizeLimit: "128mb" },
+    // The LAN-token middleware means every request body passes through it,
+    // and Next caps that at 10 MB by default: a 25 MB zip arrived as its first
+    // 10 MB, which is not a zip (3 Oct 2026). The routes keep their own,
+    // smaller ceilings — this only has to be above the largest of them.
+    middlewareClientMaxBodySize: "1gb",
   },
 };
 

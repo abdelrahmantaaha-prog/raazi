@@ -107,28 +107,33 @@ export function setRunFirst(runId: number, first: boolean) {
   db().prepare("UPDATE runs SET first=? WHERE id=?").run(first ? 1 : 0, runId);
 }
 
-export function claimNext(): Task | undefined {
-  // A task waiting out a retry (not_before) is passed over, not slept on:
-  // the loop goes on to whatever else is due, which is how a question typed
-  // into Ask gets answered while an extraction waits for its rate limit.
-  // order_hint, where set, is a fractional place in the run's order — the
-  // halves of a split chunk sit between the original's seq and the next.
-  return db()
-    .prepare(
-      `UPDATE tasks
-          SET state = 'running', attempts = attempts + 1, updated_at = datetime('now')
-        WHERE id = (
-          SELECT t.id FROM tasks t
+// A task waiting out a retry (not_before) is passed over, not slept on: the
+// loop goes on to whatever else is due, which is how a question typed into Ask
+// gets answered while an extraction waits for its rate limit. order_hint,
+// where set, is a fractional place in the run's order — the halves of a split
+// chunk sit between the original's seq and the next.
+const NEXT_SQL = `SELECT t.id, t.kind FROM tasks t
             JOIN runs r ON r.id = t.run_id
            WHERE t.state = 'pending'
              AND r.state IN ('queued', 'running')
              AND (t.not_before IS NULL OR t.not_before <= ?)
            ORDER BY ${PRIORITY_SQL}, r.id, COALESCE(t.order_hint, t.seq), t.id
-           LIMIT 1
-        )
+           LIMIT 1`;
+
+export function claimNext(): Task | undefined {
+  return db()
+    .prepare(
+      `UPDATE tasks
+          SET state = 'running', attempts = attempts + 1, updated_at = datetime('now')
+        WHERE id = (SELECT id FROM (${NEXT_SQL}))
     RETURNING *`
     )
     .get(now()) as Task | undefined;
+}
+
+/** What claimNext would hand out next, without claiming it. */
+export function peekNext(): { id: number; kind: string } | undefined {
+  return db().prepare(NEXT_SQL).get(now()) as { id: number; kind: string } | undefined;
 }
 
 /** Marks the task done and bills its tokens to the run, atomically with the

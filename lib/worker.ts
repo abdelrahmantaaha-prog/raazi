@@ -1,5 +1,5 @@
 import { classify, explain, type Disposition } from "./ai/errors";
-import { takeModelsUsed } from "./ai/client";
+import { withOwnModels } from "./ai/client";
 import { getConfig } from "./config";
 import { queueStaleEntries, queueUpgrade, refreshInFlight } from "./entries";
 import { modelSpent } from "./keys";
@@ -11,6 +11,7 @@ import { getBrief, todayKey } from "./brief";
 import { nextMorningAt, runMorningChores } from "./chores";
 import {
   claimNext,
+  peekNext,
   deferTask,
   failTask,
   hasDeferredTasks,
@@ -74,6 +75,16 @@ const IDLE_MS = Number(process.env.CORPUS_WORKER_IDLE_MS ?? 30_000);
  */
 const INLINE_RETRY_MS = 5_000;
 
+/**
+ * Reading — a passage, a scanned page — is the one step done several at a
+ * time. Each is a call that spends minutes waiting on Claude and then saves
+ * its result in one uninterrupted step, so three side by side neither share
+ * nor race over anything; one at a time, a folder of Word files took hours.
+ * Everything else still runs alone, after the reading in progress has landed.
+ */
+const PARALLEL_KINDS = new Set(["extract", "enhance", "ocr"]);
+const READING_LANES = Math.max(1, Math.min(6, Number(process.env.CORPUS_READING_LANES ?? 3) || 3));
+
 async function runOne(task: Task, handlers: Record<string, Handler>): Promise<void> {
   if (overBudget(task.run_id)) {
     releaseTask(task.id);
@@ -91,14 +102,13 @@ async function runOne(task: Task, handlers: Record<string, Handler>): Promise<vo
     return;
   }
 
-  // Anything a previous task's calls left in the list is not this task's.
-  takeModelsUsed();
-
+  // Each task notes the models that answered it in a list of its own, since
+  // several passages may be read at once.
   try {
-    await handler(task);
-    recordModels(task);
+    const { models } = await withOwnModels(() => handler(task));
+    recordModels(task, models);
   } catch (err) {
-    recordModels(task);
+    recordModels(task, (err as { modelsUsed?: string[] })?.modelsUsed ?? []);
     // Deciding what to do about a failure can itself fail — the database is
     // busy, a locator does not parse, a split finds no chunk. That used to
     // escape the loop entirely: the worker died, the task stayed "running",
@@ -177,9 +187,8 @@ async function dispose(task: Task, err: unknown): Promise<void> {
 
 /** Writes down which model(s) answered this task, if any call said. Never
  *  worth failing a task over. */
-function recordModels(task: Task) {
+function recordModels(task: Task, models: string[]) {
   try {
-    const models = takeModelsUsed();
     if (models.length) noteTaskModel(task.id, models.join(", "));
   } catch (err) {
     console.warn(`[corpus] task ${task.id}: could not record the model used`, err);
@@ -333,6 +342,8 @@ export async function startWorker(override?: Record<string, Handler>): Promise<v
   armMorningTimer();
 
   console.log("[corpus] worker started");
+  // The passages being read right now, at most READING_LANES of them.
+  const reading = new Set<Promise<void>>();
   try {
     while (!s.stop) {
       // The claim is a lease; renewing it here is free once it is fresh.
@@ -352,7 +363,22 @@ export async function startWorker(override?: Record<string, Handler>): Promise<v
       // the queue is never empty, and a passage failed at noon over a busy
       // provider used to stay failed until the evening.
       sweepFailed();
-      const task = claimNext();
+
+      // Reading runs several at a time; everything else runs alone. A step
+      // that is not reading waits until the passages being read have landed —
+      // which is also what keeps a batch in order, since a batch's merging
+      // and planning come after its reading — and then runs by itself.
+      const next = peekNext();
+      if (next && reading.size > 0 && !PARALLEL_KINDS.has(next.kind)) {
+        await Promise.race(reading);
+        continue;
+      }
+      const task = next ? claimNext() : undefined;
+
+      if (!task && reading.size > 0) {
+        await Promise.race(reading);
+        continue;
+      }
 
       if (!task) {
 
@@ -383,19 +409,30 @@ export async function startWorker(override?: Record<string, Handler>): Promise<v
 
       s.idleSince = Date.now();
       s.sweptAt = undefined;
-      try {
-        await runOne(task, handlers);
-      } catch (err) {
-        // runOne guards its own steps; this is the belt to those braces. A
-        // task left "running" here would sit that way until a restart.
-        console.error(`[corpus] task ${task.id} escaped its handler`, err);
+      const guarded = async (t: Task) => {
         try {
-          failTask(task.id, `Worker error: ${(err instanceof Error ? err.message : String(err)).slice(0, 800)}`);
-        } catch {
-          /* the loop matters more than this one row */
+          await runOne(t, handlers);
+        } catch (err) {
+          // runOne guards its own steps; this is the belt to those braces. A
+          // task left "running" here would sit that way until a restart.
+          console.error(`[corpus] task ${t.id} escaped its handler`, err);
+          try {
+            failTask(t.id, `Worker error: ${(err instanceof Error ? err.message : String(err)).slice(0, 800)}`);
+          } catch {
+            /* the loop matters more than this one row */
+          }
         }
+      };
+      if (PARALLEL_KINDS.has(task.kind) && READING_LANES > 1) {
+        const p: Promise<void> = guarded(task).finally(() => reading.delete(p));
+        reading.add(p);
+        if (reading.size >= READING_LANES) await Promise.race(reading);
+        continue;
       }
+      await guarded(task);
     }
+    // Standing down: whatever is still being read finishes first.
+    await Promise.all(reading);
   } finally {
     s.running = false;
     s.idleSince = Date.now();

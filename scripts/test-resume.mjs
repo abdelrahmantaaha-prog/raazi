@@ -18,6 +18,9 @@ process.chdir(root);
 const SANDBOX = path.join(root, "data", "__test__");
 fs.rmSync(SANDBOX, { recursive: true, force: true });
 process.env.CORPUS_DATA_DIR = SANDBOX;
+// These checks are about stopping and resuming in order, so passages are read
+// one at a time here; reading several at once has its own test in test-hardening.
+process.env.CORPUS_READING_LANES = "1";
 process.env.CORPUS_WORKER_IDLE_MS = "150";
 
 let passed = 0;

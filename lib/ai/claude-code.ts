@@ -323,13 +323,25 @@ function unfence(text: string): string {
 const plainJsonFor = new Set<string>();
 
 export async function claudeCodeJson<T>(
-  opts: AnthropicCall & { schema: Schema; web?: boolean; research?: ResearchTools }
+  opts: AnthropicCall & {
+    schema: Schema;
+    web?: boolean;
+    research?: ResearchTools;
+    /**
+     * Ask for the answer as plain JSON in the reply from the start. For long
+     * answers: a reading of a dense passage — forty thousand characters of
+     * quotes — came back from the structured-output route as JSON that would
+     * not parse, and Claude Code had the whole of it rewritten three times,
+     * five and a half minutes a passage (3 Oct 2026).
+     */
+    plainJson?: boolean;
+  }
 ): Promise<{ data: T; usage: AnthropicUsage; model: string; seen?: string[] }> {
   const schema = toJsonSchema(opts.schema);
   const key = `${opts.model} ${JSON.stringify(schema)}`;
   let answer: CliAnswer;
   try {
-    answer = await run({ ...opts, schema, schemaInPrompt: plainJsonFor.has(key) });
+    answer = await run({ ...opts, schema, schemaInPrompt: Boolean(opts.plainJson) || plainJsonFor.has(key) });
   } catch (err) {
     // Claude Code hands a --json-schema answer back through a tool call, and
     // on a long Markdown body (an entry, 2–4 KB of prose and citation markers)
@@ -338,7 +350,7 @@ export async function claudeCodeJson<T>(
     // of the day's entries. The same answer written as plain JSON in the reply
     // comes through, so ask once more that way — and keep asking that way for
     // this model and shape, since the five failed tries are paid for each time.
-    if (plainJsonFor.has(key) || !/error_max_structured_output_retries/.test(String((err as Error)?.message))) throw err;
+    if (opts.plainJson || plainJsonFor.has(key) || !/error_max_structured_output_retries/.test(String((err as Error)?.message))) throw err;
     console.log("[corpus] Claude Code could not send its answer as structured output; asking for plain JSON from now on");
     plainJsonFor.add(key);
     answer = await run({ ...opts, schema, schemaInPrompt: true });
