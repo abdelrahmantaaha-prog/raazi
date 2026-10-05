@@ -157,6 +157,50 @@ check(
 );
 check("but asking explicitly still works", entries.queueStaleEntries()?.queued === 1);
 
+// ---------------------------------------------------------------------------
+section("Each ingest plans only what is not already waiting");
+// ---------------------------------------------------------------------------
+// Seventeen news articles once queued 4,630 entries for 337 entities: every
+// planning step queued the whole stale backlog again, and each copy found a
+// quote the last article had added and wrote the entry again.
+const { handlers } = await import("../lib/pipeline/handlers.ts");
+db().prepare("UPDATE entities SET entry_state='stale' WHERE id IN (?, ?)").run(big, starred);
+const plan = async (label) => {
+  const runId = queue.createRun({ kind: "ingest", label });
+  queue.enqueue(runId, [{ kind: "plan_entries", payload: {} }]);
+  await handlers.plan_entries(
+    db().prepare("SELECT * FROM tasks WHERE run_id=? AND kind='plan_entries'").get(runId)
+  );
+  return runId;
+};
+const waiting = (id) =>
+  db()
+    .prepare(
+      `SELECT COUNT(*) AS n FROM tasks WHERE kind='entry' AND state='pending'
+          AND json_extract(payload_json, '$.entityId') = ?`
+    )
+    .get(id).n;
+const queuedIn = (runId) =>
+  db().prepare("SELECT COUNT(*) AS n FROM tasks WHERE run_id=? AND kind='entry'").get(runId).n;
+
+const first = await plan("First article");
+check(
+  "the first plan queues what is stale and not yet waiting",
+  queuedIn(first) === 2 && waiting(big) === 1 && waiting(starred) === 1,
+  `queued ${queuedIn(first)}`
+);
+check("an entity already waiting from the explicit refresh is not queued twice", waiting(small) === 1);
+const second = await plan("Second article");
+check("a second article's plan queues nothing already waiting", queuedIn(second) === 0, `queued ${queuedIn(second)}`);
+
+queue.pauseRun(first, "paused_user", "Paused by you.");
+const third = await plan("Third article");
+check(
+  "a run you paused does not hold its entities back from the next plan",
+  queuedIn(third) === 2,
+  `queued ${queuedIn(third)}`
+);
+
 db().close();
 fs.rmSync(SANDBOX, { recursive: true, force: true });
 console.log(`\n${failed === 0 ? "All passed" : "FAILURES PRESENT"}: ${passed} passed, ${failed} failed\n`);

@@ -1,5 +1,5 @@
 import type Database from "better-sqlite3";
-import { migrateQueue } from "./migrate-queue";
+import { migrateQueue, supersedeDuplicateEntries } from "./migrate-queue";
 import { migrateFeeds } from "./migrate-feeds";
 import { migrateWatch } from "./migrate-watch";
 import { migrateCalendar } from "./migrate-calendar";
@@ -549,6 +549,7 @@ export function migrate(db: Database.Database) {
   });
 
   migrateQueue(db);
+  once(db, "supersede-duplicate-entries", () => supersedeDuplicateEntries(db));
   migrateFeeds(db);
   migrateWatch(db);
   migrateCalendar(db);

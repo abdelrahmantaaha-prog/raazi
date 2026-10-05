@@ -38,7 +38,7 @@ import { handleExpand } from "./expand";
  */
 async function handlePlanEntries(task: Task): Promise<void> {
   const { threshold } = JSON.parse(task.payload_json) as { threshold?: number };
-  const targets = staleEntities(threshold ?? getConfig().entryThreshold);
+  const targets = staleEntities(threshold ?? getConfig().entryThreshold, { notQueued: true });
   const rewrites = targets.filter((t) => t.has_entry > 0).length;
 
   tx(() => {

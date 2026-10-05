@@ -34,7 +34,24 @@ export interface StaleEntity {
   has_entry: number;
 }
 
-export function staleEntities(threshold = getConfig().entryThreshold): StaleEntity[] {
+/**
+ * `notQueued` leaves out every entity that already has an entry waiting in a
+ * live run. An entity stays 'stale' until its entry is written, so without it
+ * each ingest's planning step queued the whole backlog again: on 5 Oct 2026
+ * seventeen news articles queued 4,630 entries for 337 entities, and an
+ * article with no mentions of its own still queued 214. The copies did not
+ * skip — the next article had added a quote to "Donald J. Trump", so each
+ * one found new evidence and wrote the entry again with Opus, twenty-seven
+ * times in a week. The entry already waiting reads the evidence when it
+ * runs, so it covers whatever arrived after it was queued.
+ *
+ * A run you paused does not count as waiting: its entities are planned again
+ * elsewhere rather than held until you resume it.
+ */
+export function staleEntities(
+  threshold = getConfig().entryThreshold,
+  opts: { notQueued?: boolean } = {}
+): StaleEntity[] {
   return db()
     .prepare(
       `SELECT e.id, e.canonical_name,
@@ -53,9 +70,14 @@ export function staleEntities(threshold = getConfig().entryThreshold): StaleEnti
             OR (SELECT COUNT(*) FROM live_mentions m WHERE m.entity_id = e.id) >= @threshold
             OR e.starred = 1
           )
+          AND (@notQueued = 0 OR e.id NOT IN (
+            SELECT json_extract(t.payload_json, '$.entityId')
+              FROM tasks t JOIN runs r ON r.id = t.run_id
+             WHERE t.kind = 'entry' AND t.state IN ('pending', 'running')
+               AND r.state <> 'paused_user'))
         ORDER BY has_entry DESC, mentions DESC`
     )
-    .all({ threshold }) as StaleEntity[];
+    .all({ threshold, notQueued: opts.notQueued ? 1 : 0 }) as StaleEntity[];
 }
 
 /** How many entries are waiting to be brought up to date. */
