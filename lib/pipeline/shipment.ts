@@ -6,6 +6,7 @@ import { finishTask } from "../queue";
 import { patchMeta, readMeta } from "../source-meta";
 import type { ChunkExtraction, EntityType, ExtractedEntity, ExtractedRelation, Task } from "../types";
 import { languageName, locateQuote, persist, quoteKey } from "./extract";
+import { strongClaude } from "./ocr";
 
 /**
  * Shipping papers — invoices and packing lists, loading plans, waybills,
@@ -268,6 +269,8 @@ export async function handleShipment(task: Task): Promise<void> {
   const lang = languageName(getConfig().entryLanguage);
   const { data, usage, model } = await generateJson<{ shipments: ShipmentRecord[]; links?: Link[] }>({
     stage: "extract",
+    // Few documents, each one read into a record that is cited: the writer reads them.
+    claudeModel: strongClaude(),
     system: system(lang),
     schema: SCHEMA,
     parts: [

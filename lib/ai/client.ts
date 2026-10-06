@@ -292,14 +292,25 @@ const MAX_INVALID_PER_CALL = 2;
  * The other providers do not meter per model, so there the caller's model
  * simply stands.
  */
-export function modelOfCall(k: ApiKey, opts: { model?: string; stage?: string }, quality = false, cheap = false): string {
+export function modelOfCall(
+  k: ApiKey,
+  opts: { model?: string; stage?: string; claudeModel?: string },
+  quality = false,
+  cheap = false
+): string {
   const provider = k.provider ?? "gemini";
   // Claude on the plan: the key's own model, else the one chosen in Settings.
   // A caller's model is a Gemini name and means nothing to Claude Code.
   // A stage can have its own Claude (Settings → routing).
   if (spec(provider).kind === "claude-code") {
     const cfg = getConfig();
-    return k.model?.trim() || (opts.stage && cfg.stageModels?.[opts.stage as Stage]) || cfg.claudeModel || modelFor(k);
+    return (
+      k.model?.trim() ||
+      opts.claudeModel ||
+      (opts.stage && cfg.stageModels?.[opts.stage as Stage]) ||
+      cfg.claudeModel ||
+      modelFor(k)
+    );
   }
   if (spec(provider).kind !== "gemini") return k.model?.trim() || opts.model || modelFor(k, { quality, cheap });
   const wanted = opts.model && !(quality && isLiteModel(opts.model)) ? opts.model : undefined;
@@ -712,6 +723,9 @@ export async function generateJson<T>(opts: {
   temperature?: number;
   model?: string;
   stage?: Stage;
+  /** Which Claude, when this call needs a different one from its stage's —
+   *  a photo or a shipping paper is one call that matters, not one of thousands. */
+  claudeModel?: string;
   /** Answer with this provider, whatever the routing says. For measuring one
    *  against another; the pipeline itself always goes through the routing. */
   provider?: ProviderId;
@@ -882,6 +896,8 @@ export async function generateText(opts: {
   temperature?: number;
   model?: string;
   stage?: Stage;
+  /** As for generateJson. */
+  claudeModel?: string;
   need?: Need;
   /** Read with this key and no other — see uploadClient(). */
   pin?: string;

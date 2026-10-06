@@ -78,6 +78,10 @@ const reading = photoPiece(
 check("both parts are kept", /CP28/.test(reading?.text ?? "") && /wooden crates/.test(reading?.text ?? ""), reading?.text);
 check("the description is marked as written by the AI", /described by the AI/.test(reading?.text ?? ""));
 check("a photo with no text says so", /none legible/.test(photoPiece("<<<TEXT>>>\nnone\n<<<DESCRIPTION>>>\nA tarmac at night.", 1)?.text ?? ""));
+const tidy =
+  photoPiece("<<<TEXT>>>\nTURKISH AIRLINES [on the fuselage]\nnone\n<<<DESCRIPTION>>>\nA wide-body jet.\n>>>", 1)?.text ?? "";
+check("a stray closing marker is dropped", !/>>>/.test(tidy), tidy);
+check("and so is a none beside real text", !/\nnone/.test(tidy), tidy);
 check(
   "an apology is not a reading",
   photoPiece("I cannot locate the file WhatsApp Image (2). Could you please verify the filename?", 1) === null

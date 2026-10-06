@@ -122,6 +122,10 @@ export async function handleOcr(task: Task): Promise<void> {
     // waiting on a Gemini key that may not be there.
     stage: "extract",
     system: photo ? photoSystem(languageName(getConfig().entryLanguage)) : SYSTEM,
+    // A photograph is evidence and there are few of them: the reading model,
+    // chosen for thousands of passages, read a crate made of board as a crate
+    // full of it and missed the code painted on the dolly. The writer reads them.
+    ...(photo ? { claudeModel: strongClaude() } : {}),
     temperature: 0,
     parts: [ask, ...attachments],
   });
@@ -220,8 +224,18 @@ function isPhoto(sourceId: number, title: string, doc: PDFDocument, images: Buff
 export function photoPiece(text: string, page: number): Piece | null {
   const m = /<<<TEXT>>>([\s\S]*?)<<<DESCRIPTION>>>([\s\S]*)/.exec(text);
   if (!m) return null;
-  const legible = m[1].trim();
-  const described = m[2].trim();
+  // A stray marker the model closed with, and a "none" left beside real items.
+  const clean = (s: string) =>
+    s
+      .split("\n")
+      .filter((line) => !/^\s*(<<<[^>]*>>>|>>>|<<<)\s*$/.test(line))
+      .join("\n")
+      .trim();
+  const items = clean(m[1])
+    .split("\n")
+    .filter((line) => line.trim());
+  const legible = (items.length > 1 ? items.filter((line) => !/^none\.?$/i.test(line.trim())) : items).join("\n");
+  const described = clean(m[2]);
   if (!described) return null;
   const body = [
     /^none\.?$/i.test(legible) || !legible ? "Text in the photograph: none legible." : `Text in the photograph:\n${legible}`,
@@ -230,6 +244,12 @@ export function photoPiece(text: string, page: number): Piece | null {
     `What the photograph shows (described by the AI that read it, not words in the picture):\n${described}`,
   ].join("\n\n");
   return { text: body, locator: { page }, label: "photo" };
+}
+
+/** The Claude that writes the entries: the strongest one this library uses. */
+export function strongClaude(): string {
+  const cfg = getConfig();
+  return cfg.stageModels?.entry || "claude-opus-5-5";
 }
 
 function splitPages(text: string, firstPage: number): { page: number; text: string }[] {
