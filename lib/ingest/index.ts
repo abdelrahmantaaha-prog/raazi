@@ -11,6 +11,7 @@ import { parseText } from "./text";
 import { parsePdf } from "./pdf";
 import { parseEpub } from "./epub";
 import { IMAGE_EXTENSIONS, OFFICE_EXTENSIONS, parseOffice } from "./office";
+import { patchMeta } from "../source-meta";
 export { IMAGE_EXTENSIONS } from "./office";
 import { PDFDocument } from "pdf-lib";
 import { parseUrl } from "./web";
@@ -109,6 +110,7 @@ export async function addFile(opts: Provenance & {
   // A photograph of a page becomes a one-page scanned document, read by the
   // same page reader as a scanned PDF — so it is stored as that PDF.
   const photo = IMAGE_EXTENSIONS.includes(givenExt);
+  const originalBytes = opts.bytes;
   if (photo) opts = { ...opts, bytes: await imageToPdf(opts.bytes, givenExt) };
   const office = OFFICE_EXTENSIONS.includes(givenExt);
   const kind: SourceKind = photo ? "pdf" : kindFor(opts.filename);
@@ -130,6 +132,11 @@ export async function addFile(opts: Provenance & {
 
   try {
     if (photo) {
+      // Kept as it came, beside the PDF: the page reader sends the picture
+      // itself, and a PNG cannot be had back out of the PDF it was put into.
+      const original = path.join(SOURCES_DIR, `${sourceId}.photo${givenExt === ".jpeg" ? ".jpg" : givenExt}`);
+      await fs.promises.writeFile(original, originalBytes);
+      patchMeta(sourceId, { photo: true, original });
       return finish(sourceId, [], opts.budgetCap, opts.tags, {
         runId: opts.runId,
         scannedPages: [1],
@@ -544,6 +551,9 @@ function finish(
  * because both need the full mention set to be in place.
  */
 function appendTail(runId: number, sourceId?: number) {
+  // A shipping paper is read whole for its shipment before names are
+  // reconciled, so the parties it adds are reconciled with the rest.
+  if (sourceId) enqueue(runId, [{ kind: "shipment" as const, payload: { sourceId } }]);
   // The source id lets the resolve pass compare only what this ingest touched
   // rather than every entity of the type against every other.
   enqueue(

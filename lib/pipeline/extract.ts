@@ -450,9 +450,14 @@ export function persist(
       // the tail it tolerates must not be what a reader is shown as verbatim.
       const quote = locateQuote(e.quote, chunk.text);
       if (!quote) continue;
-      if (skipQuotes?.has(quoteKey(e.surface, quote))) continue;
 
       const entityId = upsertEntity(e.surface, e.type, e.disambiguator, chunk.source_id);
+      // A quote already on record is not filed twice, but the entity is still
+      // known to this pass, so a relation it is one end of is not lost.
+      if (skipQuotes?.has(quoteKey(e.surface, quote))) {
+        entityIdBySurface.set(normalize(e.surface), entityId);
+        continue;
+      }
 
       // Resolved after the upsert rather than from the surface form, because
       // the ledger is keyed on the entity this passage resolves *to* — which is

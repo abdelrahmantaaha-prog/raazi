@@ -8,6 +8,9 @@ import { partlyRead, readModeOf, readPassages } from "@/lib/reading";
 import { SourceView } from "./SourceView";
 import { originalOf, translationsOf } from "@/lib/translations";
 import type { Mark, Passage } from "./Reader";
+import { readMeta } from "@/lib/source-meta";
+import type { ShippingMeta } from "@/lib/pipeline/shipment";
+import type { ShippingView } from "./Shipping";
 
 export const dynamic = "force-dynamic";
 
@@ -108,6 +111,8 @@ export default async function SourcePage({
     )
     .all(id) as Mark[];
 
+  const shipping = shippingView(id);
+
   const mode = readModeOf({ read_mode: source.read_mode, chunks: chunks.length });
 
   return (
@@ -128,6 +133,42 @@ export default async function SourcePage({
       unread={unread}
       translations={translationsOf(id)}
       original={originalOf(id)}
+      shipping={shipping}
     />
   );
+}
+
+/** The shipping record this source carries, with what it points at as it stands now. */
+function shippingView(id: number): ShippingView | null {
+  const meta = readMeta(id).shipping as ShippingMeta | undefined;
+  if (!meta?.shipments?.length) return null;
+  const rootOf = (entityId: number | undefined): number | null => {
+    let cur: number | null = entityId ?? null;
+    for (let hops = 0; cur !== null && hops < 64; hops++) {
+      const r = db().prepare("SELECT merged_into FROM entities WHERE id=?").get(cur) as
+        | { merged_into: number | null }
+        | undefined;
+      if (!r) return null;
+      if (r.merged_into === null) return cur;
+      cur = r.merged_into;
+    }
+    return cur;
+  };
+  const linked = [...new Set(meta.links.map((l) => l.sourceId))];
+  const titles: Record<number, string> = {};
+  for (const sid of linked) {
+    const row = db().prepare("SELECT title FROM sources WHERE id=?").get(sid) as { title: string } | undefined;
+    if (row) titles[sid] = row.title;
+  }
+  const folder = (db().prepare("SELECT folder_id FROM sources WHERE id=?").get(id) as { folder_id: number | null }).folder_id;
+  const siblings = folder
+    ? (db()
+        .prepare(
+          `SELECT id, title FROM sources
+            WHERE folder_id=? AND id<>? AND (meta_json LIKE '%"photo":true%' OR meta_json LIKE '%"shipping"%')
+            ORDER BY id LIMIT 40`
+        )
+        .all(folder, id) as { id: number; title: string }[])
+    : [];
+  return { meta, entityIds: meta.shipments.map((s) => rootOf(s.entityId)), titles, siblings };
 }

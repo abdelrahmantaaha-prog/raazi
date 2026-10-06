@@ -59,6 +59,9 @@ export type TaskState =
 export type TaskKind =
   | "extract"
   | "ocr"
+  /** Reads a shipping paper whole for the shipment it records: parties, places,
+   *  goods, papers, and links to other shipping papers. See lib/pipeline/shipment.ts. */
+  | "shipment"
   | "resolve"
   | "entry"
   | "transcribe"

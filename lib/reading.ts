@@ -488,7 +488,7 @@ function readingRun(sourceId: number): number {
   });
 }
 
-const TAIL_KINDS = ["resolve", "sweep", "plan_context", "plan_entries"];
+const TAIL_KINDS = ["shipment", "resolve", "sweep", "plan_context", "plan_entries"];
 
 function dropPendingTail(runId: number): void {
   db()
@@ -501,6 +501,9 @@ function dropPendingTail(runId: number): void {
 }
 
 function appendTail(runId: number, sourceId: number): void {
+  // A shipping paper is read whole for its shipment before names are
+  // reconciled, so the parties it adds are reconciled with the rest.
+  enqueue(runId, [{ kind: "shipment" as const, payload: { sourceId } }]);
   enqueue(
     runId,
     ENTITY_TYPES.map((type) => ({ kind: "resolve" as const, payload: { type } }))

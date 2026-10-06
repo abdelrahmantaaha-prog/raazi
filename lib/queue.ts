@@ -268,7 +268,7 @@ export function resumeRun(runId: number, opts: { force?: boolean } = {}): boolea
 
 /** The kinds a failure is worth retrying unasked: model work, where the
  *  failure was almost always the provider's moment rather than the task's. */
-const RETRIABLE = ["entry", "verify", "extract", "resolve", "tag", "enhance", "identity", "context", "coherence", "sweep"];
+const RETRIABLE = ["entry", "verify", "extract", "ocr", "shipment", "resolve", "tag", "enhance", "identity", "context", "coherence", "sweep"];
 /** How long a failure rests before it is tried again, and how many times. */
 export const AUTO_RETRY_AFTER_MINUTES = 30;
 export const AUTO_RETRY_LIMIT = 3;

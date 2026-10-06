@@ -19,6 +19,7 @@ import type { ReadMode } from "@/lib/reading";
 import { formatDate, formatDateTime, relativeDate } from "@/lib/dates";
 import { ArticleLink } from "../../components/ArticleLink";
 import { Translations } from "./Translations";
+import { Shipping, type ShippingView } from "./Shipping";
 import type { TranslationSummary } from "@/lib/translations";
 
 interface SourceMeta {
@@ -50,6 +51,7 @@ export function SourceView({
   initialChunk = null,
   translations,
   original,
+  shipping = null,
 }: {
   source: SourceMeta;
   passages: Passage[];
@@ -71,6 +73,8 @@ export function SourceView({
   translations: TranslationSummary[];
   /** The book this one translates, when it is a translation. */
   original: { id: number; title: string } | null;
+  /** The shipment this paper records, when it is a shipping paper. */
+  shipping?: ShippingView | null;
 }) {
   const router = useRouter();
   const [reading, setReading] = useState(initialChunk !== null);
@@ -369,6 +373,8 @@ export function SourceView({
       />
 
       <PediaSwitch sourceId={source.id} mode={source.mode} indexed={entities.length} />
+
+      {shipping && <Shipping view={shipping} />}
 
       {entities.length > 0 && (
         <Card>

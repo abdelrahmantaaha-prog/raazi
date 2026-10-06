@@ -63,7 +63,7 @@ export interface CallResult<T> {
   model?: string;
 }
 
-type Part =
+export type Part =
   | { text: string }
   | { inlineData: { mimeType: string; data: string } }
   | { fileData: { fileUri: string; mimeType?: string } };

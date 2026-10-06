@@ -159,6 +159,7 @@ export function reextractSource(sourceId: number):
     // the appearances extraction walks past, quotes that cannot stand alone
     // get their bearings back, and the entries that cited the old reading are
     // rewritten. The same tail every ingest gets.
+    enqueue(runId, [{ kind: "shipment" as const, payload: { sourceId } }]);
     enqueue(
       runId,
       ENTITY_TYPES.map((type) => ({ kind: "resolve" as const, payload: { type } }))
