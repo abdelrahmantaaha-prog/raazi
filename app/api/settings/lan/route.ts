@@ -29,7 +29,7 @@ export async function GET() {
     // The bind address follows the script that started the server, not the
     // preference; a change takes effect when Corpus is next started.
     note: settings.enabled
-      ? "LAN mode is on. Restart Corpus if it was started before you switched it on."
-      : "LAN mode is off. Corpus listens on this computer only.",
+      ? "Sharing is on. Restart Corpus if it was started before you switched it on."
+      : "Sharing is off. Only this computer can open Corpus.",
   });
 }

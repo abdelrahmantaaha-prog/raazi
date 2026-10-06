@@ -58,14 +58,9 @@ export function ResearchToolsCard() {
     <Card>
       <h2 className="font-serif text-lg font-semibold">Research tools</h2>
       <p className="mt-1 text-sm text-[var(--color-muted)]">
-        What “Check on the web” can use besides web search. These work with no key: Wikidata,
-        the worldwide news archive, academic papers, the Wayback Machine, US SEC filings, US
-        court records, public Bluesky, Mastodon and Telegram channels, the ship register, the
-        ICIJ Offshore Leaks, Ukraine&rsquo;s catalogue of foreign parts in Russian weapons, Conflict
-        Armament Research, UN panel-of-experts reports, the SIPRI arms-transfer register, UN
-        Comtrade trade figures and the global LEI company register.
-        The services below need a free key from their own site; a tool without its key is
-        simply left out of the check.
+        What online checks can use besides web search. Most need no key — news and web archives,
+        court and company filings, leaks, arms and trade registers, UN reports, ships and public
+        posts. The ones below need a free key from their own site, and are left out until it is added.
       </p>
       {!services ? (
         <p className="mt-3 text-sm text-[var(--color-muted)]">Loading…</p>

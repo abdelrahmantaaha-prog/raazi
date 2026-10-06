@@ -50,9 +50,8 @@ export function CorrectionsCard() {
       <Card>
         <h2 className="font-serif text-lg font-semibold">Standing corrections</h2>
         <p className="mt-2 text-sm text-[var(--color-muted)]">
-          None yet. When you discard evidence from an entry you can mark the reason as
-          applying library-wide; those rules are listed here, and are given to the
-          extractor and to the entry writer on every run.
+          None yet. When you discard evidence from an entry, you can make the reason a rule
+          for the whole library; those rules appear here.
         </p>
       </Card>
     );

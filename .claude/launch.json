@@ -62,6 +62,20 @@
         "dist/client/server/server.js"
       ],
       "port": 5401
+    },
+    {
+      "name": "corpus-sandbox",
+      "runtimeExecutable": "node",
+      "runtimeArgs": [
+        "--env-file=.claude/sandbox-preview.env",
+        "node_modules/next/dist/bin/next",
+        "dev",
+        "--port",
+        "5402",
+        "--hostname",
+        "127.0.0.1"
+      ],
+      "port": 5402
     }
   ]
 }

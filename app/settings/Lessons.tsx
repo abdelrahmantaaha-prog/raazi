@@ -91,10 +91,9 @@ export function LessonsCard() {
         What the models have learned{data ? ` (${lessons.filter((l) => l.active).length})` : ""}
       </h2>
       <p className="mt-1 text-sm text-[var(--color-muted)]">
-        Standing instructions, in your words, given to every call of the stage they name — the entry
-        writer, the brief, extraction, the verifier, filing. Corpus ships with the ones its own audits
-        taught it; add yours when a brief or an entry goes wrong in a way you can name, and it applies
-        from the next call, no rebuild. Each stage is given at most {data?.cap ?? 16}, yours first.
+        Standing instructions in your words, given to the job they name. Add one when an entry or a
+        brief goes wrong in a way you can put into words; it applies from the next call. Each job gets
+        at most {data?.cap ?? 16}, yours first.
       </p>
 
       <div className="mt-4 space-y-2 rounded-lg border border-[var(--color-rule)] p-3">

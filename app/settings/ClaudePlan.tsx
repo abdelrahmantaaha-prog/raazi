@@ -89,8 +89,8 @@ export function ClaudePlanCard({
     <Card>
       <h2 className="font-serif text-lg font-semibold">Claude (your plan)</h2>
       <p className="mt-1 text-sm text-[var(--color-muted)]">
-        Corpus reaches Claude through Claude Code on this computer, as whoever it is signed in as. Every call counts
-        against that plan&apos;s limits; when they run out, the work moves to Gemini until they reset.
+        Corpus uses Claude through your plan on this computer. When the plan&apos;s limits run out, the work waits or
+        moves to another service until they reset.
       </p>
 
       <div className="mt-3 flex flex-wrap items-center gap-3 text-sm">

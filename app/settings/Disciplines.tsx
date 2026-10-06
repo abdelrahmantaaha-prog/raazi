@@ -107,9 +107,8 @@ export function Disciplines() {
       <div>
         <h2 className="font-serif text-lg font-semibold">Disciplines</h2>
         <p className="mt-0.5 text-sm text-[var(--color-muted)]">
-          A separate library per subject — its own sources, entries, feeds, inbox and briefs. Nothing is
-          shared between them except your API keys and which model does which job, so two subjects cannot
-          bleed into each other. Opening another one restarts Corpus, which takes a moment.
+          A separate library per subject, with its own sources, entries, feeds and briefs. Only the AI
+          settings are shared. Opening another one restarts Corpus for a moment.
         </p>
       </div>
 

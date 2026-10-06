@@ -55,11 +55,10 @@ export function LanCard() {
 
   return (
     <Card>
-      <h2 className="font-serif text-lg font-semibold">Reach it from elsewhere</h2>
+      <h2 className="font-serif text-lg font-semibold">Sharing</h2>
       <p className="mt-1 text-sm text-[var(--color-muted)]">
-        Off, Corpus listens on this computer only. On, it listens on every network this machine is
-        on — Wi-Fi, Tailscale — and asks for a token at the door. A phone, the browser extension on
-        another computer, and the other laptop&apos;s sync all come in this way.
+        Off, only this computer can open Corpus. On, your phone, the browser extension and the
+        other laptop can reach it over Wi-Fi or Tailscale, with a sign-in link.
       </p>
       {lan ? (
         <div className="mt-3 space-y-3">
@@ -71,7 +70,7 @@ export function LanCard() {
               onChange={(e) => void toggle(e.target.value === "on")}
             >
               <option value="off">This computer only</option>
-              <option value="on">LAN mode — reachable, with a token</option>
+              <option value="on">Shared — reachable with a sign-in link</option>
             </select>
             <span className="text-xs text-[var(--color-muted)]">{lan.note}</span>
           </div>
@@ -216,10 +215,8 @@ export function SyncCard() {
         <IconSync className="text-[var(--color-accent)]" /> The other laptop
       </h2>
       <p className="mt-1 text-sm text-[var(--color-muted)]">
-        Corpus on two machines, one library. Sync is a copy, not a merge: pull makes this library a
-        copy of the other one, push makes the other one a copy of this. Work on either; before you
-        switch, sync towards the machine you are about to use. Both need LAN mode on, and can be on
-        the same Wi-Fi or reached over Tailscale.
+        One library on two laptops. Pull makes this one a copy of the other; push does the reverse.
+        Before you switch laptops, sync towards the one you are about to use. Both need sharing on.
       </p>
 
       <div className="mt-4 grid gap-3 sm:grid-cols-2">
@@ -230,7 +227,7 @@ export function SyncCard() {
               <p className="mt-1 text-[var(--color-muted)]">{describe(local.fingerprint)}</p>
               <p className="text-xs text-[var(--color-muted)]">
                 Last change {local.fingerprint.latest ? relativeDate(local.fingerprint.latest) : "unknown"} ·{" "}
-                {Math.round(local.libraryBytes / 1024 / 1024)} MB · LAN mode {local.lan ? "on" : "off"}
+                {Math.round(local.libraryBytes / 1024 / 1024)} MB · sharing {local.lan ? "on" : "off"}
               </p>
               {local.last ? (
                 <p className="mt-1 text-xs text-[var(--color-muted)]">
@@ -270,7 +267,7 @@ export function SyncCard() {
       </div>
 
       <div className="mt-4 grid gap-3 sm:grid-cols-[1fr_1fr_auto] sm:items-end">
-        <Field label="Its address" hint="What LAN mode shows on the other laptop — a Wi-Fi or Tailscale address.">
+        <Field label="Its address" hint="Shown under Sharing on the other laptop — a Wi-Fi or Tailscale address.">
           <input
             className={inputClass}
             value={peerUrl}
@@ -279,7 +276,7 @@ export function SyncCard() {
             spellCheck={false}
           />
         </Field>
-        <Field label="Its token" hint="From LAN mode on the other laptop.">
+        <Field label="Its token" hint="From Sharing on the other laptop.">
           <input
             className={inputClass}
             value={peerToken}
@@ -302,7 +299,7 @@ export function SyncCard() {
           {busy === "push" ? "Pushing…" : "Push to it — replace theirs"}
         </Button>
         {local && !local.lan ? (
-          <span className="text-xs text-[var(--color-muted)]">Pushing needs LAN mode on here.</span>
+          <span className="text-xs text-[var(--color-muted)]">Pushing needs sharing on here.</span>
         ) : null}
         <Button variant="ghost" disabled={busy !== null} onClick={() => void load()}>
           Refresh

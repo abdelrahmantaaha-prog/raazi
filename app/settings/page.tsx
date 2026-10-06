@@ -56,13 +56,32 @@ interface Settings {
   claudeModel?: string;
 }
 
+
+type Tab = "general" | "ai" | "research" | "libraries" | "learned" | "access";
+const TABS: { id: Tab; label: string }[] = [
+  { id: "general", label: "General" },
+  { id: "ai", label: "AI" },
+  { id: "research", label: "Research tools" },
+  { id: "libraries", label: "Libraries" },
+  { id: "learned", label: "What it has learned" },
+  { id: "access", label: "Phone & other laptop" },
+];
+
+type Save = (patch: Record<string, unknown>, note?: string) => Promise<boolean>;
+
+/**
+ * Settings, in tabs.
+ *
+ * It had grown to fourteen cards in one column — keys, routing, pacing, the
+ * feeds, the brief, sync, lessons — each with a paragraph of its own, so
+ * finding the entry language meant reading past the request rate (6 Oct
+ * 2026). Now the things you change day to day are on General, the AI services
+ * on their own tab with the technical knobs folded away, and everything else
+ * one tab each. The tab is in the address (#ai), so a link can open it.
+ */
 export default function SettingsPage() {
   const [cfg, setCfg] = useState<Settings | null>(null);
-  const [key, setKey] = useState("");
-  const [label, setLabel] = useState("");
-  const [provider, setProvider] = useState<ProviderId>("gemini");
-  const [keyModel, setKeyModel] = useState("");
-  const [baseUrl, setBaseUrl] = useState("");
+  const [tab, setTab] = useState<Tab>("general");
   const [busy, setBusy] = useState(false);
   const [message, setMessage] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
@@ -71,9 +90,23 @@ export default function SettingsPage() {
     void fetch("/api/settings")
       .then((r) => r.json())
       .then(setCfg);
+    const fromHash = () => {
+      const wanted = window.location.hash.slice(1) as Tab;
+      if (TABS.some((t) => t.id === wanted)) setTab(wanted);
+    };
+    fromHash();
+    window.addEventListener("hashchange", fromHash);
+    return () => window.removeEventListener("hashchange", fromHash);
   }, []);
 
-  const save = async (patch: Record<string, unknown>, note?: string) => {
+  const pick = (t: Tab) => {
+    setTab(t);
+    setMessage(null);
+    setError(null);
+    history.replaceState(null, "", `#${t}`);
+  };
+
+  const save: Save = async (patch, note) => {
     setBusy(true);
     setError(null);
     setMessage(null);
@@ -87,9 +120,10 @@ export default function SettingsPage() {
       if (!res.ok) throw new Error(data.error ?? "Could not save.");
       setCfg(data);
       setMessage(data.note ?? note ?? null);
-      setKey("");
+      return true;
     } catch (err) {
       setError((err as Error).message);
+      return false;
     } finally {
       setBusy(false);
     }
@@ -98,339 +132,101 @@ export default function SettingsPage() {
   if (!cfg) return <p className="text-sm text-[var(--color-muted)]">Loading…</p>;
 
   const usable = cfg.keys.filter((k) => k.status === "active").length;
+  const onPlan = cfg.keys.some((k) => k.provider === "claude-code");
 
   return (
-    <div className="max-w-2xl space-y-6">
+    <div className="max-w-2xl space-y-5">
       <div>
         <h1 className="font-serif text-2xl font-semibold">Settings</h1>
         <p className="mt-1 text-sm text-[var(--color-muted)]">
-          Everything stays on this machine: your sources, the database, and your keys.
-          {cfg.keys.length > 0 && (
-            <>
-              {" "}
-              {usable} of {cfg.keys.length} key{cfg.keys.length === 1 ? "" : "s"} ready to use.
-            </>
-          )}
+          Everything stays on this computer.
+          {cfg.keys.length > 0 && ` ${usable} of ${cfg.keys.length} AI service${cfg.keys.length === 1 ? "" : "s"} ready.`}
         </p>
       </div>
 
-      <Card>
-        <h2 className="font-serif text-lg font-semibold">API keys</h2>
-        <p className="mt-1 text-sm text-[var(--color-muted)]">
-          Add as many as you like, from as many services as you like. When one runs out of daily
-          quota it is set aside until it resets and the work carries straight on with the next key —
-          and then, if that whole service is spent, with the next service. A run only stops when
-          nothing can answer, and then only until the first key anywhere comes back.
-        </p>
-        <p className="mt-2 text-sm text-[var(--color-muted)]">
-          Keys are stored server-side in{" "}
-          <code className="rounded bg-neutral-100 px-1">data/shared.json</code>, beside the
-          browser — ingestion keeps running with no tab open, so the background worker needs to
-          reach them on its own.
-        </p>
+      <nav className="flex flex-wrap gap-1 border-b border-[var(--color-rule)]" aria-label="Settings sections">
+        {TABS.map((t) => (
+          <button
+            key={t.id}
+            onClick={() => pick(t.id)}
+            aria-current={tab === t.id ? "page" : undefined}
+            className={`-mb-px rounded-t border px-3 py-1.5 text-sm ${
+              tab === t.id
+                ? "border-[var(--color-rule)] border-b-white bg-white font-medium"
+                : "border-transparent text-[var(--color-muted)] hover:text-[var(--color-ink)]"
+            }`}
+          >
+            {t.label}
+          </button>
+        ))}
+      </nav>
 
-        {cfg.keys.length > 0 && (
-          <ul className="mt-4 divide-y divide-[var(--color-rule)] rounded border border-[var(--color-rule)]">
-            {cfg.keys.map((k) => (
-              <li key={k.id} className="flex flex-wrap items-center gap-3 px-3 py-2.5">
-                <KeyStatusDot status={k.status} />
-                <div className="min-w-0 flex-1">
-                  <div className="flex flex-wrap items-baseline gap-2">
-                    <span className="font-medium">{k.label}</span>
-                    <span className="rounded bg-[var(--color-accent-soft)] px-1.5 text-xs text-[var(--color-accent)]">
-                      {PROVIDERS[k.provider]?.label ?? k.provider}
-                    </span>
-                    <span className="font-mono text-xs text-[var(--color-muted)]">{k.hint}</span>
-                    <span className="font-mono text-xs text-[var(--color-muted)]">{k.model}</span>
-                    {k.fromEnv && (
-                      <span className="text-xs text-[var(--color-muted)]">from your environment</span>
-                    )}
-                  </div>
-                  <p className="text-xs text-[var(--color-muted)]">
-                    {k.status === "waiting" && k.availableAt
-                      ? `Out of quota — back ${relativeDate(k.availableAt)} (${formatDateTime(k.availableAt)})`
-                      : k.status === "rejected"
-                        ? k.lastError ?? "Rejected"
-                        : k.status === "off"
-                          ? "Set aside"
-                          : k.calls > 0
-                            ? `${k.calls} call${k.calls === 1 ? "" : "s"} · ${k.tokens.toLocaleString()} tokens`
-                            : "Ready"}
-                  </p>
-                </div>
-                <div className="flex gap-1">
-                  {(k.status === "waiting" || k.status === "rejected") && (
-                    <Button
-                      variant="ghost"
-                      disabled={busy}
-                      onClick={() => save({ keyId: k.id, keyAction: "revive" }, "")}
-                      title="Try this key again right now"
-                    >
-                      Retry
-                    </Button>
-                  )}
-                  {!k.fromEnv && (
-                    <>
-                      <Button
-                        variant="ghost"
-                        disabled={busy}
-                        onClick={() =>
-                          save(
-                            { keyId: k.id, keyAction: k.status === "off" ? "enable" : "disable" },
-                            ""
-                          )
-                        }
-                      >
-                        {k.status === "off" ? "Use" : "Pause"}
-                      </Button>
-                      <Button
-                        variant="ghost"
-                        disabled={busy}
-                        onClick={() => {
-                          if (confirm(`Remove “${k.label}”?`)) {
-                            void save({ keyId: k.id, keyAction: "remove" }, "");
-                          }
-                        }}
-                      >
-                        Remove
-                      </Button>
-                    </>
-                  )}
-                </div>
-              </li>
-            ))}
-          </ul>
-        )}
-
-        <div className="mt-4 rounded border border-[var(--color-rule)] p-3">
-          <div className="flex flex-wrap gap-2">
-            <select
-              className={`${inputClass} max-w-[13rem]`}
-              value={provider}
-              onChange={(e) => {
-                setProvider(e.target.value as ProviderId);
-                setKeyModel("");
-                setBaseUrl("");
-              }}
-            >
-              {OFFERED_PROVIDER_IDS.map((id) => (
-                <option key={id} value={id}>
-                  {PROVIDERS[id].label}
-                </option>
-              ))}
-            </select>
-            {/* The plan has no key: Claude Code on this computer is already signed in. */}
-            {provider !== "claude-code" && (
-              <input
-                className={`${inputClass} min-w-[10rem] flex-1`}
-                type="password"
-                placeholder="Paste the key"
-                value={key}
-                onChange={(e) => setKey(e.target.value)}
-              />
-            )}
-            <input
-              className={`${inputClass} max-w-[9rem]`}
-              placeholder="Label (optional)"
-              value={label}
-              onChange={(e) => setLabel(e.target.value)}
-            />
-          </div>
-
-          <div className="mt-2 flex flex-wrap gap-2">
-            {/* The plan's model is picked in its own card, once it is added. */}
-            {provider !== "claude-code" && (
-              <input
-                className={`${inputClass} min-w-[12rem] flex-1`}
-                placeholder={`Model (default: ${PROVIDERS[provider].defaultModel})`}
-                value={keyModel}
-                onChange={(e) => setKeyModel(e.target.value)}
-              />
-            )}
-            {provider === "ollama" && (
-              <input
-                className={`${inputClass} min-w-[12rem] flex-1`}
-                placeholder={`Endpoint (default: ${PROVIDERS.ollama.baseUrl})`}
-                value={baseUrl}
-                onChange={(e) => setBaseUrl(e.target.value)}
-              />
-            )}
-            <Button
-              variant="primary"
-              disabled={busy || (provider !== "claude-code" && !key.trim())}
-              onClick={() => {
-                void save(
-                  {
-                    // The ring wants a value; the plan has none, so it gets a fixed one.
-                    addKey: provider === "claude-code" ? "claude-plan" : key.trim(),
-                    label: label.trim() || undefined,
-                    provider,
-                    keyModel: keyModel.trim() || undefined,
-                    baseUrl: baseUrl.trim() || undefined,
-                  },
-                  ""
-                );
-                setLabel("");
-                setKeyModel("");
-              }}
-            >
-              {busy ? "Checking…" : provider === "claude-code" ? "Add Claude (your plan)" : "Add key"}
-            </Button>
-          </div>
-
-          <p className="mt-2 text-sm text-[var(--color-muted)]">
-            {PROVIDERS[provider].note}{" "}
-            <span className="whitespace-nowrap">Free tier: {PROVIDERS[provider].freeTier}.</span>
-            {!PROVIDERS[provider].keysMultiply && provider !== "ollama" && (
-              <>
-                {" "}
-                <strong>Extra keys here buy nothing</strong> — usage is counted per account, not per
-                key.
-              </>
-            )}
-            {PROVIDERS[provider].keysUrl && (
-              <>
-                {" "}
-                <a
-                  href={PROVIDERS[provider].keysUrl}
-                  target="_blank"
-                  rel="noreferrer"
-                  className="underline"
-                >
-                  Get a key
-                </a>
-                .
-              </>
-            )}
-          </p>
-        </div>
-      </Card>
-
-      {cfg.keys.some((k) => k.provider === "anthropic") && (
-        <p className="rounded border border-[var(--color-rule)] bg-[var(--color-accent-soft)] px-3 py-2 text-sm">
-          <span className="font-medium">Claude is metered, not free.</span>{" "}
-          <span className="text-[var(--color-muted)]">
-            Every other service here refuses you when its allowance runs out; this one bills you
-            instead. So the routing below is a spending decision — reading a book is millions of
-            tokens, writing its entries is thousands. The per-model rates are on the key form
-            above.
-          </span>
+      {(message || error) && (
+        <p className={`text-sm ${error ? "text-red-700" : "text-emerald-700"}`} role="status">
+          {error ?? message}
         </p>
       )}
 
-      {cfg.keys.some((k) => k.provider === "claude-code") && (
-        <ClaudePlanCard
-          model={cfg.claudeModel ?? "claude-sonnet-5-5"}
-          busy={busy}
-          onModel={(m) => void save({ claudeModel: m }, "Model updated.")}
-        />
+      {tab === "general" && <General cfg={cfg} busy={busy} save={save} />}
+
+      {tab === "ai" && (
+        <>
+          {onPlan && (
+            <ClaudePlanCard
+              model={cfg.claudeModel ?? "claude-sonnet-5-5"}
+              busy={busy}
+              onModel={(m) => void save({ claudeModel: m }, "Model updated.")}
+            />
+          )}
+          {cfg.keys.some((k) => k.provider === "anthropic") && (
+            <p className="rounded border border-[var(--color-rule)] bg-[var(--color-accent-soft)] px-3 py-2 text-sm">
+              <span className="font-medium">Claude is metered, not free.</span>{" "}
+              <span className="text-[var(--color-muted)]">
+                Every other service here refuses you when its allowance runs out; this one bills you
+                instead. So the routing below is a spending decision — reading a book is millions of
+                tokens, writing its entries is thousands. The per-model rates are on the key form
+                above.
+              </span>
+            </p>
+          )}
+          <RoutingCard cfg={cfg} busy={busy} onSave={save} />
+          <KeysCard cfg={cfg} busy={busy} save={save} />
+          <Advanced cfg={cfg} save={save} />
+        </>
       )}
 
-      <RoutingCard cfg={cfg} busy={busy} onSave={save} />
+      {tab === "research" && <ResearchToolsCard />}
+      {tab === "libraries" && <Disciplines />}
+      {tab === "learned" && (
+        <>
+          <LessonsCard />
+          <CorrectionsCard />
+        </>
+      )}
+      {tab === "access" && (
+        <>
+          <LanCard />
+          <SyncCard />
+        </>
+      )}
+    </div>
+  );
+}
 
+/** What you change day to day: the language, the entries, the news, the morning. */
+function General({ cfg, busy, save }: { cfg: Settings; busy: boolean; save: Save }) {
+  const onOff = (v: boolean) => (v ? "on" : "off");
+  return (
+    <>
       <Card>
-        <h2 className="font-serif text-lg font-semibold">Pace</h2>
-        <p className="mt-1 text-sm text-[var(--color-muted)]">
-          Free keys allow only a few requests a minute. Waiting between calls is cheaper than
-          getting rate-limited and unwinding the work, so the worker paces itself to this number.
-        </p>
-        <div className="mt-3 grid gap-3 sm:grid-cols-2">
-          <Field label="Key tier">
-            <select
-              className={inputClass}
-              value={cfg.tier}
-              onChange={(e) => save({ tier: e.target.value }, "Pace updated.")}
-            >
-              <option value="free">Free</option>
-              <option value="paid">Paid</option>
-            </select>
-          </Field>
-          <Field label="Requests per minute" hint="0 disables pacing entirely.">
-            <input
-              className={inputClass}
-              type="number"
-              min={0}
-              defaultValue={cfg.requestsPerMinute}
-              onBlur={(e) => save({ requestsPerMinute: Number(e.target.value) }, "Pace updated.")}
-            />
-          </Field>
-          <Field
-            label="Retry a refused key after"
-            hint="Minutes. Providers report a spent minute and a spent day almost identically, so a refused key is not written off — it comes back after this long, and the wait only doubles if it is refused again."
-          >
-            <input
-              className={inputClass}
-              type="number"
-              min={1}
-              defaultValue={cfg.keyRetryMinutes}
-              onBlur={(e) => save({ keyRetryMinutes: Number(e.target.value) }, "Retry interval updated.")}
-            />
-          </Field>
-        </div>
-      </Card>
-
-      <Card>
-        <h2 className="font-serif text-lg font-semibold">Cost</h2>
-        <div className="mt-3 grid gap-3 sm:grid-cols-2">
-          <Field
-            label="Write entries at"
-            hint="Entities with at least this many quotes get an entry automatically. The rest wait until you open them."
-          >
-            <input
-              className={inputClass}
-              type="number"
-              min={1}
-              defaultValue={cfg.entryThreshold}
-              onBlur={(e) => save({ entryThreshold: Number(e.target.value) }, "Threshold updated.")}
-            />
-          </Field>
-          <Field
-            label="Keep entries current"
-            hint="When new evidence arrives, rewrite the entries it affects without asking. Entries you already have are always refreshed, however small the entity — the threshold above only governs writing a first one."
-          >
-            <select
-              className={inputClass}
-              value={cfg.autoRefreshEntries ? "on" : "off"}
-              onChange={(e) =>
-                save({ autoRefreshEntries: e.target.value === "on" }, "Updated.")
-              }
-            >
-              <option value="on">Update them automatically</option>
-              <option value="off">Only when I ask</option>
-            </select>
-          </Field>
-          <Field label="Default token cap per source" hint="0 means no cap. A run parks itself when it hits this.">
-            <input
-              className={inputClass}
-              type="number"
-              min={0}
-              step={10000}
-              defaultValue={cfg.defaultBudget}
-              onBlur={(e) => save({ defaultBudget: Number(e.target.value) }, "Budget updated.")}
-            />
-          </Field>
-        </div>
-      </Card>
-
-      <Card>
-        <h2 className="font-serif text-lg font-semibold">Model</h2>
-        <div className="grid gap-3 sm:grid-cols-2">
-          <Field label="Generation model" hint="An alias is safer than a pinned version — it survives retirements.">
-            <input
-              className={inputClass}
-              defaultValue={cfg.model}
-              onBlur={(e) => save({ model: e.target.value }, "Model updated.")}
-            />
-          </Field>
-          <Field
-            label="Entry language"
-            hint="What entries and briefs are written in. Quotes stay verbatim in their own language whatever this says."
-          >
+        <h2 className="font-serif text-lg font-semibold">Entries</h2>
+        <div className="mt-3 grid gap-4 sm:grid-cols-2">
+          <Field label="Write entries in" hint="Quotes always stay in their own language.">
             <select
               className={inputClass}
               value={cfg.entryLanguage ?? "en"}
               disabled={busy}
-              onChange={(e) => save({ entryLanguage: e.target.value }, "Entry language updated.")}
+              onChange={(e) => void save({ entryLanguage: e.target.value }, "Entry language updated.")}
             >
               {ENTRY_LANGUAGES.map(([code, label]) => (
                 <option key={code} value={code}>
@@ -439,57 +235,69 @@ export default function SettingsPage() {
               ))}
             </select>
           </Field>
+          <Field label="Write an entry once a name has" hint="This many quotes. Smaller names wait until you open them.">
+            <input
+              className={inputClass}
+              type="number"
+              min={1}
+              defaultValue={cfg.entryThreshold}
+              onBlur={(e) => void save({ entryThreshold: Number(e.target.value) }, "Updated.")}
+            />
+          </Field>
+          <Field label="When new evidence arrives">
+            <select
+              className={inputClass}
+              value={onOff(cfg.autoRefreshEntries)}
+              onChange={(e) => void save({ autoRefreshEntries: e.target.value === "on" }, "Updated.")}
+            >
+              <option value="on">Update the entries it touches</option>
+              <option value="off">Only when I ask</option>
+            </select>
+          </Field>
         </div>
       </Card>
 
       <Card>
-        <h2 className="font-serif text-lg font-semibold">Feeds and the inbox</h2>
+        <h2 className="font-serif text-lg font-semibold">News</h2>
         <p className="mt-1 text-sm text-[var(--color-muted)]">
-          What a feed finds is fetched and chunked — both free — and then waits for you.
-          Keeping an article is what sends it to be read, which is the stage that costs.
-          Turning review off restores the old behaviour: everything a feed carries is read
-          in full on arrival, which on a wire feed is most of a working day&rsquo;s tokens
-          spent on other people&rsquo;s stories.
+          Fetching articles is free; reading one is what costs, so by default they wait in the inbox for you.
         </p>
         <div className="mt-3 grid gap-4 sm:grid-cols-2">
-          <Field label="Check the feeds" hint="While Corpus is open. Each feed keeps its own interval and daily cap.">
+          <Field label="Check the feeds">
             <select
               className={inputClass}
-              value={cfg.feedPolling ? "on" : "off"}
-              onChange={(e) => save({ feedPolling: e.target.value === "on" }, "Updated.")}
+              value={onOff(cfg.feedPolling)}
+              onChange={(e) => void save({ feedPolling: e.target.value === "on" }, "Updated.")}
             >
               <option value="on">Automatically</option>
               <option value="off">Only when I ask</option>
             </select>
           </Field>
-          <Field label="New articles" hint="The inbox is where they wait.">
+          <Field label="New articles">
             <select
               className={inputClass}
-              value={cfg.feedReview ? "on" : "off"}
-              onChange={(e) => save({ feedReview: e.target.value === "on" }, "Updated.")}
+              value={onOff(cfg.feedReview)}
+              onChange={(e) => void save({ feedReview: e.target.value === "on" }, "Updated.")}
             >
-              <option value="on">Wait for me to look at them</option>
-              <option value="off">Read everything they bring in</option>
+              <option value="on">Wait in the inbox for me</option>
+              <option value="off">Read them all on arrival</option>
             </select>
           </Field>
-          <Field
-            label="Daily brief"
-            hint="The weekly one is always written by hand, from the week page. With review on, the daily one waits for an empty inbox."
-          >
+          <Field label="Daily brief">
             <select
               className={inputClass}
-              value={cfg.dailyBrief ? "on" : "off"}
-              onChange={(e) => save({ dailyBrief: e.target.value === "on" }, "Updated.")}
+              value={onOff(cfg.dailyBrief)}
+              onChange={(e) => void save({ dailyBrief: e.target.value === "on" }, "Updated.")}
             >
               <option value="on">Write one each day</option>
               <option value="off">Only when I ask</option>
             </select>
           </Field>
-          <Field label="A daily brief looks back" hint="Hours. Longer if you read every few days.">
+          <Field label="The brief covers the last">
             <select
               className={inputClass}
               value={String(cfg.briefHours ?? 24)}
-              onChange={(e) => save({ briefHours: Number(e.target.value) }, "Updated.")}
+              onChange={(e) => void save({ briefHours: Number(e.target.value) }, "Updated.")}
             >
               {[12, 24, 36, 48, 72].map((h) => (
                 <option key={h} value={String(h)}>
@@ -504,28 +312,24 @@ export default function SettingsPage() {
       <Card>
         <h2 className="font-serif text-lg font-semibold">Morning routine</h2>
         <p className="mt-1 text-sm text-[var(--color-muted)]">
-          Once a day, without being asked: entries carrying more than one verification
-          flag are rewritten — the writer is handed the flags and investigates each one
-          — and the picture hunt runs for anything that earned an entry since yesterday.
-          Runs at the first opportunity after the hour, so a laptop asleep at seven
-          catches up when it wakes.
+          Rewrites entries with more than one verification flag, and finds pictures for new entries.
         </p>
         <div className="mt-3 grid gap-4 sm:grid-cols-2">
-          <Field label="Run it" hint="The rewrites spend tokens; the picture hunt is free.">
+          <Field label="Run it">
             <select
               className={inputClass}
-              value={cfg.morningChores ? "on" : "off"}
-              onChange={(e) => save({ morningChores: e.target.value === "on" }, "Updated.")}
+              value={onOff(cfg.morningChores)}
+              onChange={(e) => void save({ morningChores: e.target.value === "on" }, "Updated.")}
             >
               <option value="on">Every morning</option>
-              <option value="off">Never — I will do it by hand</option>
+              <option value="off">Never</option>
             </select>
           </Field>
-          <Field label="After" hint="Local time.">
+          <Field label="After" hint="Or as soon as the computer wakes after that.">
             <select
               className={inputClass}
               value={String(cfg.morningHour)}
-              onChange={(e) => save({ morningHour: Number(e.target.value) }, "Updated.")}
+              onChange={(e) => void save({ morningHour: Number(e.target.value) }, "Updated.")}
             >
               {[5, 6, 7, 8, 9, 10, 12].map((h) => (
                 <option key={h} value={String(h)}>
@@ -536,23 +340,255 @@ export default function SettingsPage() {
           </Field>
         </div>
       </Card>
-
-      <ResearchToolsCard />
-
-      <LanCard />
-
-      <SyncCard />
-
-      <CorrectionsCard />
-      <Disciplines />
-
-      <LessonsCard />
-
-      {message && <p className="text-sm text-emerald-700">{message}</p>}
-      {error && <p className="text-sm text-red-700">{error}</p>}
-    </div>
+    </>
   );
 }
+
+/** Keys for the AI services: the list, and the form to add one. */
+function KeysCard({ cfg, busy, save }: { cfg: Settings; busy: boolean; save: Save }) {
+  const [key, setKey] = useState("");
+  const [label, setLabel] = useState("");
+  const [provider, setProvider] = useState<ProviderId>("gemini");
+  const [keyModel, setKeyModel] = useState("");
+  const [baseUrl, setBaseUrl] = useState("");
+  return (
+    <Card>
+      <h2 className="font-serif text-lg font-semibold">Other AI services</h2>
+      <p className="mt-1 text-sm text-[var(--color-muted)]">
+        Gemini, local models and others, for whatever you route to them. When one runs out, the
+        work moves to the next. Keys stay on this computer.
+      </p>
+
+      {cfg.keys.length > 0 && (
+        <ul className="mt-4 divide-y divide-[var(--color-rule)] rounded border border-[var(--color-rule)]">
+          {cfg.keys.map((k) => (
+            <li key={k.id} className="flex flex-wrap items-center gap-3 px-3 py-2.5">
+              <KeyStatusDot status={k.status} />
+              <div className="min-w-0 flex-1">
+                <div className="flex flex-wrap items-baseline gap-2">
+                  <span className="font-medium">{k.label}</span>
+                  <span className="rounded bg-[var(--color-accent-soft)] px-1.5 text-xs text-[var(--color-accent)]">
+                    {PROVIDERS[k.provider]?.label ?? k.provider}
+                  </span>
+                  <span className="font-mono text-xs text-[var(--color-muted)]">{k.hint}</span>
+                  <span className="font-mono text-xs text-[var(--color-muted)]">{k.model}</span>
+                  {k.fromEnv && (
+                    <span className="text-xs text-[var(--color-muted)]">from your environment</span>
+                  )}
+                </div>
+                <p className="text-xs text-[var(--color-muted)]">
+                  {k.status === "waiting" && k.availableAt
+                    ? `Out of quota — back ${relativeDate(k.availableAt)} (${formatDateTime(k.availableAt)})`
+                    : k.status === "rejected"
+                      ? k.lastError ?? "Rejected"
+                      : k.status === "off"
+                        ? "Set aside"
+                        : k.calls > 0
+                          ? `${k.calls} call${k.calls === 1 ? "" : "s"} · ${k.tokens.toLocaleString()} tokens`
+                          : "Ready"}
+                </p>
+              </div>
+              <div className="flex gap-1">
+                {(k.status === "waiting" || k.status === "rejected") && (
+                  <Button
+                    variant="ghost"
+                    disabled={busy}
+                    onClick={() => save({ keyId: k.id, keyAction: "revive" }, "")}
+                    title="Try this key again right now"
+                  >
+                    Retry
+                  </Button>
+                )}
+                {!k.fromEnv && (
+                  <>
+                    <Button
+                      variant="ghost"
+                      disabled={busy}
+                      onClick={() =>
+                        save(
+                          { keyId: k.id, keyAction: k.status === "off" ? "enable" : "disable" },
+                          ""
+                        )
+                      }
+                    >
+                      {k.status === "off" ? "Use" : "Pause"}
+                    </Button>
+                    <Button
+                      variant="ghost"
+                      disabled={busy}
+                      onClick={() => {
+                        if (confirm(`Remove “${k.label}”?`)) {
+                          void save({ keyId: k.id, keyAction: "remove" }, "");
+                        }
+                      }}
+                    >
+                      Remove
+                    </Button>
+                  </>
+                )}
+              </div>
+            </li>
+          ))}
+        </ul>
+      )}
+
+      <div className="mt-4 rounded border border-[var(--color-rule)] p-3">
+        <div className="flex flex-wrap gap-2">
+          <select
+            className={`${inputClass} max-w-[13rem]`}
+            value={provider}
+            onChange={(e) => {
+              setProvider(e.target.value as ProviderId);
+              setKeyModel("");
+              setBaseUrl("");
+            }}
+          >
+            {OFFERED_PROVIDER_IDS.map((id) => (
+              <option key={id} value={id}>
+                {PROVIDERS[id].label}
+              </option>
+            ))}
+          </select>
+          {/* The plan has no key: Claude Code on this computer is already signed in. */}
+          {provider !== "claude-code" && (
+            <input
+              className={`${inputClass} min-w-[10rem] flex-1`}
+              type="password"
+              placeholder="Paste the key"
+              value={key}
+              onChange={(e) => setKey(e.target.value)}
+            />
+          )}
+          <input
+            className={`${inputClass} max-w-[9rem]`}
+            placeholder="Label (optional)"
+            value={label}
+            onChange={(e) => setLabel(e.target.value)}
+          />
+        </div>
+
+        <div className="mt-2 flex flex-wrap gap-2">
+          {/* The plan's model is picked in its own card, once it is added. */}
+          {provider !== "claude-code" && (
+            <input
+              className={`${inputClass} min-w-[12rem] flex-1`}
+              placeholder={`Model (default: ${PROVIDERS[provider].defaultModel})`}
+              value={keyModel}
+              onChange={(e) => setKeyModel(e.target.value)}
+            />
+          )}
+          {provider === "ollama" && (
+            <input
+              className={`${inputClass} min-w-[12rem] flex-1`}
+              placeholder={`Endpoint (default: ${PROVIDERS.ollama.baseUrl})`}
+              value={baseUrl}
+              onChange={(e) => setBaseUrl(e.target.value)}
+            />
+          )}
+          <Button
+            variant="primary"
+            disabled={busy || (provider !== "claude-code" && !key.trim())}
+            onClick={() => {
+              void save(
+                {
+                  // The ring wants a value; the plan has none, so it gets a fixed one.
+                  addKey: provider === "claude-code" ? "claude-plan" : key.trim(),
+                  label: label.trim() || undefined,
+                  provider,
+                  keyModel: keyModel.trim() || undefined,
+                  baseUrl: baseUrl.trim() || undefined,
+                },
+                ""
+              ).then((ok) => {
+                // A key that was refused stays in the box, to be corrected.
+                if (ok) setKey("");
+              });
+              setLabel("");
+              setKeyModel("");
+            }}
+          >
+            {busy ? "Checking…" : provider === "claude-code" ? "Add Claude (your plan)" : "Add key"}
+          </Button>
+        </div>
+
+        <p className="mt-2 text-sm text-[var(--color-muted)]">
+          {PROVIDERS[provider].note}{" "}
+          <span className="whitespace-nowrap">Free tier: {PROVIDERS[provider].freeTier}.</span>
+          {!PROVIDERS[provider].keysMultiply && provider !== "ollama" && (
+            <>
+              {" "}
+              <strong>Extra keys here buy nothing</strong> — usage is counted per account, not per
+              key.
+            </>
+          )}
+          {PROVIDERS[provider].keysUrl && (
+            <>
+              {" "}
+              <a
+                href={PROVIDERS[provider].keysUrl}
+                target="_blank"
+                rel="noreferrer"
+                className="underline"
+              >
+                Get a key
+              </a>
+              .
+            </>
+          )}
+        </p>
+      </div>
+    </Card>
+  );
+}
+
+/** The knobs almost nobody needs, folded away: the Gemini model, pacing, retries, the per-source cap. */
+function Advanced({ cfg, save }: { cfg: Settings; save: Save }) {
+  return (
+    <details className="rounded-lg border border-[var(--color-rule)] bg-white">
+      <summary className="cursor-pointer px-4 py-3 text-sm font-medium">Advanced</summary>
+      <div className="grid gap-4 border-t border-[var(--color-rule)] p-4 sm:grid-cols-2">
+        <Field label="Gemini model" hint="An alias outlives a pinned version.">
+          <input className={inputClass} defaultValue={cfg.model} onBlur={(e) => void save({ model: e.target.value }, "Model updated.")} />
+        </Field>
+        <Field label="Gemini key tier">
+          <select className={inputClass} value={cfg.tier} onChange={(e) => void save({ tier: e.target.value }, "Updated.")}>
+            <option value="free">Free</option>
+            <option value="paid">Paid</option>
+          </select>
+        </Field>
+        <Field label="Requests per minute" hint="0 turns pacing off.">
+          <input
+            className={inputClass}
+            type="number"
+            min={0}
+            defaultValue={cfg.requestsPerMinute}
+            onBlur={(e) => void save({ requestsPerMinute: Number(e.target.value) }, "Updated.")}
+          />
+        </Field>
+        <Field label="Try a refused key again after" hint="Minutes; doubles if it is refused again.">
+          <input
+            className={inputClass}
+            type="number"
+            min={1}
+            defaultValue={cfg.keyRetryMinutes}
+            onBlur={(e) => void save({ keyRetryMinutes: Number(e.target.value) }, "Updated.")}
+          />
+        </Field>
+        <Field label="Token cap per source" hint="0 for none. A run pauses when it reaches it.">
+          <input
+            className={inputClass}
+            type="number"
+            min={0}
+            step={10000}
+            defaultValue={cfg.defaultBudget}
+            onBlur={(e) => void save({ defaultBudget: Number(e.target.value) }, "Updated.")}
+          />
+        </Field>
+      </div>
+    </details>
+  );
+}
+
 
 /**
  * Which service handles which stage. `extract` is the one that matters — it is
@@ -575,27 +611,25 @@ function RoutingCard({
     <Card>
       <h2 className="font-serif text-lg font-semibold">Who does what</h2>
       <p className="mt-1 text-sm text-[var(--color-muted)]">
-        Reading passages is the bulk of the work and needs nothing but text, so moving it to a
-        service with a bigger free allowance is what makes a Gemini quota last. Everything else is
-        small enough to leave where it is.
+        Which service, and which Claude, does each job. Reading passages is most of the work.
       </p>
 
       {configured.length < 2 && (
         <p className="mt-2 rounded bg-[var(--color-accent-soft)] px-3 py-2 text-sm">
-          Add a key for a second service above and it will appear as an option here.
+          Add a second service under Other AI services and it becomes a choice here.
         </p>
       )}
 
       {/* Only once there is a Claude key to route to, and only ever a
           suggestion: the stored routing is the reader's, and changing it from
           under them would be a surprise the next run pays for. */}
-      {(choices.includes("anthropic") || choices.includes("claude-code")) && (
+      {/* Only for a metered Claude key, where the split is a spending decision. */}
+      {choices.includes("anthropic") && choices.includes("gemini") && (
         <p className="mt-2 rounded bg-[var(--color-accent-soft)] px-3 py-2 text-sm">
-          <span className="font-medium">Suggested split.</span>{" "}
+          <span className="font-medium">Suggested split:</span>{" "}
           <span className="text-[var(--color-muted)]">
-            Reading passages, filing sources and gathering context on Gemini — they are mechanical
-            and there are thousands of them. Writing entries and answering questions on Claude,
-            where the judgement is worth the bill. Nothing changes until you set it below.
+            reading and filing on Gemini, where there are thousands of calls; writing and questions on
+            Claude, where the judgement is worth the bill.
           </span>
         </p>
       )}
@@ -645,9 +679,8 @@ function RoutingCard({
       </div>
 
       <p className="mt-4 text-xs text-[var(--color-muted)]">
-        Scanned-page OCR, transcription and entity embeddings are not listed: they need to read
-        images or audio, or to produce vectors, and only Gemini does those on a free tier. They stay
-        there whatever you choose here.
+        Scanned pages and photos follow “Reading passages”. Recordings and search by meaning need
+        Gemini whatever is set here.
       </p>
     </Card>
   );
@@ -662,3 +695,4 @@ function KeyStatusDot({ status }: { status: KeyRow["status"] }) {
   }[status];
   return <span className={`h-2.5 w-2.5 shrink-0 rounded-full ${color}`} title={title} />;
 }
+

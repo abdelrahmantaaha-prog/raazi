@@ -213,17 +213,13 @@ export const STAGE_LABEL: Record<Stage, string> = {
 };
 
 export const STAGE_NOTE: Record<Stage, string> = {
-  extract:
-    "The bulk of the work — around 88% of all calls. Volume and schema reliability matter here more than judgement.",
-  resolve: "Occasional and small. Judgement-heavy, so a weaker model costs accuracy.",
-  entry: "Where the writing shows. A local model does this well and costs nothing but time.",
-  verify:
-    "Reads each finished entry back against its own citations, and the coherence pass with it. Runs about as often as writing does, so it costs about as much — which is why it has its own line.",
-  tag: "One short call per source. Barely worth routing.",
-  brief:
-    "A handful of calls a week, over every passage the week collected. The one place long context beats everything else, and the one you present from.",
-  group:
-    "Reads only headlines and says which are one story. A few thousand tokens a pass, a few passes a day; the cheapest model on the ring is asked first, and the local one does it for nothing.",
+  extract: "Most of the work — thousands of calls. Scanned pages and photos too.",
+  resolve: "Deciding whether two names are one. Few calls; needs judgement.",
+  entry: "The entries themselves. Where the writing shows.",
+  verify: "Reading each entry back against its citations. About as many calls as writing.",
+  tag: "One short call per source.",
+  brief: "A few calls a week, over everything the week collected.",
+  group: "Sorting headlines into stories. Tiny and cheap.",
 };
 
 export function spec(id: ProviderId): ProviderSpec {
