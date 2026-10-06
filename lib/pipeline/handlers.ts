@@ -15,6 +15,8 @@ import { handleResolve } from "./resolve";
 import { handleEntry } from "./entry";
 import { handleOcr } from "./ocr";
 import { handleShipment } from "./shipment";
+import { handleShipcheck } from "./shipcheck";
+import { handleTextWebcheck } from "./webcheck";
 import { handleTranscribe } from "./transcribe";
 import { handleTag } from "./tag";
 import { handleFactcheck } from "./factcheck";
@@ -74,6 +76,8 @@ export const handlers: Record<string, Handler> = {
   verify: handleVerify,
   ocr: handleOcr,
   shipment: handleShipment,
+  shipcheck: handleShipcheck,
+  webcheck_text: handleTextWebcheck,
   transcribe: handleTranscribe,
   resolve: handleResolve,
   entry: handleEntry,

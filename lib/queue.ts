@@ -70,6 +70,8 @@ export function enqueue(
 export const PRIORITY: Record<string, number> = {
   factcheck: 0,
   webcheck: 0,
+  shipcheck: 0,
+  webcheck_text: 0,
   // The brief is what you opened the app for; the poll that feeds it comes
   // first of all, since a brief written before the morning's articles are in
   // is a brief about yesterday.

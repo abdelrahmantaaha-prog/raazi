@@ -1,4 +1,5 @@
 import { NextResponse } from "next/server";
+import { textWebCheck } from "@/lib/web-checks";
 import { asId, badRequest, notFound, optionalString, readBody } from "@/lib/http";
 import { citationsFor, deleteDraft, getDraft, notesFor, saveDraft } from "@/lib/drafts";
 
@@ -9,7 +10,7 @@ export async function GET(_req: Request, ctx: { params: Promise<{ id: string }> 
   if (id === null) return badRequest("Not a valid id.");
   const draft = getDraft(id);
   if (!draft) return notFound("No such draft.");
-  return NextResponse.json({ draft, notes: notesFor(id), citations: citationsFor(id) });
+  return NextResponse.json({ draft, notes: notesFor(id), citations: citationsFor(id), webCheck: textWebCheck("draft", id) ?? null });
 }
 
 /**

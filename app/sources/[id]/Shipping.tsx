@@ -2,9 +2,14 @@ import Link from "next/link";
 import type { ShipmentRecord, ShippingMeta } from "@/lib/pipeline/shipment";
 import { Card } from "../../components/ui";
 import { dirOf } from "@/lib/dir";
+import type { ShipmentCheck as Report } from "@/lib/pipeline/shipcheck";
+import { ShipmentCheck } from "./ShipmentCheck";
 
 export interface ShippingView {
+  sourceId: number;
   meta: ShippingMeta;
+  /** The last online check of each shipment, by its index. */
+  checks: Record<string, Report>;
   /** Each shipment's entity as it stands now, after any merges. */
   entityIds: (number | null)[];
   /** Titles of the papers it is linked to, by source id. */
@@ -25,7 +30,7 @@ const GOODS_COLUMNS: [keyof ShipmentRecord["goods"][number], string][] = [
 
 /** The shipment a shipping paper records, read off the paper whole. */
 export function Shipping({ view }: { view: ShippingView }) {
-  const { meta, entityIds, titles, siblings } = view;
+  const { sourceId, meta, checks, entityIds, titles, siblings } = view;
   return (
     <Card>
       <h2 className="font-serif text-lg font-semibold">Shipping document</h2>
@@ -122,6 +127,8 @@ export function Shipping({ view }: { view: ShippingView }) {
                   {s.remarks}
                 </p>
               )}
+
+              <ShipmentCheck sourceId={sourceId} shipment={i} report={checks[String(i)]} />
 
               {links.length > 0 && (
                 <div className="text-sm">

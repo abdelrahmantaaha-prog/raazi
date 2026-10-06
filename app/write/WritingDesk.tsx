@@ -12,6 +12,8 @@ import { LibraryCite, type LibraryPick } from "./LibraryCite";
 import type { CitablePassage } from "@/lib/cite-search";
 import { ArticleLink, hostOf } from "../components/ArticleLink";
 import { useDeskHeight } from "../components/desk";
+import { TextWebCheck } from "../components/TextWebCheck";
+import type { WebReport } from "@/lib/web-checks";
 
 interface Reference {
   id: number;
@@ -127,6 +129,8 @@ export function WritingDesk({
   const [searching, setSearching] = useState(false);
 
   const [report, setReport] = useState<Report | null>(null);
+  /** The last check of this draft on the web, and when the draft last changed. */
+  const [webCheck, setWebCheck] = useState<{ report: WebReport | null; updatedAt?: string }>({ report: null });
   const [checking, setChecking] = useState(false);
   const [checkError, setCheckError] = useState<string | null>(null);
   const [pane, setPane] = useState<"sources" | "check">("sources");
@@ -201,6 +205,7 @@ export function WritingDesk({
       setRefs(citations);
       setNotes(data.notes ?? []);
       setReport(data.draft.check_json ? JSON.parse(data.draft.check_json) : null);
+      setWebCheck({ report: data.webCheck ?? null, updatedAt: data.draft.updated_at });
       // Opening is not editing: what came off the disk is what is on the disk,
       // so the autosave below has nothing to do until you type.
       lastSaved.current = { id: draftId, title: data.draft.title, body: html };
@@ -588,6 +593,13 @@ export function WritingDesk({
     }
   };
 
+  /** Fetches the draft's web check again once one finishes. */
+  const reloadWebCheck = async (draftId: number) => {
+    const res = await fetch(`/api/drafts/${draftId}`, { cache: "no-store" });
+    const data = res.ok ? await res.json() : null;
+    if (data && idRef.current === draftId) setWebCheck({ report: data.webCheck ?? null, updatedAt: data.draft?.updated_at });
+  };
+
   const dropRef = async (refId: number) => {
     if (id === null) return;
     setPaneError(null);
@@ -816,6 +828,18 @@ export function WritingDesk({
                 wrote.
               </span>
             </div>
+
+            {id !== null && (
+              <TextWebCheck
+                key={id}
+                target="draft"
+                id={id}
+                report={webCheck.report}
+                changedAt={webCheck.updatedAt}
+                disabled={!body.trim()}
+                onDone={() => void reloadWebCheck(id)}
+              />
+            )}
 
             {refs.length > 0 && (
               <div className="rounded-lg border border-[var(--color-rule)] bg-white p-3">

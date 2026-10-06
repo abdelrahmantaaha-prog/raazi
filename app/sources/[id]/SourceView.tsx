@@ -20,6 +20,8 @@ import { formatDate, formatDateTime, relativeDate } from "@/lib/dates";
 import { ArticleLink } from "../../components/ArticleLink";
 import { Translations } from "./Translations";
 import { Shipping, type ShippingView } from "./Shipping";
+import { TextWebCheck } from "../../components/TextWebCheck";
+import type { WebReport } from "@/lib/web-checks";
 import type { TranslationSummary } from "@/lib/translations";
 
 interface SourceMeta {
@@ -52,6 +54,7 @@ export function SourceView({
   translations,
   original,
   shipping = null,
+  webCheck = null,
 }: {
   source: SourceMeta;
   passages: Passage[];
@@ -75,6 +78,8 @@ export function SourceView({
   original: { id: number; title: string } | null;
   /** The shipment this paper records, when it is a shipping paper. */
   shipping?: ShippingView | null;
+  /** The last check of this source's claims on the web. */
+  webCheck?: WebReport | null;
 }) {
   const router = useRouter();
   const [reading, setReading] = useState(initialChunk !== null);
@@ -375,6 +380,8 @@ export function SourceView({
       <PediaSwitch sourceId={source.id} mode={source.mode} indexed={entities.length} />
 
       {shipping && <Shipping view={shipping} />}
+
+      {passages.length > 0 && <TextWebCheck target="source" id={source.id} report={webCheck} />}
 
       {entities.length > 0 && (
         <Card>

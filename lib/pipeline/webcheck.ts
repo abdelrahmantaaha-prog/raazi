@@ -5,7 +5,7 @@ import { sameUrl } from "../ai/claude-code";
 import { finishTask } from "../queue";
 import type { Task } from "../types";
 import { stripMarkers } from "../markers";
-import type { WebFinding, WebReport, WebScope, WebSource, WebVerdict } from "../web-checks";
+import type { TextTarget, WebFinding, WebReport, WebScope, WebSource, WebVerdict } from "../web-checks";
 import { findShippingCodes, type ShippingCode } from "../../research/shipping-codes.mjs";
 
 /**
@@ -25,7 +25,7 @@ import { findShippingCodes, type ShippingCode } from "../../research/shipping-co
  * shown resting on nothing.
  */
 
-const SOURCE = {
+export const SOURCE = {
   type: Type.OBJECT,
   properties: {
     url: { type: Type.STRING, description: "The page's address, exactly as the search or fetch gave it." },
@@ -39,7 +39,7 @@ const SOURCE = {
 };
 
 /** Something found along the way that the library does not have yet. */
-const LEADS = {
+export const LEADS = {
   type: Type.ARRAY,
   description:
     "At most eight: pages or records you found that add something the text does not have and would be worth the researcher reading as a new source — or a shipment worth tracking. Not the pages you cited for a verdict, unless they also carry more.",
@@ -110,6 +110,24 @@ const CONNECTIONS_SCHEMA: Schema = {
   required: ["connections"],
 };
 
+/** The research tools on offer, and the line on researching people. Shared with the shipment check. */
+export const TOOLS_AND_PEOPLE = `Research tools. Besides web search you may have tools named research__…:
+Wikidata (roles and their dates, official accounts), a worldwide news archive,
+academic papers, the Wayback Machine, sanctions and politically-exposed-person
+lists, company registries, US SEC filings, US court records, public posts from
+Bluesky, Mastodon and Telegram channels, YouTube and Reddit search, and a ship
+register and shipment tracker. Pick the tool that fits each claim: a register
+or official record beats an article about it. A tool's answer counts as a
+source on the same terms as a page: cite the address it gave.
+
+People:
+- Research people only in their public role: offices, appointments,
+  directorships, filings, court cases, public statements, official accounts.
+- Never look for home addresses, phone numbers, email addresses, family
+  members, or private social-media accounts, of anyone.
+- Someone with no public role who appears in the text is checked only as far
+  as the claim about them goes, and no further.`;
+
 const RULES = `How to judge:
 
 - confirmed: reliable pages you found state it.
@@ -135,22 +153,7 @@ Rules:
 - Write the claim and the note in the language the text is written in.
 - Keep it to about twenty-five searches and tool calls in all.
 
-Research tools. Besides web search you may have tools named research__…:
-Wikidata (roles and their dates, official accounts), a worldwide news archive,
-academic papers, the Wayback Machine, sanctions and politically-exposed-person
-lists, company registries, US SEC filings, US court records, public posts from
-Bluesky, Mastodon and Telegram channels, YouTube and Reddit search, and a ship
-register and shipment tracker. Pick the tool that fits each claim: a register
-or official record beats an article about it. A tool's answer counts as a
-source on the same terms as a page: cite the address it gave.
-
-People:
-- Research people only in their public role: offices, appointments,
-  directorships, filings, court cases, public statements, official accounts.
-- Never look for home addresses, phone numbers, email addresses, family
-  members, or private social-media accounts, of anyone.
-- Someone with no public role who appears in the text is checked only as far
-  as the claim about them goes, and no further.
+${TOOLS_AND_PEOPLE}
 
 Shipments: where SHIPPING CODES are listed, decide whether any matters to a
 claim — a ship or container in a sanctions or smuggling story, say. Look up a
@@ -326,7 +329,7 @@ export async function handleWebcheck(task: Task): Promise<void> {
   });
 }
 
-interface Lead {
+export interface Lead {
   url: string;
   title?: string;
   why: string;
@@ -340,7 +343,7 @@ interface Lead {
  * tool actually returned; one already there for this subject is not added
  * twice, and one you dismissed stays dismissed.
  */
-function saveLeads(entityId: number, scope: WebScope, leads: Lead[], seen: string[]): number {
+export function saveLeads(entityId: number, scope: WebScope | "shipment", leads: Lead[], seen: string[]): number {
   const read = new Set(seen);
   const insert = db().prepare(
     `INSERT OR IGNORE INTO research_finds (entity_id, scope, url, title, why, kind) VALUES (?,?,?,?,?,?)`
@@ -383,4 +386,126 @@ function keepRead(f: WebFinding, seen: string[]): WebFinding {
     sources,
     ...(unread ? { unread } : {}),
   };
+}
+
+// ---------------------------------------------------------------------------
+// Anything else: a draft you are writing, or a source in the library
+// ---------------------------------------------------------------------------
+
+/** What each kind of text is, for the checker. */
+const TEXT_KIND: Record<TextTarget, string> = {
+  draft: `a draft the researcher is writing, in their own words, from their sources.
+It has not been published. You are not editing it: no rewrites, no style notes,
+no suggestions of what to add`,
+  source: `a source document in the researcher's library — an article, report,
+transcript or book, as it was published or received. You are checking what it
+claims, not summarising or reviewing it`,
+};
+
+/** About ten thousand words; a longer text is checked from its start, and says so. */
+const TEXT_LIMIT = 60_000;
+
+function textSystem(target: TextTarget): string {
+  return `You fact-check ${TEXT_KIND[target]}.
+
+First pick its checkable claims — at most fifteen, the ones that matter most:
+names, roles and titles, dates, figures, places, events, quotations and who
+said them. Skip opinion, framing and anything too vague to check. Then check
+each one on the web.
+
+${RULES}`;
+}
+
+export async function handleTextWebcheck(task: Task): Promise<void> {
+  const { target, id } = JSON.parse(task.payload_json) as { target: TextTarget; id: number };
+
+  let title: string;
+  let text: string;
+  if (target === "draft") {
+    const d = db().prepare("SELECT title, body_md FROM drafts WHERE id=?").get(id) as
+      | { title: string; body_md: string }
+      | undefined;
+    if (!d?.body_md?.trim()) {
+      finishTask(task.id, task.run_id, { tokensIn: 0, tokensOut: 0 }, "skipped", "The draft is empty.");
+      return;
+    }
+    title = d.title;
+    text = d.body_md;
+  } else {
+    const s = db().prepare("SELECT title FROM sources WHERE id=?").get(id) as { title: string } | undefined;
+    const chunks = db().prepare("SELECT text FROM chunks WHERE source_id=? ORDER BY seq").all(id) as { text: string }[];
+    if (!s || !chunks.length) {
+      finishTask(task.id, task.run_id, { tokensIn: 0, tokensOut: 0 }, "skipped", "The source has no text yet.");
+      return;
+    }
+    title = s.title;
+    text = chunks.map((c) => c.text).join("\n\n");
+  }
+
+  const partial =
+    text.length > TEXT_LIMIT
+      ? `Only the first ${Math.round(TEXT_LIMIT / 6).toLocaleString("en")} or so words of about ${Math.round(
+          text.length / 6
+        ).toLocaleString("en")} were checked.`
+      : undefined;
+  const body = text.slice(0, TEXT_LIMIT);
+  const codes = findShippingCodes(body);
+
+  const res = await generateWebJson<{
+    overview?: string;
+    leads?: Lead[];
+    claims: { claim: string; verdict: WebVerdict; note?: string; sources?: WebSource[] }[];
+  }>({
+    stage: "verify",
+    research: true,
+    system: textSystem(target),
+    schema: ENTRY_SCHEMA,
+    prompt: [
+      `TITLE: ${title}`,
+      `TEXT:\n"""\n${stripMarkers(body)}\n"""`,
+      codes.length
+        ? `SHIPPING CODES in the text:\n${codes
+            .map((c) => `- ${c.kind} ${c.code}${c.carrier ? ` (${c.carrier})` : c.airline ? ` (${c.airline})` : ""}`)
+            .join("\n")}`
+        : "",
+    ]
+      .filter(Boolean)
+      .join("\n\n"),
+  });
+
+  const findings = (res.data.claims ?? [])
+    .filter((c) => c.claim?.trim())
+    .map((c) => keepRead({ claim: c.claim.trim(), verdict: c.verdict, note: c.note, sources: c.sources ?? [] }, res.seen));
+  const read = new Set(res.seen);
+  const leads = (res.data.leads ?? [])
+    .filter((l) => l?.url && l.why && read.has(sameUrl(l.url)))
+    .slice(0, 8)
+    .map((l) => ({ url: l.url.trim(), title: l.title?.trim() || undefined, why: l.why.trim(), kind: l.kind }));
+  const report: WebReport = {
+    scope: "text",
+    findings,
+    overview: res.data.overview,
+    checkedAt: new Date().toISOString(),
+    leads,
+    ...(partial ? { partial } : {}),
+  };
+  const count = (v: WebVerdict) => findings.filter((f) => f.verdict === v).length;
+
+  tx(() => {
+    db()
+      .prepare(
+        `INSERT INTO text_web_checks (target, target_id, report_json) VALUES (?,?,?)
+         ON CONFLICT(target, target_id) DO UPDATE SET report_json=excluded.report_json, checked_at=datetime('now')`
+      )
+      .run(target, id, JSON.stringify(report));
+    finishTask(
+      task.id,
+      task.run_id,
+      res.usage,
+      "done",
+      `${findings.length} claim(s) checked on the web: ${count("confirmed")} confirmed, ${count("partly")} partly, ${count(
+        "disputed"
+      )} disputed, ${count("not_found")} not found.${leads.length ? ` ${leads.length} lead(s) found along the way.` : ""}`
+    );
+  });
 }

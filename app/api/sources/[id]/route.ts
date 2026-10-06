@@ -124,6 +124,7 @@ export async function DELETE(req: Request, ctx: { params: Promise<{ id: string }
     ).map((r) => r.entity_id);
 
     db().prepare("DELETE FROM sources WHERE id=?").run(id);
+    db().prepare("DELETE FROM text_web_checks WHERE target='source' AND target_id=?").run(id);
 
     for (const entityId of affected) {
       const left = db()

@@ -80,6 +80,8 @@ export const SECTIONS: Section[] = [
       { href: "/", label: "Sources", exact: true, also: ["/sources"] },
       // Zips and folders brought in whole, waiting to be read or already read.
       { href: "/folders", label: "Folders" },
+      // Every shipment the shipping papers record, side by side.
+      { href: "/shipments", label: "Shipments" },
       { href: "/quotes", label: "Quotes" },
       { href: "/tags", label: "Topics" },
     ],

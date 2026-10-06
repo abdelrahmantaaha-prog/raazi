@@ -90,8 +90,11 @@ export function WebCheckReport({
   writtenAt,
   onRecheck,
   busy,
+  what: named,
 }: {
   report: WebReport;
+  /** What was checked, when it is not a subject's entry: "draft", "source". */
+  what?: string;
   /** When the entry was last written, to say if the check predates it. */
   writtenAt?: string;
   onRecheck: () => void;
@@ -102,8 +105,8 @@ export function WebCheckReport({
     .filter(([, n]) => n > 0);
   const written = parseDate(writtenAt);
   const checked = parseDate(report.checkedAt);
-  const stale = report.scope === "entry" && written && checked && written > checked;
-  const what = report.scope === "connections" ? "connections" : "entry";
+  const what = report.scope === "connections" ? "connections" : named ?? "entry";
+  const stale = report.scope !== "connections" && written && checked && written > checked;
 
   return (
     <details className="rounded-lg border border-[var(--color-rule)] bg-white" open={report.findings.some((f) => f.verdict === "disputed")}>
@@ -126,9 +129,10 @@ export function WebCheckReport({
         )}
         {stale && (
           <p className="rounded bg-amber-50 px-3 py-2 text-xs text-amber-900">
-            The entry has been rewritten since this check. Check again to see how the new text holds up.
+            The {what} has changed since this check. Check again to see how the new text holds up.
           </p>
         )}
+        {report.partial && <p className="text-xs text-[var(--color-muted)]">{report.partial}</p>}
         <ul className="space-y-3">
           {report.findings.map((f, i) => (
             <li key={i} className="border-l-2 border-[var(--color-rule)] pl-3">
@@ -174,6 +178,24 @@ export function WebCheckReport({
             </li>
           ))}
         </ul>
+        {report.leads && report.leads.length > 0 && (
+          <div className="border-t border-[var(--color-rule)] pt-3">
+            <p className="text-sm font-medium">Found along the way</p>
+            <ul className="mt-1 space-y-1">
+              {report.leads.map((l, i) => (
+                <li key={i} className="text-xs">
+                  <a href={l.url} target="_blank" rel="noreferrer noopener" className="font-medium text-[var(--color-accent)] hover:underline">
+                    {l.title || hostOf(l.url)}
+                  </a>
+                  <span className="text-[var(--color-muted)]"> · {hostOf(l.url)}</span>
+                  <span className="block text-[var(--color-muted)]" dir={dirOf(l.why)}>
+                    {l.why}
+                  </span>
+                </li>
+              ))}
+            </ul>
+          </div>
+        )}
         <p className="flex flex-wrap items-center gap-3 border-t border-[var(--color-rule)] pt-3 text-xs text-[var(--color-muted)]">
           <span title={formatDateTime(report.checkedAt)}>Checked {relativeDate(report.checkedAt)}.</span>
           <span>

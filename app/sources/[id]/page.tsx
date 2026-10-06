@@ -9,8 +9,10 @@ import { SourceView } from "./SourceView";
 import { originalOf, translationsOf } from "@/lib/translations";
 import type { Mark, Passage } from "./Reader";
 import { readMeta } from "@/lib/source-meta";
+import { textWebCheck } from "@/lib/web-checks";
 import type { ShippingMeta } from "@/lib/pipeline/shipment";
 import type { ShippingView } from "./Shipping";
+import type { ShipmentCheck } from "@/lib/pipeline/shipcheck";
 
 export const dynamic = "force-dynamic";
 
@@ -134,13 +136,16 @@ export default async function SourcePage({
       translations={translationsOf(id)}
       original={originalOf(id)}
       shipping={shipping}
+      webCheck={textWebCheck("source", id) ?? null}
     />
   );
 }
 
 /** The shipping record this source carries, with what it points at as it stands now. */
 function shippingView(id: number): ShippingView | null {
-  const meta = readMeta(id).shipping as ShippingMeta | undefined;
+  const all = readMeta(id);
+  const meta = all.shipping as ShippingMeta | undefined;
+  const checks = (all.shippingChecks as Record<string, ShipmentCheck> | undefined) ?? {};
   if (!meta?.shipments?.length) return null;
   const rootOf = (entityId: number | undefined): number | null => {
     let cur: number | null = entityId ?? null;
@@ -170,5 +175,5 @@ function shippingView(id: number): ShippingView | null {
         )
         .all(folder, id) as { id: number; title: string }[])
     : [];
-  return { meta, entityIds: meta.shipments.map((s) => rootOf(s.entityId)), titles, siblings };
+  return { sourceId: id, meta, checks, entityIds: meta.shipments.map((s) => rootOf(s.entityId)), titles, siblings };
 }

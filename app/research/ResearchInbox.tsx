@@ -124,7 +124,8 @@ export function ResearchInbox({
                   </p>
                   <div className="mt-2 flex flex-wrap items-center gap-2 text-xs text-[var(--color-muted)]">
                     <span>
-                      Found {relativeDate(f.created_at)} checking the {f.scope === "connections" ? "connections" : "entry"}
+                      Found {relativeDate(f.created_at)} checking the{" "}
+                      {f.scope === "connections" ? "connections" : f.scope === "shipment" ? "shipment" : "entry"}
                     </span>
                     {show === "new" && (
                       <>

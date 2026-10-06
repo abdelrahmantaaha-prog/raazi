@@ -371,6 +371,17 @@ export function migrate(db: Database.Database) {
       UNIQUE (entity_id, scope)
     );
 
+    -- The same check run on a draft or a source rather than a subject's entry.
+    -- The latest one per target is kept, its leads inside the report: the
+    -- Research inbox files leads under a subject, and these have none.
+    CREATE TABLE IF NOT EXISTS text_web_checks (
+      target      TEXT    NOT NULL,   -- 'draft' | 'source'
+      target_id   INTEGER NOT NULL,
+      report_json TEXT    NOT NULL,
+      checked_at  TEXT    NOT NULL DEFAULT (datetime('now')),
+      PRIMARY KEY (target, target_id)
+    );
+
     -- The Research inbox: what a web check turned up along the way — a page,
     -- a record, a public post, a shipment worth tracking — that the library
     -- does not have yet. Apart from the news inbox on purpose: these were

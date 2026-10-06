@@ -123,6 +123,8 @@ export function saveDraft(
 
 export function deleteDraft(id: number): void {
   db().prepare("DELETE FROM drafts WHERE id=?").run(id);
+  // Its web check has no foreign key to go with it.
+  db().prepare("DELETE FROM text_web_checks WHERE target='draft' AND target_id=?").run(id);
 }
 
 /**

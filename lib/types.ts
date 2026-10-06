@@ -62,6 +62,12 @@ export type TaskKind =
   /** Reads a shipping paper whole for the shipment it records: parties, places,
    *  goods, papers, and links to other shipping papers. See lib/pipeline/shipment.ts. */
   | "shipment"
+  /** Looks a shipment up on the open web and in public records, asked for by
+   *  hand. See lib/pipeline/shipcheck.ts. */
+  | "shipcheck"
+  /** Checks a draft or a source on the open web, asked for by hand. See
+   *  handleTextWebcheck in lib/pipeline/webcheck.ts. */
+  | "webcheck_text"
   | "resolve"
   | "entry"
   | "transcribe"
