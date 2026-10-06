@@ -205,6 +205,18 @@ export async function handleResolve(task: Task): Promise<void> {
     return cur;
   };
 
+  // A pair is found under the names it started with but merged as whatever
+  // each side has since become. Merging the original row after it had already
+  // been folded elsewhere moved an empty shell to a second survivor: the two
+  // survivors stayed apart, and the second took an alias it never earned.
+  const byId = new Map(rows.map((r) => [r.id, r]));
+  const mergePair = (p: { a: Row; b: Row }, reason: string) => {
+    const a = byId.get(resolveId(p.a.id)) ?? p.a;
+    const b = byId.get(resolveId(p.b.id)) ?? p.b;
+    if (a.id === b.id) return;
+    doMerge(a, b, reason, "auto", merged);
+  };
+
   const needsJudgement: typeof pairs = [];
 
   for (const p of pairs) {
@@ -231,13 +243,13 @@ export async function handleResolve(task: Task): Promise<void> {
       .prepare("SELECT same FROM resolution_verdicts WHERE type=? AND a_norm=? AND b_norm=?")
       .get(type, ...ordered(p.a.normalized, p.b.normalized)) as { same: number } | undefined;
     if (cached) {
-      if (cached.same) doMerge(p.a, p.b, "Previously judged the same.", "auto", merged);
+      if (cached.same) mergePair(p, "Previously judged the same.");
       continue;
     }
 
     // Near-identical spelling: safe without asking.
     if (p.trigram >= AUTO_MERGE_TRIGRAM) {
-      doMerge(p.a, p.b, `Names are near-identical (${p.trigram.toFixed(2)}).`, "auto", merged);
+      mergePair(p, `Names are near-identical (${p.trigram.toFixed(2)}).`);
       continue;
     }
     needsJudgement.push(p);
@@ -278,7 +290,7 @@ B: "${p.b.canonical_name}"${p.b.disambiguator ? ` (${p.b.disambiguator})` : ""}
           )
           .run(type, ...ordered(p.a.normalized, p.b.normalized), v.same ? 1 : 0);
         if (v.same && resolveId(p.a.id) !== resolveId(p.b.id)) {
-          doMerge(p.a, p.b, v.reason ?? "Model judged these the same.", "auto", merged);
+          mergePair(p, v.reason ?? "Model judged these the same.");
         }
       }
     });
@@ -503,6 +515,10 @@ export function doMerge(
   const [keep, drop] = a.mentions >= b.mentions ? [a, b] : [b, a];
   mergeEntities(keep.id, drop.id, reason, actor);
   ledger?.set(drop.id, keep.id);
+  // The survivor now carries both, which the next "more evidence" choice in
+  // the same pass has to see.
+  keep.mentions += drop.mentions;
+  drop.mentions = 0;
 }
 
 export function mergeEntities(
@@ -515,6 +531,22 @@ export function mergeEntities(
   if (keepId === dropId) return;
   const conn = handle ?? db();
   const run = () => {
+    // Only ever between survivors. An entity already folded elsewhere has
+    // given up its evidence; merging it again moves nothing but its name.
+    const parent = conn.prepare("SELECT merged_into FROM entities WHERE id=?");
+    const rootOf = (id: number) => {
+      let cur = id;
+      for (let hops = 0; hops < 64; hops++) {
+        const r = parent.get(cur) as { merged_into: number | null } | undefined;
+        if (!r || r.merged_into === null) break;
+        cur = r.merged_into;
+      }
+      return cur;
+    };
+    keepId = rootOf(keepId);
+    dropId = rootOf(dropId);
+    if (keepId === dropId) return;
+
     const keep = conn.prepare("SELECT canonical_name FROM entities WHERE id=?").get(keepId) as { canonical_name: string } | undefined;
     const drop = conn.prepare("SELECT canonical_name FROM entities WHERE id=?").get(dropId) as { canonical_name: string } | undefined;
     if (!keep || !drop) return;

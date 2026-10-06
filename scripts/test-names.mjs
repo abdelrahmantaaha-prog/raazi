@@ -185,6 +185,47 @@ check("two candidates in one source means it is left alone", !gone(abdulBare));
 check("neither Abdul was touched", !gone(abdulOne) && !gone(abdulTwo));
 check("a name from another book is not folded in", !gone(edenBare));
 
+// ---------------------------------------------------------------------------
+section("A merge is always between survivors");
+// ---------------------------------------------------------------------------
+// "United Arab Emirates (UAE)" was judged the same as "UAE" and, in the same
+// pass, as "United Arab Emirates". The second merge used to move the already
+// folded entity again, so the two survivors stayed apart and the second took
+// the absorbed name as an alias with none of its evidence.
+{
+  const { mergeEntities } = await import("../lib/pipeline/resolve.ts");
+  const place = (name) =>
+    Number(
+      db()
+        .prepare("INSERT INTO entities (type, canonical_name, normalized) VALUES ('place', ?, ?)")
+        .run(name, normalize(name, "place")).lastInsertRowid
+    );
+  const bookC = src("Book C");
+  const cC = chunkIn(bookC);
+  const uae = place("UAE");
+  const full = place("United Arab Emirates");
+  const both = place("United Arab Emirates (UAE)");
+  mention(uae, cC, bookC);
+  mention(full, cC, bookC);
+  mention(both, cC, bookC);
+
+  mergeEntities(uae, both, "first", "auto");
+  mergeEntities(full, both, "second", "auto");
+
+  const survivors = [uae, full].filter((id) => !gone(id));
+  check("the two survivors end up as one", survivors.length === 1, `${gone(uae)} / ${gone(full)}`);
+  const rootOf = (id) => { let cur = id; while (gone(cur)) cur = gone(cur); return cur; };
+  check("the absorbed entity leads to that one survivor", rootOf(both) === survivors[0], `${rootOf(both)}`);
+  check(
+    "every quote lands on it",
+    db().prepare("SELECT COUNT(*) n FROM mentions WHERE entity_id=?").get(survivors[0]).n === 3
+  );
+  check(
+    "and the log records a merge of survivors, not of the shell again",
+    db().prepare("SELECT COUNT(*) n FROM merge_log WHERE merged_entity=?").get(both).n === 1
+  );
+}
+
 db().close();
 fs.rmSync(SANDBOX, { recursive: true, force: true });
 

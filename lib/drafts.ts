@@ -378,9 +378,15 @@ export function sanitizeHtml(html: string): string {
       rebuilt = ` href="${escapeAttr(clean)}" rel="noopener noreferrer"`;
     } else if (tag === "span") {
       const note = attr(attrs, "data-note");
+      const cite = attr(attrs, "data-cite");
       // A span exists here for one reason: to carry a citation marker.
       if (!note || !/^\d{1,6}$/.test(note.trim())) continue;
-      rebuilt = ` data-note="${note.trim()}"`;
+      // The id has to survive the save. Without it a reopened draft could only
+      // match markers to references by position, so a reference deleted before
+      // the autosave caught up shifted every later marker onto its neighbour's
+      // source and dropped the last one — footnotes lost, others misattributed.
+      if (cite && /^\d{1,12}$/.test(cite.trim())) rebuilt = ` data-cite="${cite.trim()}"`;
+      rebuilt += ` data-note="${note.trim()}"`;
     }
 
     out += `<${tag}${rebuilt}>`;

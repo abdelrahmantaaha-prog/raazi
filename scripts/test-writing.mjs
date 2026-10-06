@@ -228,6 +228,32 @@ section("Saving a draft does not weld its paragraphs together");
   deleteDraft(id);
 }
 
+section("A citation marker keeps its reference's id through a save");
+// ---------------------------------------------------------------------------
+// The sanitiser kept data-note and dropped data-cite, so a reopened draft
+// matched markers to references by position alone. Deleting a reference
+// before the autosave caught up then shifted every later marker onto the next
+// source and dropped the last one from the text — and from the Word export.
+{
+  const { sanitizeHtml } = await import("../lib/drafts.ts");
+  const { renumberHtml } = await import("../app/write/citations.ts");
+
+  const marker = (id, i) => `<span data-cite="${id}" data-note="${i}" contenteditable="false" style="x">[${i + 1}]</span>`;
+  const body = `<p>One${marker(10, 0)} two${marker(11, 1)} three${marker(12, 2)}</p>`;
+  const stored = sanitizeHtml(body);
+  check("the id survives", /data-cite="10"/.test(stored) && /data-cite="12"/.test(stored), stored);
+  check("and nothing else on the span does", !/style|contenteditable/.test(stored), stored);
+
+  // Reference 10 deleted; the stored text still carries the old indices.
+  const reopened = renumberHtml(stored, [{ id: 11 }, { id: 12 }]);
+  check("only the deleted reference's marker goes", (reopened.match(/<span/g) ?? []).length === 2, reopened);
+  check("the others still point at their own sources",
+    /two<span data-cite="11" data-note="0">\[1\]/.test(reopened) &&
+      /three<span data-cite="12" data-note="1">\[2\]/.test(reopened),
+    reopened);
+  check("a junk id is not carried", !/data-cite/.test(sanitizeHtml('<span data-cite="x1" data-note="0">[1]</span>')));
+}
+
 section("A draft body cannot carry anything that runs");
 // ---------------------------------------------------------------------------
 {
