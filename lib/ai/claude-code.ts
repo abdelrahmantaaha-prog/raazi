@@ -310,27 +310,48 @@ async function run(
 }
 
 /** Strips a fence a model sometimes puts round JSON it was told to send bare. */
-function unfence(text: string): string {
-  const bare = text.replace(/^```(?:json)?\s*/i, "").replace(/\s*```$/, "").trim();
+export function unfence(text: string): string {
   // And a sentence before or after the object, which a reply sometimes has.
-  if (bare.startsWith("{")) return bare;
-  const from = bare.indexOf("{");
-  const to = bare.lastIndexOf("}");
-  return from >= 0 && to > from ? bare.slice(from, to + 1) : bare;
+  // After it is the case that bit: a passage with nothing to extract came back
+  // as a fenced empty answer and then a paragraph of "Rationale", and the
+  // whole of it was read as JSON, failed, and was taken for a cut-off reply
+  // (6 Oct 2026). The first complete object is the answer; the rest is not.
+  const from = text.indexOf("{");
+  if (from < 0) return text.trim();
+  let depth = 0;
+  let inString = false;
+  for (let i = from; i < text.length; i++) {
+    const ch = text[i];
+    if (inString) {
+      if (ch === "\\") i++;
+      else if (ch === '"') inString = false;
+      continue;
+    }
+    if (ch === '"') inString = true;
+    else if (ch === "{") depth++;
+    else if (ch === "}" && --depth === 0) return text.slice(from, i + 1);
+  }
+  // Never closed: cut short, and left whole for the caller to say so.
+  return text.slice(from).trim();
 }
 
 /** The JSON in a reply, read leniently; undefined when it cannot be read at all. */
 export function readJson<T>(text: string): T | undefined {
-  const bare = unfence(text);
-  try {
-    return JSON.parse(bare) as T;
-  } catch {
+  const from = text.indexOf("{");
+  const attempts = [
+    () => unfence(text),
+    () => escapeInnerQuotes(unfence(text)),
+    // A bare quote can throw the object's end off; repaired first, it cannot.
+    () => unfence(escapeInnerQuotes(from >= 0 ? text.slice(from) : text)),
+  ];
+  for (const attempt of attempts) {
     try {
-      return JSON.parse(escapeInnerQuotes(bare)) as T;
+      return JSON.parse(attempt()) as T;
     } catch {
-      return undefined;
+      /* next */
     }
   }
+  return undefined;
 }
 
 /** A reply that closes its object, as opposed to one that stopped partway. */

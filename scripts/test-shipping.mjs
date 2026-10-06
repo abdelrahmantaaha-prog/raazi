@@ -97,6 +97,12 @@ check("bare quotes inside a value are repaired", read?.entities?.[0]?.quote === 
 check("valid JSON is left exactly as it was", escapeInnerQuotes('{"a":"x \\"y\\"","b":[1,"z"]}') === '{"a":"x \\"y\\"","b":[1,"z"]}');
 check("a reply cut off partway is still unreadable", readJson('{"entities":[{"surface":"CP28","quote":"a flat') === undefined);
 check("a fenced reply is read", readJson('```json\n{"ok":true}\n```')?.ok === true);
+// The reply that actually failed: an empty answer, then the model's reasons.
+const rationale = readJson(
+  '```json\n{\n  "entities": [],\n  "relations": [],\n  "events": []\n}\n```\n\n**Rationale:** The only text visible ("CP28" and "25") are markings, not named entities.'
+);
+check("an answer followed by a paragraph of reasons is read", Array.isArray(rationale?.entities) && rationale.entities.length === 0, JSON.stringify(rationale));
+check("as is one with a sentence before it", readJson('Here is the JSON:\n{"a":{"b":"}"}}\nDone.')?.a?.b === "}");
 
 fs.rmSync(SANDBOX, { recursive: true, force: true });
 console.log(`\n${failed === 0 ? "All passed" : "FAILURES PRESENT"}: ${passed} passed, ${failed} failed\n`);
