@@ -10,7 +10,15 @@ import { readShared, writeShared } from "../config-file";
  * like the model keys. The browser only ever sees whether one is set.
  */
 
-export type ResearchKeyId = "opensanctions" | "opencorporates" | "youtube" | "reddit" | "gfw" | "courtlistener";
+export type ResearchKeyId =
+  | "opensanctions"
+  | "opencorporates"
+  | "aleph"
+  | "opensky"
+  | "youtube"
+  | "reddit"
+  | "gfw"
+  | "courtlistener";
 
 export interface ResearchService {
   id: ResearchKeyId;
@@ -38,6 +46,22 @@ export const RESEARCH_SERVICES: ResearchService[] = [
     adds: "Company registries worldwide, and the directorships a named person holds.",
     signUp: "https://opencorporates.com/api_accounts/new",
     needed: "required",
+  },
+  {
+    id: "aleph",
+    label: "OCCRP Aleph",
+    adds: "Leaked documents, company registers and customs records, searched together — where a private contract, invoice or batch number can turn up.",
+    signUp: "https://aleph.occrp.org/",
+    needed: "required",
+    hint: "Sign in, then copy the API key from your profile settings.",
+  },
+  {
+    id: "opensky",
+    label: "OpenSky Network",
+    adds: "Past flights of an aircraft, and arrivals and departures at an airport — the cargo flights behind a shipment.",
+    signUp: "https://opensky-network.org/my-opensky/account",
+    needed: "required",
+    hint: "An API client's id and secret, joined by a colon: id:secret",
   },
   {
     id: "gfw",

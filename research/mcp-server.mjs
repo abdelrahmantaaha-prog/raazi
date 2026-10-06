@@ -31,6 +31,8 @@ const KEYS = (() => {
 })();
 
 const UA = "Corpus research tool (a personal research library)";
+/** For the few public sites that turn away anything that does not look like a browser. */
+const BROWSER = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/130.0 Safari/537.36";
 const TIMEOUT_MS = 25_000;
 const MAX_TEXT = 14_000;
 
@@ -497,6 +499,319 @@ function trackShipment({ code }) {
 }
 
 // ---------------------------------------------------------------------------
+// Investigations: leaks, registers, arms and trade
+// ---------------------------------------------------------------------------
+
+/** OCCRP Aleph: leaked documents, company registers and customs records, searched together. */
+async function leaks({ query, kind, max = 15 }) {
+  const schema = { company: "Company", person: "Person", document: "Document", any: "" }[kind ?? "any"] ?? "";
+  const data = await get(
+    `https://aleph.occrp.org/api/2/entities?q=${q(query)}&limit=${Math.min(30, Number(max) || 15)}&highlight=true${
+      schema ? `&filter:schemata=${schema}` : ""
+    }`,
+    { headers: { authorization: `ApiKey ${KEYS.aleph}` } }
+  );
+  return {
+    total: data.total,
+    results: (data.results ?? []).map((r) => ({
+      name: r.properties?.name?.[0] ?? r.properties?.title?.[0] ?? r.properties?.fileName?.[0],
+      kind: r.schema,
+      dataset: r.collection?.label,
+      countries: r.properties?.country ?? r.properties?.jurisdiction,
+      dates: [r.properties?.incorporationDate?.[0], r.properties?.date?.[0]].filter(Boolean),
+      excerpt: clip(strip((r.highlight ?? []).join(" … ")), 400),
+      url: r.links?.ui ?? `https://aleph.occrp.org/entities/${r.id}`,
+    })),
+  };
+}
+
+/** ICIJ Offshore Leaks: offshore companies, officers and intermediaries from the Panama, Paradise and Pandora papers. */
+async function offshoreLeaks({ name, kind }) {
+  const type = { entity: "Entity", officer: "Officer", intermediary: "Intermediary", address: "Address" }[kind ?? ""];
+  const queries = JSON.stringify({ q0: { query: name, ...(type ? { type } : {}) } });
+  const data = await get("https://offshoreleaks.icij.org/api/v1/reconcile", {
+    method: "POST",
+    body: `queries=${q(queries)}`,
+    headers: { "content-type": "application/x-www-form-urlencoded" },
+  });
+  return {
+    matches: (data.q0?.result ?? []).slice(0, 15).map((r) => ({
+      name: r.name,
+      kind: r.types?.[0]?.name,
+      from: r.description,
+      score: Math.round(r.score),
+      url: `https://offshoreleaks.icij.org/nodes/${r.id}`,
+    })),
+    note: "A name match only. Open the record to see the jurisdiction, dates, officers and the leak it came from.",
+  };
+}
+
+/** Ukraine's War & Sanctions catalogue: foreign-made parts found in weapons used against Ukraine, and their makers. */
+async function weaponComponents({ query, marking, companies: whichCompanies }) {
+  const base = "https://war-sanctions.gur.gov.ua/en/components";
+  const browser = { "user-agent": BROWSER };
+  if (marking) {
+    const tips = await get(`${base}/default/marking-tips?q=${q(marking)}`, { headers: browser });
+    const found = [...new Set((tips.results ?? []).map((t) => t.text))].slice(0, 15);
+    if (!found.length) return { markings: [], note: `No component with a marking like "${marking}" in the catalogue.` };
+    const list = await componentList(`${base}?${new URLSearchParams({ "f[search]": found[0] })}`, browser);
+    return { markings: found, closest: found[0], ...list };
+  }
+  if (whichCompanies) {
+    // The company list filters only in the browser; the site's own search
+    // reaches the companies, and the people and Rostec firms besides.
+    const url = `https://war-sanctions.gur.gov.ua/en/search/index?q=${q(query ?? "")}`;
+    const html = await get(url, { json: false, headers: browser });
+    const hits = [];
+    for (const m of html.matchAll(/<a[^>]+href="(https:\/\/war-sanctions\.gur\.gov\.ua\/en\/([a-z/-]+)\/\d+)"[^>]*>([\s\S]*?)<\/a>/g)) {
+      if (hits.some((h) => h.url === m[1])) continue;
+      hits.push({ section: m[2], text: clip(strip(m[3]).replace(/\s+/g, " "), 200), url: m[1] });
+    }
+    return { results: hits.slice(0, 25), searched: url };
+  }
+  return componentList(`${base}?${new URLSearchParams({ "f[search]": query ?? "" })}`, browser);
+}
+
+async function componentList(url, headers) {
+  const html = await get(url, { json: false, headers });
+  const total = /class="summary">Total:\s*([\d,]+)/.exec(html)?.[1];
+  const items = [];
+  for (const block of html.split(/<a class="component-link"/).slice(1, 16)) {
+    const href = /href="([^"]+)"/.exec(block)?.[1];
+    const fields = {};
+    for (const m of block.matchAll(/<div class="text-white">([^<]+)<\/div>\s*<div class="yellow[^"]*">([^<]+)<\/div>(?:\s*<div class="text-white font-weight-bold">([^<]+)<\/div>)?/g)) {
+      fields[strip(m[1])] = strip(m[3] ? `${m[2]} — ${m[3]}` : m[2]);
+    }
+    if (href) items.push({ ...fields, url: href });
+  }
+  return { total: total ? Number(total.replace(/,/g, "")) : items.length, items, searched: url };
+}
+
+/** Conflict Armament Research: field investigations tracing weapons and drone parts recovered in conflicts. */
+async function conflictArmament({ query }) {
+  // The reports are PDFs in the site's media library; its own search returns only pages.
+  const [files, posts] = await Promise.all([
+    get(`https://www.conflictarm.com/wp-json/wp/v2/media?search=${q(query)}&mime_type=application/pdf&per_page=15&_fields=title,source_url,date`),
+    get(`https://www.conflictarm.com/wp-json/wp/v2/posts?search=${q(query)}&per_page=10&_fields=title,link,date`),
+  ]);
+  return {
+    reports: files.map((f) => ({ title: strip(f.title?.rendered), date: f.date?.slice(0, 10), url: f.source_url })),
+    dispatches: posts.map((x) => ({ title: strip(x.title?.rendered), date: x.date?.slice(0, 10), url: x.link })),
+    note: "Reports and dispatches on conflictarm.com. Open one to read it; their iTrace database needs its own sign-in.",
+  };
+}
+
+/** The Security Council sanctions committees whose expert panels publish reports. */
+const PANELS = {
+  sudan: { n: 1591, name: "Sudan (Darfur)" },
+  libya: { n: 1970, name: "Libya" },
+  yemen: { n: 2140, name: "Yemen" },
+  "south sudan": { n: 2206, name: "South Sudan" },
+  "central african republic": { n: 2127, name: "Central African Republic" },
+  "dr congo": { n: 1533, name: "Democratic Republic of the Congo" },
+  mali: { n: 2374, name: "Mali" },
+  haiti: { n: 2653, name: "Haiti" },
+  "north korea": { n: 1718, name: "DPRK (North Korea)" },
+  "al-shabaab": { n: 2713, name: "Al-Shabaab (Somalia)" },
+};
+
+/** UN Security Council panels of experts: their reports on arms embargo breaches, by country. */
+async function unPanelReports({ country }) {
+  const key = String(country ?? "").toLowerCase();
+  const panel = PANELS[key] ?? Object.values(PANELS).find((p) => p.name.toLowerCase().includes(key));
+  if (!panel) return { error: `No expert panel for "${country}". Panels: ${Object.values(PANELS).map((p) => p.name).join(", ")}.` };
+  const page = `https://main.un.org/securitycouncil/en/sanctions/${panel.n}/panel-of-experts/reports`;
+  // The page turns away anything that does not look like a browser, and
+  // carries the reports' symbols as text more reliably than as links.
+  const html = await get(page, { json: false, headers: { "user-agent": BROWSER } });
+  // Tags become spaces, or a symbol runs into the date printed beside it.
+  const text = html.replace(/<[^>]+>/g, " ");
+  const symbols = [...new Set([...text.matchAll(/\bS\/(\d{4})\/(\d{1,4})\b/g)].map((m) => `S/${m[1]}/${m[2]}`))];
+  const reports = symbols
+    .sort((a, b) => {
+      const [, ya, na] = a.split("/").map(Number);
+      const [, yb, nb] = b.split("/").map(Number);
+      return yb - ya || nb - na;
+    })
+    .map((symbol) => ({ symbol, year: symbol.split("/")[1], url: `https://undocs.org/${symbol}` }));
+  return {
+    panel: panel.name,
+    page,
+    reports: reports.slice(0, 30),
+    note: "Each report is a UN document; open its address to read it. Annexes list seizures, serial numbers, flights and companies.",
+  };
+}
+
+/** SIPRI's country ids, fetched once per check. */
+let sipriCountries = null;
+async function sipriCountry(name) {
+  sipriCountries ??= await get("https://atbackend.sipri.org/api/p/countries/getAllCountriesTrimmed");
+  const want = String(name).trim().toLowerCase();
+  const alias = { uae: "united arab emirates", usa: "united states", us: "united states", uk: "united kingdom", russia: "russia" }[want] ?? want;
+  const hit =
+    sipriCountries.find((c) => c.Name.toLowerCase() === alias) ??
+    sipriCountries.find((c) => c.Name.toLowerCase().startsWith(alias)) ??
+    sipriCountries.find((c) => c.Name.toLowerCase().includes(alias));
+  if (!hit) throw new Error(`SIPRI has no country called "${name}".`);
+  return hit;
+}
+
+/** SIPRI Arms Transfers Database: state transfers of major conventional arms since 1950. */
+async function armsTransfers({ supplier, recipient }) {
+  if (!supplier && !recipient) throw new Error("Give a supplier, a recipient, or both.");
+  const filter = (field, c) => ({ field, oldField: "", condition: "contains", value1: "", value2: "", listData: [c.EntityId] });
+  const filters = [];
+  const names = {};
+  if (supplier) filters.push(filter("Supplier", (names.supplier = await sipriCountry(supplier))));
+  if (recipient) filters.push(filter("Recipient", (names.recipient = await sipriCountry(recipient))));
+  filters.push({ field: "opendeals", oldField: "", condition: "", value1: "", value2: "", listData: [] });
+  const data = await get("https://atbackend.sipri.org/api/p/trades/trade-register-csv/", {
+    method: "POST",
+    body: JSON.stringify({ filters, logic: "AND" }),
+    headers: { "content-type": "application/json" },
+  });
+  const lines = Buffer.from(data.bytes ?? "", "base64").toString("utf8").split("\n");
+  const head = lines.findIndex((l) => l.startsWith("Recipient,Supplier"));
+  const cols = head >= 0 ? splitCsv(lines[head]) : [];
+  const rows = head >= 0 ? lines.slice(head + 1).filter((l) => l.trim()).map(splitCsv) : [];
+  const pick = (r, name) => r[cols.indexOf(name)];
+  return {
+    from: names.supplier?.Name ?? "any",
+    to: names.recipient?.Name ?? "any",
+    transfers: rows.slice(0, 60).map((r) => ({
+      recipient: pick(r, "Recipient"),
+      supplier: pick(r, "Supplier"),
+      ordered: pick(r, "Year of order"),
+      number: pick(r, "Number ordered"),
+      weapon: pick(r, "Weapon designation"),
+      description: pick(r, "Weapon description"),
+      delivered: pick(r, "Year(s) of delivery"),
+      comments: pick(r, "Comments"),
+    })),
+    total: rows.length,
+    url: "https://armstransfers.sipri.org/ArmsTransfer/TransferRegister",
+    note: "Major conventional arms only — aircraft, armoured vehicles, artillery, missiles, ships, and since 2020 some drones. Small arms, ammunition and parts are not covered.",
+  };
+}
+
+function splitCsv(line) {
+  const out = [];
+  let cur = "";
+  let quoted = false;
+  for (let i = 0; i < line.length; i++) {
+    const ch = line[i];
+    if (ch === '"') {
+      if (quoted && line[i + 1] === '"') {
+        cur += '"';
+        i++;
+      } else quoted = !quoted;
+    } else if (ch === "," && !quoted) {
+      out.push(cur);
+      cur = "";
+    } else cur += ch;
+  }
+  out.push(cur);
+  return out.map((s) => s.trim());
+}
+
+/** UN Comtrade's country codes, fetched once per check. */
+let comtradeAreas = null;
+async function comtradeCode(name) {
+  comtradeAreas ??= (await get("https://comtradeapi.un.org/files/v1/app/reference/partnerAreas.json")).results ?? [];
+  const want = String(name).trim().toLowerCase();
+  if (want === "world") return 0;
+  const hit =
+    comtradeAreas.find((a) => [a.PartnerCodeIsoAlpha3, a.PartnerCodeIsoAlpha2].some((c) => c?.toLowerCase() === want)) ??
+    comtradeAreas.find((a) => a.PartnerDesc?.toLowerCase() === want) ??
+    comtradeAreas.find((a) => a.PartnerDesc?.toLowerCase().startsWith(want));
+  if (!hit) throw new Error(`Comtrade has no country called "${name}". Try its three-letter code.`);
+  return hit.PartnerCode;
+}
+
+/** UN Comtrade: the declared value and weight of trade between two countries in one customs code, by year. */
+async function tradeFlows({ reporter, partner, hsCode, year, flow = "import" }) {
+  const rc = await comtradeCode(reporter);
+  const pc = partner ? await comtradeCode(partner) : 0;
+  const fc = flow === "export" ? "X" : "M";
+  const url = `https://comtradeapi.un.org/public/v1/preview/C/A/HS?reporterCode=${rc}&period=${q(year)}&partnerCode=${pc}&cmdCode=${q(String(hsCode).replace(/\D/g, ""))}&flowCode=${fc}`;
+  const data = await get(url);
+  return {
+    reporter,
+    partner: partner ?? "World",
+    flow: fc === "M" ? "imports" : "exports",
+    year,
+    hsCode,
+    records: (data.data ?? []).map((d) => ({ hsCode: d.cmdCode, valueUSD: d.primaryValue, netKg: d.netWgt, quantity: d.qty, quantityUnit: d.qtyUnitAbbr })),
+    url,
+    note: "As the reporting country declared it to the UN. Ask again with the countries swapped and the flow reversed: the partner's own figures often differ, and the gap is itself a finding. One year per question.",
+  };
+}
+
+/** The Global LEI register: the legal identity, address and parent of any company that holds a Legal Entity Identifier. */
+async function lei({ name, lei: code }) {
+  const url = code
+    ? `https://api.gleif.org/api/v1/lei-records/${q(code)}`
+    : `https://api.gleif.org/api/v1/lei-records?filter%5Bfulltext%5D=${q(name)}&page%5Bsize%5D=10`;
+  const data = await get(url);
+  const records = Array.isArray(data.data) ? data.data : data.data ? [data.data] : [];
+  return {
+    records: records.map((r) => {
+      const e = r.attributes?.entity ?? {};
+      const a = e.legalAddress ?? {};
+      return {
+        name: e.legalName?.name,
+        otherNames: (e.otherNames ?? []).map((n) => n.name),
+        lei: r.id,
+        status: e.status,
+        jurisdiction: e.jurisdiction,
+        registeredAs: e.registeredAs,
+        address: [...(a.addressLines ?? []), a.city, a.country].filter(Boolean).join(", "),
+        registered: r.attributes?.registration?.initialRegistrationDate,
+        url: `https://search.gleif.org/#/record/${r.id}`,
+      };
+    }),
+    note: records.length ? undefined : "No company by that name holds an LEI. Many private firms never take one.",
+  };
+}
+
+let openskyToken = null;
+async function opensky(path) {
+  if (!openskyToken || openskyToken.expires < Date.now()) {
+    const [id, secret] = String(KEYS.opensky ?? "").split(":");
+    const t = await get("https://auth.opensky-network.org/auth/realms/opensky-network/protocol/openid-connect/token", {
+      method: "POST",
+      body: `grant_type=client_credentials&client_id=${q(id)}&client_secret=${q(secret)}`,
+      headers: { "content-type": "application/x-www-form-urlencoded" },
+    });
+    openskyToken = { value: t.access_token, expires: Date.now() + (t.expires_in - 60) * 1000 };
+  }
+  return get(`https://opensky-network.org/api${path}`, { headers: { authorization: `Bearer ${openskyToken.value}` } });
+}
+
+/** OpenSky Network: past flights of one aircraft, or arrivals and departures at one airport. */
+async function flights({ icao24, airport, direction = "arrival", from, to }) {
+  const begin = Math.floor(new Date(from).getTime() / 1000);
+  const end = Math.floor(new Date(to ?? from).getTime() / 1000) + (to ? 0 : 86400);
+  if (!Number.isFinite(begin) || !Number.isFinite(end)) throw new Error("Give from (and to) as YYYY-MM-DD.");
+  let list;
+  if (icao24) list = await opensky(`/flights/aircraft?icao24=${q(String(icao24).toLowerCase())}&begin=${begin}&end=${end}`);
+  else if (airport) list = await opensky(`/flights/${direction === "departure" ? "departure" : "arrival"}?airport=${q(String(airport).toUpperCase())}&begin=${begin}&end=${end}`);
+  else throw new Error("Give an aircraft's icao24 address or an airport's ICAO code.");
+  return {
+    flights: (list ?? []).slice(0, 60).map((f) => ({
+      icao24: f.icao24,
+      callsign: f.callsign?.trim(),
+      from: f.estDepartureAirport,
+      to: f.estArrivalAirport,
+      departed: f.firstSeen ? new Date(f.firstSeen * 1000).toISOString() : undefined,
+      arrived: f.lastSeen ? new Date(f.lastSeen * 1000).toISOString() : undefined,
+      url: `https://opensky-network.org/aircraft-profile?icao24=${f.icao24}`,
+    })),
+    note: "Airports are OpenSky's estimates from the track. An aircraft with its transponder off, or over areas without receivers, leaves no record.",
+  };
+}
+
+// ---------------------------------------------------------------------------
 // The protocol
 // ---------------------------------------------------------------------------
 
@@ -617,6 +932,93 @@ const TOOLS = [
       "A ship's register entry — name, type, flag, year built, tonnage — by IMO number, MMSI or name; with a Global Fishing Watch key, also its history of names, flags and owners.",
     schema: { imo: str("7-digit IMO number."), mmsi: str("9-digit MMSI."), name: str("Ship name.") },
     run: vessel,
+  },
+  {
+    name: "leaks",
+    key: "aleph",
+    description:
+      "OCCRP Aleph: leaked documents, company registers, customs and court records from many countries, searched together. The best place to find a private number — a contract, invoice or batch number — or a company that has no website. Quote exact numbers and names.",
+    schema: { query: str('Words, a name or a number; quote exact phrases, e.g. "160823".'), kind: { type: "string", enum: ["any", "company", "person", "document"] }, max: int("Up to 30.") },
+    required: ["query"],
+    run: leaks,
+  },
+  {
+    name: "offshore_leaks",
+    description:
+      "ICIJ Offshore Leaks (Panama, Paradise and Pandora papers and others): offshore companies, their officers and the intermediaries who set them up, matched by name.",
+    schema: { name: str("A company or person name."), kind: { type: "string", enum: ["entity", "officer", "intermediary", "address"] } },
+    required: ["name"],
+    run: offshoreLeaks,
+  },
+  {
+    name: "weapon_components",
+    description:
+      "Ukraine's War & Sanctions catalogue (Defence Intelligence of Ukraine): foreign-made components found in Russian and Iranian weapons and drones, with the weapon, the component's marking and its manufacturer. Search by words, by a part marking or number, or list the companies involved.",
+    schema: {
+      query: str("Words: a manufacturer, a country, a weapon (e.g. Shahed, Orlan, Lancet)."),
+      marking: str("A part number or marking as written on the component."),
+      companies: { type: "boolean", description: "Search the involved companies instead of the components." },
+    },
+    run: weaponComponents,
+  },
+  {
+    name: "conflict_armament",
+    description:
+      "Conflict Armament Research: investigations that trace weapons, ammunition and drone parts recovered in conflicts back to their makers and suppliers — Sudan, Libya, Yemen, the Sahel, Ukraine and more.",
+    schema: { query: str("Words, e.g. Sudan drones, or a weapon or company name.") },
+    required: ["query"],
+    run: conflictArmament,
+  },
+  {
+    name: "un_panel_reports",
+    description:
+      "Reports of UN Security Council panels of experts on sanctions and arms embargoes (Sudan, Libya, Yemen, South Sudan, CAR, DR Congo, Mali, Haiti, North Korea, Al-Shabaab), newest first, with links. Their annexes name companies, flights, seizures and serial numbers.",
+    schema: { country: str("e.g. Sudan, Libya, Yemen") },
+    required: ["country"],
+    run: unPanelReports,
+  },
+  {
+    name: "arms_transfers",
+    description:
+      "SIPRI Arms Transfers Database: state transfers of major conventional arms since 1950 — aircraft, armoured vehicles, artillery, missiles, ships and some drones — between a supplier and a recipient country, with years and numbers. Not small arms, ammunition or parts.",
+    schema: { supplier: str("Supplying country, e.g. Belarus"), recipient: str("Receiving country, e.g. Sudan") },
+    run: armsTransfers,
+  },
+  {
+    name: "trade_flows",
+    description:
+      "UN Comtrade: the value and weight of trade one country declared with another in one customs (HS) code and year — e.g. the UAE's imports of HS 8807 (aircraft and drone parts) from Belarus in 2023. Check both sides: the partner's mirror figures often differ.",
+    schema: {
+      reporter: str("The declaring country, by name or three-letter code."),
+      partner: str("The other country; leave out for the world."),
+      hsCode: str("2, 4 or 6 digits, e.g. 8807 or 930190."),
+      year: str("One year, e.g. 2023."),
+      flow: { type: "string", enum: ["import", "export"] },
+    },
+    required: ["reporter", "hsCode", "year"],
+    run: tradeFlows,
+  },
+  {
+    name: "lei",
+    description:
+      "The Global LEI register (GLEIF): a company's legal name, identifier, registered address, jurisdiction, register number and status, for any company that holds a Legal Entity Identifier — common for firms in finance and trade.",
+    schema: { name: str("A company name."), lei: str("A 20-character LEI, if known.") },
+    run: lei,
+  },
+  {
+    name: "flights",
+    key: "opensky",
+    description:
+      "OpenSky Network: past flights of one aircraft (by its icao24 transponder address) or arrivals and departures at one airport (by ICAO code, e.g. OMAA, HSSK) between two dates — for cargo flights behind a shipment.",
+    schema: {
+      icao24: str("The aircraft's 6-character transponder address."),
+      airport: str("An airport's 4-letter ICAO code."),
+      direction: { type: "string", enum: ["arrival", "departure"] },
+      from: str("YYYY-MM-DD"),
+      to: str("YYYY-MM-DD; a week at most for an airport."),
+    },
+    required: ["from"],
+    run: flights,
   },
   {
     name: "track_shipment",

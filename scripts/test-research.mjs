@@ -90,6 +90,11 @@ async function server(keys) {
   const names = (await s.call("tools/list")).result.tools.map((t) => t.name);
   check("keyless tools are offered", ["wikidata", "news_archive", "court_records", "telegram", "vessel"].every((t) => names.includes(t)));
   check("a tool whose key is missing is not", !names.includes("sanctions") && !names.includes("youtube"));
+  check(
+    "the investigation tools that need no key are offered",
+    ["offshore_leaks", "weapon_components", "conflict_armament", "un_panel_reports", "arms_transfers", "trade_flows", "lei"].every((t) => names.includes(t))
+  );
+  check("leaks and flights wait for their keys", !names.includes("leaks") && !names.includes("flights"));
   check("there is no people-search tool", !names.some((t) => /people|person|phone|address/i.test(t)));
   const tracked = JSON.parse((await s.call("tools/call", { name: "track_shipment", arguments: { code: "MSKU 907032 3" } })).result.content[0].text);
   check("a container is tracked to its line", tracked.carrier === "Maersk" && tracked.valid === true);
@@ -105,9 +110,10 @@ async function server(keys) {
   s.stop();
 }
 {
-  const s = await server({ opensanctions: "x", youtube: "y" });
+  const s = await server({ opensanctions: "x", youtube: "y", aleph: "a", opensky: "id:secret" });
   const names = (await s.call("tools/list")).result.tools.map((t) => t.name);
   check("a key switches its tool on", names.includes("sanctions") && names.includes("youtube"));
+  check("so do the Aleph and OpenSky keys", names.includes("leaks") && names.includes("flights"));
   s.stop();
 }
 

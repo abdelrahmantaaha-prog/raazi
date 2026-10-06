@@ -90,6 +90,20 @@ Look up, most valuable first:
    moving between those places, and any embargo on the destination.
 A business address may be looked up to see which companies sit at it.
 
+Which tool for what, where you have it:
+- Parties: sanctions, companies and lei first; then leaks (OCCRP Aleph) and
+  offshore_leaks; weapon_components with companies set, for makers of parts
+  found in Russian weapons.
+- Numbers: leaks first, each number quoted; weapon_components with marking,
+  for a part number.
+- Customs codes and route: trade_flows for what each side declared in that
+  code and year — ask both directions, as the gap is a finding.
+- Weapons and the route: arms_transfers between the two countries;
+  un_panel_reports for the destination or a neighbour under embargo, then open
+  the newest reports; conflict_armament for traced weapons of that kind.
+- Flights: if the paper names an aircraft, flight or airport, flights for the
+  days around its date.
+
 Status:
 - flag: something the journalist must see — a listing on a sanctions,
   export-control or debarment list; an embargo covering these goods to this

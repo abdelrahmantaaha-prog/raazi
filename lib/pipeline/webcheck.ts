@@ -115,8 +115,14 @@ export const TOOLS_AND_PEOPLE = `Research tools. Besides web search you may have
 Wikidata (roles and their dates, official accounts), a worldwide news archive,
 academic papers, the Wayback Machine, sanctions and politically-exposed-person
 lists, company registries, US SEC filings, US court records, public posts from
-Bluesky, Mastodon and Telegram channels, YouTube and Reddit search, and a ship
-register and shipment tracker. Pick the tool that fits each claim: a register
+Bluesky, Mastodon and Telegram channels, YouTube and Reddit search, a ship
+register and shipment tracker; and for investigations, leaked documents and
+customs records (OCCRP Aleph), the ICIJ Offshore Leaks, Ukraine's catalogue of
+foreign parts found in Russian weapons and the companies behind them, Conflict
+Armament Research's tracing reports, UN Security Council expert-panel reports,
+the SIPRI register of state arms transfers, UN Comtrade trade figures by
+customs code, the global LEI company register, and past flights (OpenSky).
+Some need a key and are absent without it. Pick the tool that fits each claim: a register
 or official record beats an article about it. A tool's answer counts as a
 source on the same terms as a page: cite the address it gave.
 
