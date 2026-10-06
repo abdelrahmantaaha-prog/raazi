@@ -40,15 +40,24 @@ function assertClean(out, flavour) {
   };
   walk(out);
 
-  // And the keys themselves, wherever they hid. data/config.json holds the ring
-  // (keys[].key) and, on an old install, a single apiKey.
-  const ring = path.join(root, "data", "config.json");
-  if (fs.existsSync(ring)) {
-    const stored = JSON.parse(fs.readFileSync(ring, "utf8"));
-    const keys = [
-      ...(stored.keys ?? []).map((k) => k.key),
-      stored.apiKey,
-    ].filter((k) => typeof k === "string" && k.length > 20);
+  // And the keys themselves, wherever they hid. Since disciplines, the ring
+  // (keys[].key), the research keys and the LAN token live in data/shared.json;
+  // an install that predates them keeps the ring, or a single apiKey, in
+  // data/config.json. Reading only that one found nothing on a current install,
+  // and a check with nothing to look for passes everything.
+  const stores = ["shared.json", "config.json"]
+    .map((f) => path.join(root, "data", f))
+    .filter((f) => fs.existsSync(f))
+    .map((f) => JSON.parse(fs.readFileSync(f, "utf8")));
+  {
+    const keys = stores
+      .flatMap((stored) => [
+        ...(stored.keys ?? []).map((k) => k.key),
+        stored.apiKey,
+        ...Object.values(stored.researchKeys ?? {}),
+        stored.lan?.token,
+      ])
+      .filter((k) => typeof k === "string" && k.length >= 16);
     const scan = (dir) => {
       for (const e of fs.readdirSync(dir, { withFileTypes: true })) {
         const full = path.join(dir, e.name);
