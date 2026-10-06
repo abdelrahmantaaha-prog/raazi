@@ -319,6 +319,61 @@ function unfence(text: string): string {
   return from >= 0 && to > from ? bare.slice(from, to + 1) : bare;
 }
 
+/** The JSON in a reply, read leniently; undefined when it cannot be read at all. */
+export function readJson<T>(text: string): T | undefined {
+  const bare = unfence(text);
+  try {
+    return JSON.parse(bare) as T;
+  } catch {
+    try {
+      return JSON.parse(escapeInnerQuotes(bare)) as T;
+    } catch {
+      return undefined;
+    }
+  }
+}
+
+/** A reply that closes its object, as opposed to one that stopped partway. */
+function looksWhole(text: string): boolean {
+  return /[}\]]\s*(```)?\s*$/.test(text.trim());
+}
+
+/**
+ * Escapes double quotes a model left bare inside a string value — a passage
+ * about a dolly marked "CP28", copied into a quote field without its
+ * backslashes. Inside a string, a quote closes it only when what follows is
+ * what may follow a string: a comma, a colon, or a closing bracket.
+ */
+export function escapeInnerQuotes(json: string): string {
+  let out = "";
+  let inString = false;
+  for (let i = 0; i < json.length; i++) {
+    const ch = json[i];
+    if (!inString) {
+      if (ch === '"') inString = true;
+      out += ch;
+      continue;
+    }
+    if (ch === "\\") {
+      out += ch + (json[i + 1] ?? "");
+      i++;
+      continue;
+    }
+    if (ch === '"') {
+      const next = /^\s*(\S)/.exec(json.slice(i + 1))?.[1];
+      if (next === undefined || next === "," || next === ":" || next === "}" || next === "]") {
+        inString = false;
+        out += ch;
+      } else {
+        out += '\\"';
+      }
+      continue;
+    }
+    out += ch;
+  }
+  return out;
+}
+
 /** Model + schema pairs whose structured output failed; until a restart they go as plain JSON. */
 const plainJsonFor = new Set<string>();
 
@@ -360,13 +415,28 @@ export async function claudeCodeJson<T>(
     parsed = answer.structured as T;
   } else {
     if (!answer.text) throw new Error("Empty response from Claude Code.");
-    try {
-      parsed = JSON.parse(unfence(answer.text)) as T;
-    } catch {
-      // As on the API path: JSON that will not parse is nearly always cut short,
-      // and the worker knows how to split an oversized chunk.
-      throw new TruncatedOutputError();
+    let json = readJson<T>(answer.text);
+    if (json === undefined && looksWhole(answer.text)) {
+      // Whole but broken — not cut short — so splitting the passage would not
+      // help, and a short one cannot be split at all: five photo readings
+      // failed that way on 6 Oct 2026. Asked once more, it comes back right.
+      answer = await run({
+        ...opts,
+        schema,
+        schemaInPrompt: true,
+        prompt: `${opts.prompt}\n\nYour last answer was not valid JSON. Inside every string value, escape each double quote as \\".`,
+      });
+      json =
+        answer.structured !== undefined && answer.structured !== null
+          ? (answer.structured as T)
+          : answer.text
+            ? readJson<T>(answer.text)
+            : undefined;
     }
+    // As on the API path: JSON that still will not parse is taken as cut
+    // short, and the worker knows how to split an oversized chunk.
+    if (json === undefined) throw new TruncatedOutputError();
+    parsed = json;
   }
   return {
     data: dropNulls(unescapeModelJson(parsed)),

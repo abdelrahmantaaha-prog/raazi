@@ -87,6 +87,17 @@ check(
   photoPiece("I cannot locate the file WhatsApp Image (2). Could you please verify the filename?", 1) === null
 );
 
+// ---------------------------------------------------------------------------
+section("A reading quoting a marking still comes back as JSON");
+// ---------------------------------------------------------------------------
+const { readJson, escapeInnerQuotes } = await import("../lib/ai/claude-code.ts");
+const bare = '{"entities":[{"surface":"CP28","type":"work","quote":"a flat cargo dolly, which is marked "CP28" at one end."}]}';
+const read = readJson(bare);
+check("bare quotes inside a value are repaired", read?.entities?.[0]?.quote === 'a flat cargo dolly, which is marked "CP28" at one end.', JSON.stringify(read));
+check("valid JSON is left exactly as it was", escapeInnerQuotes('{"a":"x \\"y\\"","b":[1,"z"]}') === '{"a":"x \\"y\\"","b":[1,"z"]}');
+check("a reply cut off partway is still unreadable", readJson('{"entities":[{"surface":"CP28","quote":"a flat') === undefined);
+check("a fenced reply is read", readJson('```json\n{"ok":true}\n```')?.ok === true);
+
 fs.rmSync(SANDBOX, { recursive: true, force: true });
 console.log(`\n${failed === 0 ? "All passed" : "FAILURES PRESENT"}: ${passed} passed, ${failed} failed\n`);
 process.exit(failed === 0 ? 0 : 1);
