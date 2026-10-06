@@ -192,7 +192,25 @@ export async function handleResolve(task: Task): Promise<void> {
         if (!vb || seen.has(key(rows[i].id, rows[j].id))) continue;
         if (cosine(va, vb) >= CANDIDATE_COSINE) {
           pairs.push({ a: rows[i], b: rows[j], trigram: trigramSimilarity(rows[i].normalized, rows[j].normalized) });
+          seen.add(key(rows[i].id, rows[j].id));
         }
+      }
+    }
+
+    // Without vectors the net above is spelling alone, and spelling cannot see
+    // that إسرائيل is Israel or that IDF is the Israel Defense Forces: a
+    // bilingual library with no embedding key was left with hundreds of such
+    // twins. So when most names have no vector, the model reads the list of
+    // names and points at likely twins. It only proposes — every pair is still
+    // judged below on its evidence, under the same conservative instruction.
+    if (vecs.size < rows.length / 2) {
+      try {
+        const found = await namePairs(rows, touched, seen);
+        pairs.push(...found.pairs);
+        tokensIn += found.tokensIn;
+        tokensOut += found.tokensOut;
+      } catch (err) {
+        console.warn("[corpus] name-list step skipped:", (err as Error).message);
       }
     }
   }
@@ -440,6 +458,87 @@ export function foldBareNames(rows: Row[], handle?: Database.Database) {
     fragment.mentions = 0;
     full.mentions += 1;
   }
+}
+
+/** Above this many names one list no longer fits comfortably in a call. */
+const NAME_LIST_MAX = 2500;
+/** A "group" bigger than this is a theme, not one entity under several names. */
+const NAME_GROUP_MAX = 6;
+
+const NAME_SCHEMA: Schema = {
+  type: Type.OBJECT,
+  properties: {
+    groups: {
+      type: Type.ARRAY,
+      items: { type: Type.ARRAY, items: { type: Type.INTEGER } },
+      description: "Each group: the numbers of names that may be one entity.",
+    },
+  },
+  required: ["groups"],
+};
+
+const NAME_SYSTEM = `You look over the names in a research library and point out names
+that may be the same real thing written differently: a translation or
+transliteration between Arabic and English, an acronym and its full name, a
+short and a long form, a misspelling. You only propose; every group is checked
+afterwards against the passages the names appear in.
+
+Group only names that could be one and the same entity. Things that are merely
+related are not the same: a company and its parent or subsidiary, a city and its
+country, a ministry and the army under it, a person and the firm named after
+them. Leave out every name with no likely twin. Answer with the numbers shown
+before each name.`;
+
+/**
+ * Candidate pairs from the model reading the list of names, for a library
+ * whose names have no vectors. With `touched`, only twins of the names that
+ * source brought in are asked for.
+ */
+async function namePairs(
+  rows: Row[],
+  touched: Set<number> | null,
+  seen: Set<string>
+): Promise<{ pairs: { a: Row; b: Row; trigram: number }[]; tokensIn: number; tokensOut: number }> {
+  const none = { pairs: [], tokensIn: 0, tokensOut: 0 };
+  if (touched && touched.size === 0) return none;
+  if (rows.length > NAME_LIST_MAX) {
+    console.warn(`[corpus] name-list step skipped: ${rows.length} names is more than one list can carry`);
+    return none;
+  }
+
+  const list = rows
+    .map((r, n) => `${n + 1}. ${r.canonical_name}${r.disambiguator ? ` (${r.disambiguator})` : ""}`)
+    .join("\n");
+  const ask = touched
+    ? `Only groups that include at least one of these numbers, the names just added: ${rows
+        .map((r, n) => (touched.has(r.id) ? n + 1 : 0))
+        .filter(Boolean)
+        .join(", ")}.`
+    : "Every group you can find.";
+
+  const { data, usage } = await generateJson<{ groups: number[][] }>({
+    stage: "resolve",
+    system: NAME_SYSTEM,
+    schema: NAME_SCHEMA,
+    parts: [`${ask}\n\nNames:\n${list}`],
+    timeoutMs: 5 * 60_000,
+  });
+
+  const pairs: { a: Row; b: Row; trigram: number }[] = [];
+  for (const group of data.groups ?? []) {
+    const members = [...new Set(group)].map((n) => rows[n - 1]).filter(Boolean);
+    if (members.length < 2 || members.length > NAME_GROUP_MAX) continue;
+    for (let i = 0; i < members.length; i++) {
+      for (let j = i + 1; j < members.length; j++) {
+        const [a, b] = [members[i], members[j]];
+        if (touched && !touched.has(a.id) && !touched.has(b.id)) continue;
+        if (seen.has(key(a.id, b.id))) continue;
+        seen.add(key(a.id, b.id));
+        pairs.push({ a, b, trigram: trigramSimilarity(a.normalized, b.normalized) });
+      }
+    }
+  }
+  return { pairs, tokensIn: usage.tokensIn, tokensOut: usage.tokensOut };
 }
 
 function key(a: number, b: number) {
