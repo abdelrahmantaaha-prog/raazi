@@ -22,7 +22,7 @@ import type { ShipmentRecord, ShippingMeta } from "./shipment";
  * your plan's searches. It reports beside the paper and never edits it.
  */
 
-export type LookupStatus = "flag" | "found" | "nothing";
+export type LookupStatus = "flag" | "found" | "nothing" | "skipped";
 export type LookupKind = "party" | "code" | "reference" | "goods" | "route" | "place";
 
 export interface Lookup {
@@ -54,8 +54,8 @@ const SCHEMA: Schema = {
         properties: {
           subject: { type: Type.STRING, description: "What was looked up, as the paper writes it: a party, a code, a number, the goods on the route." },
           kind: { type: Type.STRING, enum: ["party", "code", "reference", "goods", "route", "place"] },
-          status: { type: Type.STRING, enum: ["flag", "found", "nothing"] },
-          found: { type: Type.STRING, description: "Two or three sentences: what the sources say about it. For 'nothing', what was searched." },
+          status: { type: Type.STRING, enum: ["flag", "found", "nothing", "skipped"] },
+          found: { type: Type.STRING, description: "Two or three sentences: what the sources say about it. For 'nothing', the searches you ran, as you ran them. For 'skipped', why it was not searched." },
           sources: { type: Type.ARRAY, items: SOURCE },
         },
         required: ["subject", "kind", "status", "found", "sources"],
@@ -77,8 +77,10 @@ Look up, most valuable first:
    traded under.
 2. Every customs (HS) code: what that heading covers, from a customs tariff
    or trade-classification page.
-3. Every number that may be public — contract, batch, part, serial, model
-   numbers — searched exactly as written.
+3. Every number on the paper — contract, invoice, batch, part, serial, model
+   numbers — searched exactly as written, in quotes, on its own and again
+   beside a party's name. Private numbers rarely turn up, which is why each
+   one is searched rather than assumed: one hit can tie two papers together.
 4. Any SHIPPING CODES listed: look a ship up with the vessel tool; for a
    container, bill of lading or air waybill, track_shipment says whose it is
    and gives the tracking page. A tracking page you cannot read yourself is a
@@ -94,7 +96,10 @@ Status:
   destination; reporting that ties a party, a number or these goods on this
   route to diversion, smuggling or a conflict.
 - found: public records or reporting bear on it, without a flag.
-- nothing: you searched and found nothing relevant. Say what you searched.
+- nothing: you searched and found nothing relevant. Say exactly what you
+  searched.
+- skipped: you did not search it — out of searches, or no tool fits. Never
+  call something "nothing" that you did not search.
 
 Rules:
 - Search. Report only what the pages and tools you used say. Your own memory
@@ -108,7 +113,8 @@ Rules:
   (the same registration number, address, country, directors), or say that
   only the name matches.
 - Write "found" and the overview in the language of the paper's summary.
-- Keep it to about thirty searches and tool calls in all.
+- Keep it to about forty searches and tool calls in all. Numbers are cheap to
+  search: save on the parties and the route, never by dropping a number.
 
 ${TOOLS_AND_PEOPLE}`;
 
@@ -153,9 +159,11 @@ export async function handleShipcheck(task: Task): Promise<void> {
     .map((l) => {
       const sources = (l.sources ?? []).filter((x) => x?.url && read.has(sameUrl(x.url)));
       const unread = (l.sources ?? []).length - sources.length;
-      // A finding that lost every source it named rests on nothing.
-      const status: LookupStatus =
-        l.status !== "nothing" && sources.length === 0 ? "nothing" : (["flag", "found", "nothing"] as const).includes(l.status) ? l.status : "nothing";
+      // A finding that lost every source it named rests on nothing. One that
+      // was never searched says so, and is not dressed up as a search.
+      const known: LookupStatus[] = ["flag", "found", "nothing", "skipped"];
+      const said = known.includes(l.status) ? l.status : "nothing";
+      const status: LookupStatus = (said === "flag" || said === "found") && sources.length === 0 ? "nothing" : said;
       return { subject: l.subject.trim(), kind: l.kind, status, found: l.found?.trim() ?? "", sources, ...(unread ? { unread } : {}) };
     });
 
@@ -171,7 +179,7 @@ export async function handleShipcheck(task: Task): Promise<void> {
       task.run_id,
       res.usage,
       "done",
-      `${lookups.length} looked up online: ${n("flag")} to see, ${n("found")} found, ${n("nothing")} nothing found.${
+      `${lookups.length} looked up online: ${n("flag")} to see, ${n("found")} found, ${n("nothing")} nothing found${n("skipped") ? `, ${n("skipped")} not searched` : ""}.${
         leads ? ` ${leads} new lead(s) in the Research inbox.` : ""
       }`
     );

@@ -9,12 +9,13 @@ import { RunChip } from "../../components/RunChip";
 import { dirOf } from "@/lib/dir";
 import { relativeDate } from "@/lib/dates";
 
-const STATUS: Record<Lookup["status"], { label: string; tone: "danger" | "ok" | "quiet" }> = {
+const STATUS: Record<Lookup["status"], { label: string; tone: "danger" | "ok" | "quiet" | "warn" }> = {
   flag: { label: "to see", tone: "danger" },
   found: { label: "found", tone: "ok" },
+  skipped: { label: "not searched", tone: "warn" },
   nothing: { label: "nothing found", tone: "quiet" },
 };
-const ORDER: Lookup["status"][] = ["flag", "found", "nothing"];
+const ORDER: Lookup["status"][] = ["flag", "found", "skipped", "nothing"];
 
 /** "Check online" for one shipment, and what the last check found. */
 export function ShipmentCheck({
