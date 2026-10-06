@@ -5,7 +5,8 @@ import { pipeline } from "node:stream/promises";
 import { Readable, Transform } from "node:stream";
 import Database from "better-sqlite3";
 import { DATA_DIR, SOURCES_DIR, db } from "./db";
-import { readStore, writeStore } from "./config-file";
+import { readJsonFile, readShared, readStore, writeJsonFile, writeShared, writeStore } from "./config-file";
+import { activeDiscipline, adoptDisciplines, dirOfDiscipline, listDisciplines, type Discipline } from "./disciplines";
 import { COVERS_DIR } from "./covers";
 import { PORTRAITS_DIR } from "./portraits";
 import { ensureLanToken, lanAddresses, lanEnabled } from "./lan";
@@ -36,9 +37,15 @@ import { kickWorker, stopWorker, workerStatus } from "./worker";
  *
  * What is copied: corpus.db (as a VACUUM INTO snapshot, so it is consistent
  * while the peer keeps running), and every file under sources/, covers/ and
- * portraits/ that is missing or a different size here. What is not:
- * config.json — API keys, routing, the LAN token — because each machine keeps
- * its own keys and its own door.
+ * portraits/ that is missing or a different size here.
+ *
+ * Pull and push from Settings copy everything (pullEverything): every
+ * discipline, matched by id, and the settings — the API keys, which model
+ * does which job, and each discipline's own. Two things stay per machine,
+ * because they are this machine's door rather than the library: the LAN
+ * token, and who is paired with it. Copying the token would lock out the
+ * machine that just did the copying. A follower's copy every few minutes is
+ * still only the open library, through pullFrom.
  *
  * Safety, in the order it is applied on a pull: the peer's snapshot is
  * downloaded and opened read-only and integrity-checked before anything here
@@ -107,14 +114,15 @@ export interface Fingerprint {
   workKey: string;
 }
 
-function tableExists(name: string): boolean {
-  return Boolean(db().prepare("SELECT 1 FROM sqlite_master WHERE type='table' AND name=?").get(name));
+function tableExists(conn: Database.Database, name: string): boolean {
+  return Boolean(conn.prepare("SELECT 1 FROM sqlite_master WHERE type='table' AND name=?").get(name));
 }
 
-export function fingerprint(): Fingerprint {
-  const count = (sql: string) => (db().prepare(sql).get() as { n: number }).n;
-  const latestOf = (sql: string) => (db().prepare(sql).get() as { t: string | null }).t;
-  const drafts = tableExists("drafts") ? count("SELECT COUNT(*) AS n FROM drafts") : 0;
+/** The open library's, or — given a connection — another discipline's. */
+export function fingerprint(conn: Database.Database = db()): Fingerprint {
+  const count = (sql: string) => (conn.prepare(sql).get() as { n: number }).n;
+  const latestOf = (sql: string) => (conn.prepare(sql).get() as { t: string | null }).t;
+  const drafts = tableExists(conn, "drafts") ? count("SELECT COUNT(*) AS n FROM drafts") : 0;
   const work = [
     latestOf("SELECT MAX(added_at) AS t FROM sources"),
     latestOf("SELECT MAX(kept_at) AS t FROM sources"),
@@ -122,8 +130,8 @@ export function fingerprint(): Fingerprint {
     latestOf("SELECT MAX(updated_at) AS t FROM entries"),
     latestOf("SELECT MAX(decided_at) AS t FROM feed_items"),
     latestOf("SELECT MAX(created_at) AS t FROM briefs"),
-    tableExists("drafts") ? latestOf("SELECT MAX(updated_at) AS t FROM drafts") : null,
-    tableExists("brief_expansions") ? latestOf("SELECT MAX(updated_at) AS t FROM brief_expansions") : null,
+    tableExists(conn, "drafts") ? latestOf("SELECT MAX(updated_at) AS t FROM drafts") : null,
+    tableExists(conn, "brief_expansions") ? latestOf("SELECT MAX(updated_at) AS t FROM brief_expansions") : null,
   ].filter((t): t is string => Boolean(t));
   const runsAt = latestOf("SELECT MAX(updated_at) AS t FROM runs");
   const stamps = runsAt ? [...work, runsAt] : [...work];
@@ -254,14 +262,38 @@ let copyFailed: { at: number; message: string } | null = null;
  * before a byte is written. After a failure the next copy waits five minutes,
  * whoever asks: a follower on an older version retries on every tick.
  */
-export async function snapshot(): Promise<string> {
+export async function snapshot(discipline?: string | null): Promise<string> {
   fs.mkdirSync(SYNC_DIR, { recursive: true });
   sweepStaleCopies();
   if (copyFailed && Date.now() - copyFailed.at < COPY_RETRY_AFTER_MS) {
     const next = new Date(copyFailed.at + COPY_RETRY_AFTER_MS).toLocaleTimeString();
     throw new Error(`The last copy of this library failed (${copyFailed.message}). The next is allowed at ${next}.`);
   }
-  const conn = db();
+  // Another discipline is not open, so nothing is writing to it: a connection
+  // of its own, closed once the copy is made, is all it takes.
+  const other = otherLibrary(discipline);
+  if (other === undefined) throw new Error("There is no such discipline here, or it has no library yet.");
+  try {
+    return await snapshotOf(other ?? db());
+  } finally {
+    other?.close();
+  }
+}
+
+/**
+ * A connection to another discipline's library: null for the open one (use
+ * db()), undefined when the discipline is unknown or has nothing in it yet.
+ */
+function otherLibrary(discipline?: string | null): Database.Database | null | undefined {
+  if (!discipline || discipline === activeDiscipline().id) return null;
+  const d = listDisciplines().find((x) => x.id === discipline);
+  if (!d) return undefined;
+  const file = path.join(dirOfDiscipline(d), "corpus.db");
+  if (!fs.existsSync(file)) return undefined;
+  return new Database(file, { readonly: true, fileMustExist: true });
+}
+
+async function snapshotOf(conn: Database.Database): Promise<string> {
   const need =
     (conn.pragma("page_count", { simple: true }) as number) * (conn.pragma("page_size", { simple: true }) as number);
   const disk = fs.statfsSync(SYNC_DIR);
@@ -303,10 +335,25 @@ const FILE_ROOTS: [string, string][] = [
   ["portraits", PORTRAITS_DIR],
 ];
 
+/** The same folders in another discipline's library. */
+function rootsOf(dir: string): [string, string][] {
+  if (path.resolve(dir) === path.resolve(DATA_DIR)) return FILE_ROOTS;
+  return FILE_ROOTS.map(([name]) => [name, path.join(dir, name)]);
+}
+
+/** The folder a discipline's library is in; the open one when none is named. Null when unknown. */
+function libraryDir(discipline?: string | null): string | null {
+  if (!discipline || discipline === activeDiscipline().id) return DATA_DIR;
+  const d = listDisciplines().find((x) => x.id === discipline);
+  return d ? dirOfDiscipline(d) : null;
+}
+
 /** Every file a copy of this library needs, as paths relative to data/. */
-export function listFiles(): SyncFile[] {
+export function listFiles(discipline?: string | null): SyncFile[] {
   const out: SyncFile[] = [];
-  for (const [name, dir] of FILE_ROOTS) {
+  const lib = libraryDir(discipline);
+  if (!lib) return out;
+  for (const [name, dir] of rootsOf(lib)) {
     if (!fs.existsSync(dir)) continue;
     for (const entry of fs.readdirSync(dir, { withFileTypes: true })) {
       if (!entry.isFile()) continue;
@@ -318,10 +365,12 @@ export function listFiles(): SyncFile[] {
 }
 
 /** The absolute path a relative one names, or null when it points outside. */
-export function resolveFile(rel: string): string | null {
+export function resolveFile(rel: string, discipline?: string | null): string | null {
   const m = /^(sources|covers|portraits)\/([^/\\]+)$/.exec(rel);
   if (!m || m[2] === "." || m[2] === "..") return null;
-  const root = FILE_ROOTS.find(([n]) => n === m[1])![1];
+  const lib = libraryDir(discipline);
+  if (!lib) return null;
+  const root = rootsOf(lib).find(([n]) => n === m[1])![1];
   const abs = path.join(root, m[2]);
   if (!abs.startsWith(root)) return null;
   return abs;
@@ -404,15 +453,7 @@ export async function installSnapshot(
   opts: { backup?: boolean; quiesceMs?: number } = {}
 ): Promise<{ backup: string | null; fingerprint: Fingerprint }> {
   // 1. The candidate must be a Corpus library that SQLite is happy with.
-  const probe = new Database(file, { readonly: true });
-  try {
-    const check = probe.pragma("quick_check", { simple: true }) as string;
-    if (check !== "ok") throw new Error(`The copy failed SQLite's check: ${String(check).slice(0, 200)}`);
-    const has = probe.prepare("SELECT 1 FROM sqlite_master WHERE type='table' AND name='sources'").get();
-    if (!has) throw new Error("The copy has no sources table; it is not a Corpus library.");
-  } finally {
-    probe.close();
-  }
+  checkCopy(file);
 
   // 2. Nothing may be writing.
   await quiesce(opts.quiesceMs ?? 120_000);
@@ -437,7 +478,7 @@ export async function installSnapshot(
       fs.mkdirSync(BACKUPS_DIR, { recursive: true });
       backup = path.join(BACKUPS_DIR, `corpus-${new Date().toISOString().replace(/[:.]/g, "-")}.db`);
       fs.renameSync(dbPath, backup);
-      pruneBackups(3);
+      pruneBackups(BACKUPS_DIR, 3);
     } else {
       fs.unlinkSync(dbPath);
     }
@@ -456,28 +497,82 @@ export async function installSnapshot(
   // 6. Reopen through the front door, so migrations and recovery run as on
   //    any boot, and point file paths at this machine's folders.
   const opened = db();
-  relocatePaths(opened);
+  relocatePaths(opened, SOURCES_DIR);
   return { backup, fingerprint: fingerprint() };
 }
 
+/** Throws unless the file is a Corpus library that SQLite is happy with. */
+function checkCopy(file: string): void {
+  const probe = new Database(file, { readonly: true });
+  try {
+    const check = probe.pragma("quick_check", { simple: true }) as string;
+    if (check !== "ok") throw new Error(`The copy failed SQLite's check: ${String(check).slice(0, 200)}`);
+    const has = probe.prepare("SELECT 1 FROM sqlite_master WHERE type='table' AND name='sources'").get();
+    if (!has) throw new Error("The copy has no sources table; it is not a Corpus library.");
+  } finally {
+    probe.close();
+  }
+}
+
+/**
+ * installSnapshot for a discipline that is not open. Nothing is reading or
+ * writing it, so there is no worker to stop and no connection to let go of —
+ * only its last writes to fold into the file, so the backup is whole.
+ */
+function installElsewhere(file: string, dir: string): { backup: string | null; fingerprint: Fingerprint } {
+  checkCopy(file);
+  const dbPath = path.join(dir, "corpus.db");
+  const backups = path.join(dir, "backups");
+  let backup: string | null = null;
+  if (fs.existsSync(dbPath)) {
+    const old = new Database(dbPath);
+    try {
+      old.pragma("wal_checkpoint(TRUNCATE)");
+    } finally {
+      old.close();
+    }
+    fs.mkdirSync(backups, { recursive: true });
+    backup = path.join(backups, `corpus-${new Date().toISOString().replace(/[:.]/g, "-")}.db`);
+    fs.renameSync(dbPath, backup);
+    pruneBackups(backups, 3);
+  }
+  for (const side of ["-wal", "-shm"]) {
+    try {
+      fs.unlinkSync(`${dbPath}${side}`);
+    } catch {
+      /* not there */
+    }
+  }
+  fs.mkdirSync(dir, { recursive: true });
+  fs.renameSync(file, dbPath);
+  // Migrations run when the discipline is next opened, through db().
+  const opened = new Database(dbPath);
+  try {
+    relocatePaths(opened, path.join(dir, "sources"));
+    return { backup, fingerprint: fingerprint(opened) };
+  } finally {
+    opened.close();
+  }
+}
+
 /** Source files were recorded by absolute path on the peer; the names carry over. */
-function relocatePaths(d: Database.Database) {
+function relocatePaths(d: Database.Database, sourcesDir: string) {
   const rows = d.prepare("SELECT id, path FROM sources WHERE path IS NOT NULL").all() as { id: number; path: string }[];
   const update = d.prepare("UPDATE sources SET path=? WHERE id=?");
   for (const r of rows) {
-    const local = path.join(SOURCES_DIR, path.basename(r.path.replace(/\\/g, "/")));
+    const local = path.join(sourcesDir, path.basename(r.path.replace(/\\/g, "/")));
     if (local !== r.path) update.run(local, r.id);
   }
 }
 
-function pruneBackups(keep: number) {
+function pruneBackups(dir: string, keep: number) {
   const files = fs
-    .readdirSync(BACKUPS_DIR)
+    .readdirSync(dir)
     .filter((f) => /^corpus-.*\.db$/.test(f))
     .sort();
   for (const f of files.slice(0, Math.max(0, files.length - keep))) {
     try {
-      fs.unlinkSync(path.join(BACKUPS_DIR, f));
+      fs.unlinkSync(path.join(dir, f));
     } catch {
       /* a backup that will not delete is still a backup */
     }
@@ -485,10 +580,11 @@ function pruneBackups(keep: number) {
 }
 
 /** Downloads a peer's snapshot to data/sync and returns its path. */
-async function download(peer: Peer): Promise<string> {
+async function download(peer: Peer, discipline?: string): Promise<string> {
   fs.mkdirSync(SYNC_DIR, { recursive: true });
   const file = path.join(SYNC_DIR, `incoming-${Date.now()}.db`);
-  const res = await peerFetch(peer, "/api/sync/snapshot", {}, 30 * 60_000);
+  const route = discipline ? `/api/sync/snapshot?discipline=${encodeURIComponent(discipline)}` : "/api/sync/snapshot";
+  const res = await peerFetch(peer, route, {}, 30 * 60_000);
   if (!res.ok || !res.body) {
     const said = ((await res.json().catch(() => ({}))) as { error?: string }).error;
     throw new Error(said ?? `The peer answered ${res.status} to a snapshot request.`);
@@ -503,19 +599,20 @@ async function download(peer: Peer): Promise<string> {
 }
 
 /** Copies every file the peer has that this machine lacks. */
-async function copyFiles(peer: Peer): Promise<{ copied: number; bytes: number }> {
-  const res = await peerFetch(peer, "/api/sync/files");
+async function copyFiles(peer: Peer, discipline?: string): Promise<{ copied: number; bytes: number }> {
+  const which = discipline ? `discipline=${encodeURIComponent(discipline)}&` : "";
+  const res = await peerFetch(peer, `/api/sync/files?${which}`);
   if (!res.ok) throw new Error(`The peer answered ${res.status} to a file listing.`);
   const theirs = (await res.json()) as { files: SyncFile[] };
-  const mine = new Map(listFiles().map((f) => [f.rel, f.size]));
+  const mine = new Map(listFiles(discipline).map((f) => [f.rel, f.size]));
   let copied = 0;
   let bytes = 0;
   for (const f of theirs.files) {
     if (mine.get(f.rel) === f.size) continue;
-    const abs = resolveFile(f.rel);
+    const abs = resolveFile(f.rel, discipline);
     if (!abs) continue;
     fs.mkdirSync(path.dirname(abs), { recursive: true });
-    const r = await peerFetch(peer, `/api/sync/file?path=${encodeURIComponent(f.rel)}`, {}, 10 * 60_000);
+    const r = await peerFetch(peer, `/api/sync/file?${which}path=${encodeURIComponent(f.rel)}`, {}, 10 * 60_000);
     if (!r.ok || !r.body) continue;
     const tmp = `${abs}.${process.pid}.part`;
     await pipeline(Readable.fromWeb(r.body as import("node:stream/web").ReadableStream), fs.createWriteStream(tmp));
@@ -580,6 +677,223 @@ export async function pullFrom(peer: Peer, opts: { force?: boolean } = {}): Prom
   }
 }
 
+// ---------------------------------------------------------------------------
+// Everything: every discipline, and the settings
+// ---------------------------------------------------------------------------
+
+/** What is this machine's own rather than the library's — see the top of this file. */
+const MACHINE_FIELDS = ["lan", "followers", "follow"] as const;
+
+export interface Everything {
+  disciplines: (Pick<Discipline, "id" | "name" | "dir" | "createdAt"> & {
+    active: boolean;
+    /** Null when the discipline has nothing in it yet. */
+    fingerprint: string | null;
+  })[];
+  /** Keys, research keys, which model does which job — without this machine's door. */
+  shared: Record<string, unknown>;
+  /** Each discipline's own settings, by id, without its sync record. */
+  configs: Record<string, Record<string, unknown>>;
+}
+
+/** A discipline's fingerprint key, or null when it has no library yet. */
+function fingerprintOf(d: Discipline): string | null {
+  if (d.id === activeDiscipline().id) return fingerprint().key;
+  const other = otherLibrary(d.id);
+  if (!other) return null;
+  try {
+    return fingerprint(other).key;
+  } finally {
+    other.close();
+  }
+}
+
+function without(o: Record<string, unknown>, fields: readonly string[]): Record<string, unknown> {
+  const out = { ...o };
+  for (const f of fields) delete out[f];
+  return out;
+}
+
+/** What a peer pulling everything asks for first. Carries the keys, so it is behind the LAN token. */
+export function everything(): Everything {
+  const active = activeDiscipline().id;
+  const list = listDisciplines();
+  const configs: Everything["configs"] = {};
+  for (const d of list) {
+    configs[d.id] = without(readJsonFile<Record<string, unknown>>(path.join(dirOfDiscipline(d), "config.json")), [
+      "sync",
+      ...MACHINE_FIELDS,
+    ]);
+  }
+  return {
+    disciplines: list.map((d) => ({
+      id: d.id,
+      name: d.name,
+      dir: d.dir,
+      createdAt: d.createdAt,
+      active: d.id === active,
+      fingerprint: fingerprintOf(d),
+    })),
+    shared: without(readShared<Record<string, unknown>>(), MACHINE_FIELDS),
+    configs,
+  };
+}
+
+/** The last sync as a discipline that is not open recorded it, in its own config.json. */
+function lastSyncOf(dir: string): SyncSettings["last"] {
+  return readJsonFile<SyncStore>(path.join(dir, "config.json")).sync?.last ?? null;
+}
+
+function recordSyncIn(dir: string, last: NonNullable<SyncSettings["last"]>): void {
+  const file = path.join(dir, "config.json");
+  const store = readJsonFile<SyncStore>(file);
+  writeJsonFile(file, { ...store, sync: { ...(store.sync ?? {}), last } });
+}
+
+/**
+ * The other machine's keys, then any this one holds that it does not. Matched
+ * by the key itself, since each machine gives its keys ids of its own; a key
+ * pasted only here is kept rather than lost to the copy.
+ */
+function mergeKeys(theirs: unknown, mine: unknown): unknown {
+  if (!Array.isArray(theirs)) return mine;
+  if (!Array.isArray(mine)) return theirs;
+  const have = new Set(theirs.map((k) => (k as { key?: string })?.key));
+  return [...theirs, ...mine.filter((k) => !have.has((k as { key?: string })?.key))];
+}
+
+export interface PullEverythingResult extends PullResult {
+  disciplines: { name: string; outcome: "copied" | "same" | "empty" }[];
+  settings: boolean;
+}
+
+/**
+ * Every discipline here becomes a copy of the peer's, and its settings come
+ * too: what Pull and Push in Settings do.
+ *
+ * Disciplines are matched by id, so the peer's Biology replaces this
+ * machine's Biology whichever is open on either side; one this machine lacks
+ * is added, and one only this machine has is left alone. Each library is
+ * backed up before it is replaced, in its own folder's backups/. Refused,
+ * unless forced, when any discipline here has changed since its last sync.
+ */
+export async function pullEverything(peer: Peer, opts: { force?: boolean } = {}): Promise<PullEverythingResult> {
+  if (syncing) throw new Error(`A sync is already running (${syncing}).`);
+  syncing = `pulling everything from ${peer.url}`;
+  const started = Date.now();
+  try {
+    const theirs = await peerStatus(peer);
+    const res = await peerFetch(peer, "/api/sync/everything");
+    if (res.status === 404) {
+      throw new Error(
+        `${theirs.host} runs an older Corpus that cannot send every discipline and its settings. Update it to this version first.`
+      );
+    }
+    if (!res.ok) throw new Error(`The peer answered ${res.status} when asked for its disciplines.`);
+    const all = (await res.json()) as Everything;
+    const active = activeDiscipline().id;
+
+    // 1. What a copy would replace that has moved on here.
+    const changed: string[] = [];
+    for (const t of all.disciplines) {
+      const mine = listDisciplines().find((d) => d.id === t.id);
+      if (!mine) continue;
+      const key = fingerprintOf(mine);
+      if (key === null || key === t.fingerprint) continue;
+      const last = mine.id === active ? syncSettings().last : lastSyncOf(dirOfDiscipline(mine));
+      if (last && last.fingerprint !== key) changed.push(mine.name);
+    }
+    if (changed.length && !opts.force) {
+      throw new Error(
+        `${changed.join(", ")} ${changed.length === 1 ? "has" : "have"} changed since the last sync. Pulling would replace those changes — say so to go ahead.`
+      );
+    }
+
+    // 2. The disciplines themselves: names, and any this machine lacks.
+    adoptDisciplines(all.disciplines);
+
+    // 3. Each library, then its files.
+    const outcomes: PullEverythingResult["disciplines"] = [];
+    let backup: string | null = null;
+    let filesCopied = 0;
+    let bytesCopied = 0;
+    let activeKey = fingerprint().key;
+    const at = new Date().toISOString();
+    for (const t of all.disciplines) {
+      const mine = listDisciplines().find((d) => d.id === t.id);
+      if (!mine) continue;
+      const dir = dirOfDiscipline(mine);
+      if (t.fingerprint === null) {
+        outcomes.push({ name: mine.name, outcome: "empty" });
+        continue;
+      }
+      let key = t.fingerprint;
+      if (fingerprintOf(mine) === t.fingerprint) {
+        outcomes.push({ name: mine.name, outcome: "same" });
+      } else {
+        const file = await download(peer, t.id);
+        try {
+          const installed = mine.id === active ? await installSnapshot(file) : installElsewhere(file, dir);
+          key = installed.fingerprint.key;
+          if (mine.id === active) backup = installed.backup;
+        } catch (err) {
+          removeCopy(file);
+          throw err;
+        }
+        outcomes.push({ name: mine.name, outcome: "copied" });
+      }
+      const files = await copyFiles(peer, t.id);
+      filesCopied += files.copied;
+      bytesCopied += files.bytes;
+      const last = { at, peer: peer.url, direction: "pull" as const, fingerprint: key };
+      if (mine.id === active) {
+        activeKey = key;
+      } else {
+        recordSyncIn(dir, last);
+      }
+    }
+
+    // 4. The settings. Each discipline's own first, keeping its sync record;
+    //    then the shared ones, keeping this machine's door.
+    for (const [id, theirConfig] of Object.entries(all.configs ?? {})) {
+      const mine = listDisciplines().find((d) => d.id === id);
+      if (!mine) continue;
+      const file = path.join(dirOfDiscipline(mine), "config.json");
+      const current = readJsonFile<Record<string, unknown>>(file);
+      const next = without(theirConfig, ["sync", ...MACHINE_FIELDS]);
+      for (const f of ["sync", ...MACHINE_FIELDS]) if (current[f] !== undefined) next[f] = current[f];
+      writeJsonFile(file, next);
+    }
+    const sharedHere = readShared<Record<string, unknown>>();
+    const shared = { ...sharedHere, ...without(all.shared ?? {}, MACHINE_FIELDS) };
+    shared.keys = mergeKeys(all.shared?.keys, sharedHere.keys);
+    if (shared.keys === undefined) delete shared.keys;
+    if (sharedHere.researchKeys || all.shared?.researchKeys) {
+      shared.researchKeys = {
+        ...((sharedHere.researchKeys as object) ?? {}),
+        ...((all.shared?.researchKeys as object) ?? {}),
+      };
+    }
+    writeShared(shared);
+
+    saveSyncSettings({ last: { at, peer: peer.url, direction: "pull", fingerprint: activeKey } });
+    kickWorker();
+    return {
+      from: theirs.host,
+      backup,
+      filesCopied,
+      bytesCopied,
+      fingerprint: fingerprint(),
+      peerFingerprint: theirs.fingerprint,
+      tookMs: Date.now() - started,
+      disciplines: outcomes,
+      settings: true,
+    };
+  } finally {
+    syncing = null;
+  }
+}
+
 /**
  * The peer's library becomes a copy of this one: it is asked to pull from
  * here. Needs LAN mode on this machine, since the peer has to reach it.
@@ -588,7 +902,7 @@ export async function pullFrom(peer: Peer, opts: { force?: boolean } = {}): Prom
  * here — a Tailscale address works from anywhere, a Wi-Fi one only on the
  * same network — so all of them are sent and the peer tries each.
  */
-export async function pushTo(peer: Peer, opts: { force?: boolean } = {}): Promise<PullResult> {
+export async function pushTo(peer: Peer, opts: { force?: boolean } = {}): Promise<PullEverythingResult> {
   if (!lanEnabled()) {
     throw new Error("Pushing needs LAN mode on here, so the other laptop can fetch from this one. Switch it on and restart Corpus.");
   }
@@ -609,7 +923,7 @@ export async function pushTo(peer: Peer, opts: { force?: boolean } = {}): Promis
       },
       30 * 60_000
     );
-    const data = (await res.json().catch(() => ({}))) as PullResult & { error?: string };
+    const data = (await res.json().catch(() => ({}))) as PullEverythingResult & { error?: string };
     if (!res.ok) throw new Error(data.error ?? `The peer answered ${res.status}.`);
     saveSyncSettings({
       last: { at: new Date().toISOString(), peer: peer.url, direction: "push", fingerprint: fingerprint().key },

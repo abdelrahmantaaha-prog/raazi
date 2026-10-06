@@ -6,10 +6,11 @@ import { resolveFile } from "@/lib/sync";
 export const dynamic = "force-dynamic";
 export const maxDuration = 600;
 
-/** One file under data/, by the relative name the listing gave. */
+/** One file under data/, by the relative name the listing gave, of the open discipline or the one named. */
 export async function GET(req: Request) {
-  const rel = new URL(req.url).searchParams.get("path") ?? "";
-  const abs = resolveFile(rel);
+  const params = new URL(req.url).searchParams;
+  const rel = params.get("path") ?? "";
+  const abs = resolveFile(rel, params.get("discipline"));
   if (!abs) return badRequest("Not a file this route serves.");
   if (!fs.existsSync(abs)) return notFound("No such file.");
   const size = fs.statSync(abs).size;

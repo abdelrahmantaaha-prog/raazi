@@ -16,10 +16,11 @@ export const maxDuration = 600;
  * answered with the reason, which the follower shows. Behind the LAN token
  * like every other route.
  */
-export async function GET() {
+export async function GET(req: Request) {
+  const discipline = new URL(req.url).searchParams.get("discipline");
   let file: string;
   try {
-    file = await snapshot();
+    file = await snapshot(discipline);
   } catch (err) {
     return NextResponse.json(
       { error: (err as Error).message },

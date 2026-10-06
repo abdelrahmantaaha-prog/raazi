@@ -184,6 +184,37 @@ export function chooseDiscipline(id: string): Discipline {
  */
 export const SWITCH_EXIT = 7;
 
+/**
+ * Takes on another machine's disciplines, for a sync that copies all of them.
+ *
+ * Matched by id, so the other machine's Biology lands in this one's Biology
+ * whichever happens to be open on either side. One this machine already has
+ * takes the other's name; one it lacks is added, in the folder the other
+ * keeps it in. Nothing is removed, and which one is open here stays as it was.
+ */
+export function adoptDisciplines(theirs: Pick<Discipline, "id" | "name" | "dir" | "createdAt">[]): Discipline[] {
+  if (pinnedDir()) return listDisciplines();
+  const reg = read();
+  for (const t of theirs) {
+    if (typeof t.id !== "string" || !/^[\p{L}\p{N}-]+$/u.test(t.id)) continue;
+    const found = reg.disciplines.find((d) => d.id === t.id);
+    if (found) {
+      if (typeof t.name === "string" && t.name.trim()) found.name = t.name.trim();
+      continue;
+    }
+    // The folder is rebuilt here rather than taken as sent: it may arrive with
+    // the other machine's separators, and must not point outside the root.
+    const parts = typeof t.dir === "string" ? t.dir.split(/[\\/]+/).filter(Boolean) : [];
+    if (parts.some((p) => p === "." || p === "..")) continue;
+    const dir = parts.length ? path.join(...parts) : null;
+    if (dir === null && reg.disciplines.some((d) => d.dir === null)) continue;
+    reg.disciplines.push({ id: t.id, name: t.name?.trim() || t.id, dir, createdAt: t.createdAt ?? "" });
+    if (dir) fs.mkdirSync(path.join(rootDir(), dir), { recursive: true });
+  }
+  write(reg);
+  return reg.disciplines;
+}
+
 /** Removes a discipline from the registry. The folder and its library stay. */
 export function forgetDiscipline(id: string): Discipline[] {
   if (pinnedDir()) throw new Error("This copy is pointed at a single library.");

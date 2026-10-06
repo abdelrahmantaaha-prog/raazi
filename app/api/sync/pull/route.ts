@@ -1,12 +1,12 @@
 import { NextResponse } from "next/server";
 import { badRequest, readBody } from "@/lib/http";
-import { pullFrom, reachable } from "@/lib/sync";
+import { pullEverything, reachable } from "@/lib/sync";
 
 export const dynamic = "force-dynamic";
 export const maxDuration = 1800;
 
 /**
- * Make this library a copy of a peer's.
+ * Make this machine a copy of a peer's: every discipline, and the settings.
  *
  * Two callers: the Settings page here ("pull from my other laptop"), which
  * sends one address, and a peer that was told to push, which sends every
@@ -25,7 +25,7 @@ export async function POST(req: Request) {
 
   try {
     const peer = addresses.length === 1 ? { url: addresses[0], token } : await reachable(addresses, token);
-    const result = await pullFrom(peer, { force: Boolean(body.force) });
+    const result = await pullEverything(peer, { force: Boolean(body.force) });
     return NextResponse.json(result);
   } catch (err) {
     const message = (err as Error).message;

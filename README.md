@@ -244,17 +244,29 @@ or Tailscale. It is a copy, not a merge — the point is continuity, not
 collaboration: work on either, and before you switch, sync towards the machine
 you are about to use.
 
-- **Pull** makes this library a copy of the other one. This one is backed up
-  first, whole, under `data/backups` (the last three are kept).
+- **Pull** makes this machine a copy of the other one: every discipline, and
+  the settings. Each library here is backed up first, whole, under its own
+  folder's `backups` (the last three are kept).
 - **Push** makes the other one a copy of this. Implemented as "ask it to pull
   from me", so there is one code path.
 
 Both machines need **LAN mode** on (the card above it in Settings, which shows
-the addresses and the token to paste into the other side). The database goes
+the addresses and the token to paste into the other side). Each database goes
 across as a consistent snapshot while the other side keeps running; source
-files, covers and portraits follow. `config.json` — keys, routing, the LAN
-token — stays per machine. If the library on the receiving side has changed
-since the last sync, the page says so and asks before replacing it.
+files, covers and portraits follow. Disciplines are matched by their id, so the
+other machine's Biology replaces this one's Biology whichever is open on
+either side; one this machine lacks is added, and one only this machine has is
+left alone.
+
+The settings come too: the API keys and research keys, which model does which
+job, and each discipline's own settings. A key pasted only on the receiving
+side is kept. Two things stay per machine, because they are its door rather
+than the library: the **LAN token**, and which machines are paired with it.
+Copying the token would lock out the machine that did the copying.
+
+If any library on the receiving side has changed since its last sync, the page
+names it and asks before replacing it. Both machines need the same version of
+Corpus; an older one is told so rather than half-copied.
 
 ### Working from another computer, with a copy for when it is gone
 

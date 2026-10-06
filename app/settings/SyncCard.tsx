@@ -4,7 +4,7 @@ import { useCallback, useEffect, useState } from "react";
 import { Button, Card, Field, inputClass } from "../components/ui";
 import { IconSync } from "../components/Icons";
 import { formatDateTime, relativeDate } from "@/lib/dates";
-import type { LocalStatus, PullResult, SyncSettings } from "@/lib/sync";
+import type { LocalStatus, PullEverythingResult, SyncSettings } from "@/lib/sync";
 
 /**
  * Two cards that belong together: the door, and the other laptop.
@@ -165,37 +165,56 @@ export function SyncCard() {
     const lines =
       direction === "pull"
         ? [
-            `Replace THIS library (${mine.host}: ${describe(mine.fingerprint)})`,
-            `with a copy of ${theirs.host}'s (${describe(theirs.fingerprint)})?`,
+            `Make THIS laptop (${mine.host}) a copy of ${theirs.host}?`,
             "",
-            "This library is backed up first, under data/backups.",
-            mine.changedSinceSync ? "\nThis library HAS CHANGED since the last sync; those changes will be replaced." : "",
+            "Every discipline it has replaces the same one here, and its settings and API keys come too.",
+            "Each library here is backed up first.",
+            mine.changedSinceSync ? "\nThe open library HAS CHANGED since the last sync; those changes will be replaced." : "",
           ]
         : [
-            `Replace ${theirs.host}'s library (${describe(theirs.fingerprint)})`,
-            `with a copy of THIS one (${mine.host}: ${describe(mine.fingerprint)})?`,
+            `Make ${theirs.host} a copy of THIS laptop (${mine.host})?`,
             "",
-            "Theirs is backed up first, on their machine.",
+            "Every discipline here replaces the same one there, and these settings and API keys go too.",
+            "Theirs are backed up first, on their machine.",
             theirs.changedSinceSync ? `\n${theirs.host} HAS CHANGED since the last sync; those changes will be replaced.` : "",
           ];
     if (!confirm(lines.filter((l) => l !== "").join("\n"))) return;
-    const force = direction === "pull" ? mine.changedSinceSync : theirs.changedSinceSync;
+    let force = direction === "pull" ? mine.changedSinceSync : theirs.changedSinceSync;
 
     setBusy(direction);
     setError(null);
     setResult(null);
     try {
-      const res = await fetch(`/api/sync/${direction}`, {
-        method: "POST",
-        headers: { "content-type": "application/json" },
-        body: JSON.stringify({ url: peerUrl, token: peerToken, force }),
-      });
-      const data = (await res.json().catch(() => ({}))) as PullResult & { error?: string };
+      const send = () =>
+        fetch(`/api/sync/${direction}`, {
+          method: "POST",
+          headers: { "content-type": "application/json" },
+          body: JSON.stringify({ url: peerUrl, token: peerToken, force }),
+        });
+      let res = await send();
+      let data = (await res.json().catch(() => ({}))) as PullEverythingResult & { error?: string };
+      // Another discipline, not the open one, may have changed since its last
+      // sync; only the server can see that, so it is asked about here.
+      if (res.status === 409 && !force && /changed since the last sync/.test(data.error ?? "")) {
+        if (!confirm(`${data.error}\n\nReplace them anyway? They are backed up first.`)) return;
+        force = true;
+        res = await send();
+        data = (await res.json().catch(() => ({}))) as PullEverythingResult & { error?: string };
+      }
       if (!res.ok) throw new Error(data.error ?? `That did not work (${res.status}).`);
+      const copied = (data.disciplines ?? []).filter((d) => d.outcome === "copied").map((d) => d.name);
+      const same = (data.disciplines ?? []).filter((d) => d.outcome === "same").map((d) => d.name);
+      const what = [
+        copied.length ? `Copied ${copied.join(", ")}.` : "",
+        same.length ? `${same.join(", ")} ${same.length === 1 ? "was" : "were"} already the same.` : "",
+        data.settings ? "Settings and API keys copied." : "",
+      ]
+        .filter(Boolean)
+        .join(" ");
       setResult(
         direction === "pull"
-          ? `Done in ${Math.round(data.tookMs / 1000)}s. This library is now a copy of ${data.from}: ${describe(data.fingerprint)}. ${data.filesCopied} file${data.filesCopied === 1 ? "" : "s"} copied (${Math.round(data.bytesCopied / 1024 / 1024)} MB). Backup: ${data.backup ?? "none"}.`
-          : `Done in ${Math.round(data.tookMs / 1000)}s. ${view.peer.host} is now a copy of this library: ${describe(data.fingerprint)}. ${data.filesCopied} file${data.filesCopied === 1 ? "" : "s"} copied there.`
+          ? `Done in ${Math.round(data.tookMs / 1000)}s. This laptop is now a copy of ${data.from}. ${what} ${data.filesCopied} file${data.filesCopied === 1 ? "" : "s"} copied (${Math.round(data.bytesCopied / 1024 / 1024)} MB).`
+          : `Done in ${Math.round(data.tookMs / 1000)}s. ${view.peer.host} is now a copy of this laptop. ${what} ${data.filesCopied} file${data.filesCopied === 1 ? "" : "s"} copied there.`
       );
       await load();
     } catch (err) {
@@ -215,8 +234,9 @@ export function SyncCard() {
         <IconSync className="text-[var(--color-accent)]" /> The other laptop
       </h2>
       <p className="mt-1 text-sm text-[var(--color-muted)]">
-        One library on two laptops. Pull makes this one a copy of the other; push does the reverse.
-        Before you switch laptops, sync towards the one you are about to use. Both need sharing on.
+        One library on two laptops. Pull makes this one a copy of the other — every discipline, the
+        settings and the API keys; push does the reverse. Before you switch laptops, sync towards the
+        one you are about to use. Both need sharing on.
       </p>
 
       <div className="mt-4 grid gap-3 sm:grid-cols-2">

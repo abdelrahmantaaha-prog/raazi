@@ -91,6 +91,14 @@ export function writeStore(next: object): void {
   writeTo(CONFIG_PATH, next);
 }
 
+/**
+ * The same reads and writes against any one of these files — another
+ * discipline's config.json, which a sync fills in while that discipline is
+ * not the one open.
+ */
+export const readJsonFile = <T extends object>(file: string): Partial<T> => readFrom<T>(file);
+export const writeJsonFile = (file: string, next: object): void => writeTo(file, next);
+
 /** What a library keeps to itself; everything else here is shared. */
 const SHARED_FIELDS = ["keys", "routing", "model", "embedModel", "lan", "followers", "follow"] as const;
 
