@@ -310,7 +310,14 @@ export default function Inbox({
    * is where one decision clears the most; what the pass left unsorted comes
    * last as "Everything else". A folded bundle keeps its place and hides its
    * rows, and the keyboard skips what is hidden.
+   *
+   * "Biggest first" is decided once, when a bundle is first seen, and then
+   * held — the same rule as the stories above. Re-sorting by size on every
+   * change sent a bundle up or down the page each time you filed, discarded
+   * or received an article in it. A bundle that appears later goes to the
+   * bottom; a regroup makes every bundle new, so it starts biggest first.
    */
+  const bundleRanks = useRef(new Map<string, number>());
   const [collapsed, setCollapsed] = useState<Set<string>>(new Set());
   const toggleBundle = (key: string) =>
     setCollapsed((prev) => {
@@ -330,9 +337,13 @@ export default function Inbox({
       b.count += g.items.length;
       map.set(key, b);
     }
-    return [...map.values()].sort((a, b) => {
+    const rank = bundleRanks.current;
+    const bySize = [...map.values()].sort((a, b) => b.count - a.count || a.label.localeCompare(b.label));
+    let bottom = rank.size ? Math.max(...rank.values()) : -1;
+    for (const b of bySize) if (!rank.has(b.key)) rank.set(b.key, ++bottom);
+    return bySize.sort((a, b) => {
       if (a.key === "none" || b.key === "none") return a.key === "none" ? 1 : -1;
-      return b.count - a.count || a.label.localeCompare(b.label);
+      return rank.get(a.key)! - rank.get(b.key)!;
     });
   }, [groups]);
   const selectBundle = (bundle: Bundle) =>
