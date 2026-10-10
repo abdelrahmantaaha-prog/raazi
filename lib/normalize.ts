@@ -155,17 +155,23 @@ export function normalize(raw: string, type?: string): string {
 /** A rough "is this the same name" score in [0,1], from character trigrams. */
 export function trigramSimilarity(a: string, b: string): number {
   if (a === b) return 1;
-  const grams = (s: string) => {
-    const padded = `  ${s} `;
-    const out = new Set<string>();
-    for (let i = 0; i < padded.length - 2; i++) out.add(padded.slice(i, i + 3));
-    return out;
-  };
-  const ga = grams(a);
-  const gb = grams(b);
+  return trigramOverlap(trigrams(a), trigrams(b));
+}
+
+/** The trigrams of a normalised name — build once, compare many times. */
+export function trigrams(s: string): Set<string> {
+  const padded = `  ${s} `;
+  const out = new Set<string>();
+  for (let i = 0; i < padded.length - 2; i++) out.add(padded.slice(i, i + 3));
+  return out;
+}
+
+/** trigramSimilarity over sets already built by `trigrams`. */
+export function trigramOverlap(ga: Set<string>, gb: Set<string>): number {
   if (ga.size === 0 || gb.size === 0) return 0;
+  const [small, large] = ga.size <= gb.size ? [ga, gb] : [gb, ga];
   let shared = 0;
-  for (const g of ga) if (gb.has(g)) shared++;
+  for (const g of small) if (large.has(g)) shared++;
   return shared / (ga.size + gb.size - shared);
 }
 

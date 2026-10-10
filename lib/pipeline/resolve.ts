@@ -2,7 +2,16 @@ import type Database from "better-sqlite3";
 import { Type, type Schema } from "@google/genai";
 import { db, tx } from "../db";
 import { embed, generateJson } from "../ai/client";
-import { cosine, fromBlob, isSubsetName, normalize, toBlob, trigramSimilarity } from "../normalize";
+import {
+  cosine,
+  fromBlob,
+  isSubsetName,
+  normalize,
+  toBlob,
+  trigramOverlap,
+  trigrams,
+  trigramSimilarity,
+} from "../normalize";
 import { finishTask } from "../queue";
 import type { EntityType, Task } from "../types";
 
@@ -136,11 +145,16 @@ export async function handleResolve(task: Task): Promise<void> {
   const touched = sourceId ? touchedBy(sourceId, rows) : null;
   const inScope = (a: Row, b: Row) => !touched || touched.has(a.id) || touched.has(b.id);
 
+  // Each name's trigrams once, not once per comparison: a pass over three
+  // thousand people used to build eighteen million sets to compare.
+  const grams = rows.map((r) => trigrams(r.normalized));
   const pairs: { a: Row; b: Row; trigram: number }[] = [];
+  const breathe = breather();
   for (let i = 0; i < rows.length; i++) {
+    await breathe();
     for (let j = i + 1; j < rows.length; j++) {
       if (!inScope(rows[i], rows[j])) continue;
-      const t = trigramSimilarity(rows[i].normalized, rows[j].normalized);
+      const t = rows[i].normalized === rows[j].normalized ? 1 : trigramOverlap(grams[i], grams[j]);
       if (t >= CANDIDATE_TRIGRAM || isSubsetName(rows[i].normalized, rows[j].normalized)) {
         pairs.push({ a: rows[i], b: rows[j], trigram: t });
       }
@@ -184,6 +198,7 @@ export async function handleResolve(task: Task): Promise<void> {
     }
     const seen = new Set(pairs.map((p) => key(p.a.id, p.b.id)));
     for (let i = 0; i < rows.length; i++) {
+      await breathe();
       const va = vecs.get(rows[i].id);
       if (!va) continue;
       for (let j = i + 1; j < rows.length; j++) {
@@ -238,6 +253,7 @@ export async function handleResolve(task: Task): Promise<void> {
   const needsJudgement: typeof pairs = [];
 
   for (const p of pairs) {
+    await breathe();
     if (resolveId(p.a.id) === resolveId(p.b.id)) continue;
 
     // A lone given name is not evidence of identity, whoever says otherwise.
@@ -354,10 +370,27 @@ B: "${p.b.canonical_name}"${p.b.disambiguator ? ` (${p.b.disambiguator})` : ""}
  * and rejected anyway).
  */
 function familyKey(rawName: string): string {
+  return nameParts(rawName).family;
+}
+
+/**
+ * A name's family and given parts, worked out once per name. canStandFor
+ * scans every person for every pair it is asked about, and normalising the
+ * same three thousand names afresh each time was most of a pass's minute.
+ * The answer depends on the string alone, so the cache can never go stale.
+ */
+const partsCache = new Map<string, { family: string; given: string[] }>();
+
+function nameParts(rawName: string): { family: string; given: string[] } {
+  let parts = partsCache.get(rawName);
+  if (parts) return parts;
+  const words = normalize(rawName, "person").split(" ").filter(Boolean);
   const comma = rawName.indexOf(",");
-  if (comma > 0) return normalize(rawName.slice(0, comma), "person");
-  const parts = normalize(rawName, "person").split(" ").filter(Boolean);
-  return parts[parts.length - 1] ?? "";
+  const family = comma > 0 ? normalize(rawName.slice(0, comma), "person") : words[words.length - 1] ?? "";
+  parts = { family, given: words.filter((t) => t !== family) };
+  if (partsCache.size >= 50_000) partsCache.clear();
+  partsCache.set(rawName, parts);
+  return parts;
 }
 
 /**
@@ -393,10 +426,7 @@ export function canStandFor(fragment: Row, full: Row, all: Row[]): boolean {
 
 /** Every part of a name that is not the family name. */
 function givenNames(rawName: string): string[] {
-  const family = familyKey(rawName);
-  return normalize(rawName, "person")
-    .split(" ")
-    .filter((t: string) => t && t !== family);
+  return nameParts(rawName).given;
 }
 
 /**
@@ -425,6 +455,17 @@ export function foldBareNames(rows: Row[], handle?: Database.Database) {
 
   const sourcesOf = conn.prepare("SELECT DISTINCT source_id FROM mentions WHERE entity_id = ?");
 
+  // Fuller names by family name: canStandFor refuses any other, so each bare
+  // name need only look at the few that end in it, not the whole list.
+  const byFamily = new Map<string, Row[]>();
+  for (const r of rows) {
+    if (!r.normalized.includes(" ")) continue;
+    const family = familyKey(r.canonical_name);
+    const list = byFamily.get(family);
+    if (list) list.push(r);
+    else byFamily.set(family, [r]);
+  }
+
   for (const fragment of bare) {
     const sources = (sourcesOf.all(fragment.id) as { source_id: number }[]).map((s) => s.source_id);
     if (!sources.length) continue;
@@ -432,11 +473,8 @@ export function foldBareNames(rows: Row[], handle?: Database.Database) {
     // Fuller names that share this word and appear in at least one of the same
     // sources. A name met only in a different book is not the same person by
     // default.
-    const candidates = rows.filter(
-      (other) =>
-        other.id !== fragment.id &&
-        other.normalized.includes(" ") &&
-        canStandFor(fragment, other, rows)
+    const candidates = (byFamily.get(fragment.normalized) ?? []).filter(
+      (other) => other.id !== fragment.id && canStandFor(fragment, other, rows)
     );
 
     const inSameSource = candidates.filter((c) => {
@@ -543,6 +581,24 @@ async function namePairs(
 
 function key(a: number, b: number) {
   return a < b ? `${a}:${b}` : `${b}:${a}`;
+}
+
+/**
+ * Lets the server answer between stretches of comparing.
+ *
+ * The worker runs in the server's own process, and a pass compares thousands
+ * of names in plain loops. Without a pause the whole server stood still for
+ * the length of the pass — a minute and more on a large library — and every
+ * open window put up "The Corpus server is down". Awaiting the returned
+ * function costs nothing until ~25 ms have gone by, then yields once.
+ */
+function breather(sliceMs = 25): () => Promise<void> {
+  let since = performance.now();
+  return async () => {
+    if (performance.now() - since < sliceMs) return;
+    await new Promise<void>((r) => setImmediate(r));
+    since = performance.now();
+  };
 }
 
 function ordered(a: string, b: string): [string, string] {

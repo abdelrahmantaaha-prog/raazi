@@ -504,9 +504,13 @@ function appendTail(runId: number, sourceId: number): void {
   // A shipping paper is read whole for its shipment before names are
   // reconciled, so the parties it adds are reconciled with the rest.
   enqueue(runId, [{ kind: "shipment" as const, payload: { sourceId } }]);
+  // The source id keeps the pass to the names this source brought in. Without
+  // it every article a feed delivered compared every entity of each type with
+  // every other — tens of seconds of the server answering nothing, per type,
+  // per article. lib/ingest/index.ts has always passed it; this tail did not.
   enqueue(
     runId,
-    ENTITY_TYPES.map((type) => ({ kind: "resolve" as const, payload: { type } }))
+    ENTITY_TYPES.map((type) => ({ kind: "resolve" as const, payload: { type, sourceId } }))
   );
   // Costs nothing and finds most of the appearances extraction walks past.
   enqueue(runId, [{ kind: "sweep" as const, payload: { sourceId } }]);
