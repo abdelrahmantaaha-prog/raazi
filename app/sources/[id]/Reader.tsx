@@ -20,6 +20,7 @@ import {
 } from "@/lib/speech";
 import { Lookup, type LookupAt } from "./Lookup";
 import { SendToWrite, type SendAt } from "./SendToWrite";
+import { LitReviewWindow } from "../../components/LitReview";
 import { ReaderParagraph } from "./ReaderParagraph";
 
 export interface Passage {
@@ -155,6 +156,9 @@ export function Reader({
   const [lookup, setLookup] = useState<LookupAt | null>(null);
   /** A passage selected for the writing desk — the card that offers to send it. */
   const [send, setSend] = useState<SendAt | null>(null);
+  /** A literature review of what you highlighted, and the paragraph it was in. */
+  const [review, setReview] = useState<{ focus: string; context?: string } | null>(null);
+  const selectionContext = useRef<string | undefined>(undefined);
 
   const scroller = useRef<HTMLDivElement>(null);
   /** The in-flight soft scroll, so a second advance retargets it rather than
@@ -921,6 +925,10 @@ export function Reader({
         }
         const box = sel.getRangeAt(0).getBoundingClientRect();
         if (!box.width && !box.height) return;
+        // The paragraph it was in, should you ask for a literature review of it.
+        const anchor = sel.anchorNode instanceof Element ? sel.anchorNode : sel.anchorNode?.parentElement;
+        selectionContext.current =
+          anchor?.closest?.("p, li, blockquote, h1, h2, h3, h4, section[data-chunk]")?.textContent?.slice(0, 6000) ?? undefined;
 
         // Up to three words, and nothing with sentence punctuation in it, is a
         // word to look up. Anything longer is a passage, and a passage you have
@@ -1474,8 +1482,38 @@ export function Reader({
         </div>
       )}
 
-      {lookup && <Lookup at={lookup} theme={theme} onClose={() => setLookup(null)} />}
-      {send && <SendToWrite at={send} sourceId={sourceId} theme={theme} onClose={() => setSend(null)} />}
+      {lookup && (
+        <Lookup
+          at={lookup}
+          theme={theme}
+          onClose={() => setLookup(null)}
+          onReview={() => {
+            setReview({ focus: lookup.word, context: selectionContext.current });
+            setLookup(null);
+          }}
+        />
+      )}
+      {send && (
+        <SendToWrite
+          at={send}
+          sourceId={sourceId}
+          theme={theme}
+          onClose={() => setSend(null)}
+          onReview={() => {
+            setReview({ focus: send.text, context: selectionContext.current });
+            setSend(null);
+          }}
+        />
+      )}
+      {review && (
+        <LitReviewWindow
+          target="source"
+          id={sourceId}
+          focus={review.focus}
+          context={review.context}
+          onClose={() => setReview(null)}
+        />
+      )}
 
       {/* An entry, opened beside the book. Rendered here rather than outside
           the reader so it unmounts with it, and portalled from inside itself so

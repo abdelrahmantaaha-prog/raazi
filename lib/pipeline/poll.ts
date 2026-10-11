@@ -18,7 +18,7 @@ import {
 import { judge, learn, standingOf, type Tallies } from "../curator";
 import { fileSource, regroupRecent } from "../stories";
 import { regroupHeld } from "../inbox-groups";
-import { bundleInbox, groupEventsInBundles } from "../inbox-bundles";
+import { bundleInbox, groupEventsInBundles, rateInbox } from "../inbox-bundles";
 import { unwrapRedirect } from "../ingest/meta";
 import type { Task } from "../types";
 
@@ -204,6 +204,8 @@ function regroupStories(): void {
     regroupHeld();
     void bundleInbox()
       .then((b) => (b.error ? undefined : groupEventsInBundles()))
+      // Then how much each new item matters, for the inbox's priority order.
+      .then(() => rateInbox())
       .catch(() => undefined);
   } catch (err) {
     console.warn(`[corpus] stories: regroup failed — ${(err as Error).message}`);

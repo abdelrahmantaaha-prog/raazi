@@ -1,5 +1,7 @@
 "use client";
 
+import { IconReview } from "../../components/Icons";
+
 import { useEffect, useRef, useState } from "react";
 import { dirOf } from "@/lib/dir";
 
@@ -35,10 +37,13 @@ export function Lookup({
   at,
   theme,
   onClose,
+  onReview,
 }: {
   at: LookupAt;
   theme: { bg: string; fg: string; muted: string; rule: string };
   onClose: () => void;
+  /** Opens a literature review of the word or concept, held by the reader. */
+  onReview?: () => void;
 }) {
   const [state, setState] = useState<"loading" | "ready" | "empty">("loading");
   const [def, setDef] = useState<Definition | null>(null);
@@ -209,6 +214,17 @@ export function Lookup({
           </div>
         </>
       )}
+      {onReview ? (
+        <button
+          type="button"
+          onClick={onReview}
+          title="Claude searches for research, papers and news on this concept, and writes a short review of what has been written"
+          className="mt-2 inline-flex items-center gap-1.5 rounded-full px-3 py-1 text-xs"
+          style={{ border: `1px solid ${theme.rule}` }}
+        >
+          <IconReview size={13} /> Literature review &amp; news
+        </button>
+      ) : null}
     </div>
   );
 }

@@ -24,6 +24,14 @@ import { dirOf } from "@/lib/dir";
 import type { HeldText } from "@/lib/triage";
 import { ArticleLink, articleHref, ARTICLE_WINDOW } from "../components/ArticleLink";
 import { useDeskHeight } from "../components/desk";
+import { LitReviewButton } from "../components/LitReview";
+import {
+  IMPORTANCE_LABEL,
+  effectiveImportance,
+  importanceRank,
+  topicScore,
+  type Importance,
+} from "@/lib/importance";
 
 interface Item {
   id: number;
@@ -50,6 +58,8 @@ interface Item {
   starred: number;
   bundle_id: number | null;
   bundle_label: string | null;
+  /** breaking | high | medium | evergreen, or null until rated. See lib/importance.ts. */
+  importance: string | null;
 }
 
 interface Group {
@@ -69,6 +79,13 @@ interface Bundle {
 
 type PaneView = "text" | "page";
 const VIEW_KEY = "corpus.inbox.view";
+
+/** The list's order: as things came in, or the most important first. */
+type ListOrder = "arrival" | "priority";
+const ORDER_KEY = "corpus.inbox.order";
+
+/** An item's stage as it stands now — breaking fades to high after a day. */
+const levelOf = (i: Item, now = Date.now()) => effectiveImportance(i.importance, i.published_at, now);
 
 /** Where the list and the pane sit side by side; below it the pane is a sheet. */
 const WIDE = "(min-width: 64rem)";
@@ -160,6 +177,24 @@ export default function Inbox({
       /* remembered for this visit only */
     }
   };
+  /** The list's order, remembered in this browser like the pane's view. */
+  const [order, setOrder] = useState<ListOrder>("arrival");
+  useEffect(() => {
+    try {
+      if (localStorage.getItem(ORDER_KEY) === "priority") setOrder("priority");
+    } catch {
+      /* storage blocked: the order things came in */
+    }
+  }, []);
+  const chooseOrder = (next: ListOrder) => {
+    setOrder(next);
+    try {
+      localStorage.setItem(ORDER_KEY, next);
+    } catch {
+      /* remembered for this visit only */
+    }
+  };
+  const byPriority = order === "priority";
   /** The text behind the item under the cursor, fetched once per item. */
   const [preview, setPreview] = useState<HeldText | null>(null);
   const [previewLoading, setPreviewLoading] = useState(false);
@@ -302,8 +337,15 @@ export default function Inbox({
     }
     for (const i of items) if (i.clipped_at) clipsSeen.current.set(i.id, i.clipped_at);
 
+    // By priority, the most important account of a story leads it. The sort
+    // is stable, so accounts of one stage keep the server's order.
+    if (byPriority) {
+      const now = Date.now();
+      for (const g of all) g.items.sort((a, b) => importanceRank(levelOf(a, now)) - importanceRank(levelOf(b, now)));
+    }
+
     return all.sort((a, b) => rank.get(a.key)! - rank.get(b.key)!);
-  }, [items]);
+  }, [items, byPriority]);
 
   /**
    * The subject level above the stories. Biggest bundles first, since that
@@ -318,6 +360,17 @@ export default function Inbox({
    * bottom; a regroup makes every bundle new, so it starts biggest first.
    */
   const bundleRanks = useRef(new Map<string, number>());
+  /**
+   * By priority, where each item last stood: its story, its bundle, its rank.
+   *
+   * A topic is placed by its most important article — but taking that from
+   * what is on screen would send a topic down the list the moment you
+   * discarded its breaking article, the same jumping the held ranks above
+   * exist to prevent. So an item decided away still counts for the topic it
+   * was in while the page is open; a new or newly rated one counts at once.
+   * Grouping again starts it afresh.
+   */
+  const places = useRef(new Map<number, { group: string; bundle: string; rank: number }>());
   const [collapsed, setCollapsed] = useState<Set<string>>(new Set());
   const toggleBundle = (key: string) =>
     setCollapsed((prev) => {
@@ -341,11 +394,28 @@ export default function Inbox({
     const bySize = [...map.values()].sort((a, b) => b.count - a.count || a.label.localeCompare(b.label));
     let bottom = rank.size ? Math.max(...rank.values()) : -1;
     for (const b of bySize) if (!rank.has(b.key)) rank.set(b.key, ++bottom);
-    return bySize.sort((a, b) => {
+    const held = bySize.sort((a, b) => {
       if (a.key === "none" || b.key === "none") return a.key === "none" ? 1 : -1;
       return rank.get(a.key)! - rank.get(b.key)!;
     });
-  }, [groups]);
+    if (!byPriority) return held;
+
+    // The most important topics first, and inside each the most important
+    // stories; ties keep the held order above. "Everything else" is ranked
+    // like any topic — a breaking item the sorting left there must not sink.
+    const now = Date.now();
+    for (const b of held)
+      for (const g of b.groups)
+        for (const i of g.items) places.current.set(i.id, { group: g.key, bundle: b.key, rank: importanceRank(levelOf(i, now)) });
+    const ranksOf = { group: new Map<string, number[]>(), bundle: new Map<string, number[]>() };
+    for (const p of places.current.values()) {
+      ranksOf.group.set(p.group, [...(ranksOf.group.get(p.group) ?? []), p.rank]);
+      ranksOf.bundle.set(p.bundle, [...(ranksOf.bundle.get(p.bundle) ?? []), p.rank]);
+    }
+    const score = (kind: "group" | "bundle", key: string) => topicScore(ranksOf[kind].get(key) ?? []);
+    for (const b of held) b.groups.sort((x, y) => score("group", x.key) - score("group", y.key));
+    return held.sort((a, b) => score("bundle", a.key) - score("bundle", b.key));
+  }, [groups, byPriority]);
   const selectBundle = (bundle: Bundle) =>
     setSelected((prev) => {
       const next = new Set(prev);
@@ -548,7 +618,11 @@ export default function Inbox({
       }
       if (typeof data.held === "number") setCount(data.held);
       if (data.runId) setRunId(data.runId);
-      setSelected(new Set());
+      // Only what was decided leaves the selection. Keeping the article in
+      // the pane used to clear every tick in the list, and a selection built
+      // up over twenty rows went with it.
+      const still = new Set((data.items ?? items).map((i) => i.id));
+      setSelected((prev) => new Set([...prev].filter((id) => !going.has(id) && still.has(id))));
       setLastDiscarded(action === "discard" ? itemIds : []);
       for (const id of itemIds) previews.current.delete(id);
       setSheet(false);
@@ -576,6 +650,8 @@ export default function Inbox({
       });
       const data = (await res.json().catch(() => ({}))) as { items?: Item[]; held?: number; note?: string; error?: string };
       if (!res.ok) throw new Error(data.error ?? "That did not work.");
+      // A regroup moves items between topics and rates the new ones.
+      places.current.clear();
       if (data.items) setItems(data.items);
       if (typeof data.held === "number") setCount(data.held);
       if (data.note) setError(data.note);
@@ -774,6 +850,31 @@ export default function Inbox({
                 }}
               />
             ) : null}
+            <div
+              role="radiogroup"
+              aria-label="Order of the list"
+              className="inline-flex shrink-0 rounded-full border border-[var(--color-rule)] p-0.5 text-sm"
+            >
+              {(["arrival", "priority"] as const).map((o) => (
+                <button
+                  key={o}
+                  type="button"
+                  role="radio"
+                  aria-checked={order === o}
+                  onClick={() => chooseOrder(o)}
+                  title={
+                    o === "arrival"
+                      ? "What you sent from the browser first, then the biggest stories"
+                      : "Breaking first, then high, medium and evergreen — topics by their most important article, and articles by importance inside each. New articles are rated when the inbox is grouped."
+                  }
+                  className={`rounded-full px-2.5 py-0.5 transition ${
+                    order === o ? "bg-[var(--color-ink)] text-white" : "text-[var(--color-muted)] hover:text-[var(--color-ink)]"
+                  }`}
+                >
+                  {o === "arrival" ? "As it came" : "By priority"}
+                </button>
+              ))}
+            </div>
             <Link
               href="/write?tab=starred"
               className="inline-flex items-center gap-1.5 rounded-full border border-[var(--color-rule)] px-3 py-1 text-sm transition hover:border-[var(--color-accent)]"
@@ -991,6 +1092,7 @@ export default function Inbox({
                           {collapsed.has(bundle.key) ? "▸" : "▾"}
                         </button>
                         <span className="min-w-0 truncate font-semibold text-[var(--color-ink)]">{bundle.label}</span>
+                        <ImportanceChip level={topLevel(bundle.groups.flatMap((g) => g.items))} />
                         <span className="shrink-0 text-[var(--color-muted)]">
                           {bundle.count} article{bundle.count === 1 ? "" : "s"}
                           {bundle.groups.length < bundle.count ? ` · ${bundle.groups.length} stor${bundle.groups.length === 1 ? "y" : "ies"}` : ""}
@@ -1013,7 +1115,7 @@ export default function Inbox({
                     <section key={group.key} className="border-b border-[var(--color-rule)] last:border-b-0">
                       {many ? (
                         <div className="flex items-center gap-2 bg-[var(--color-accent-soft)]/45 px-3 py-1.5 text-xs">
-                          <span className="min-w-0 truncate font-medium text-[var(--color-ink)]">
+                          <span dir={dirOf(group.title)} className="min-w-0 font-medium leading-snug text-[var(--color-ink)]">
                             {group.storyId ? (
                               <Link href={`/stories/${group.storyId}`} className="hover:text-[var(--color-accent)]">
                                 {group.title}
@@ -1091,7 +1193,7 @@ export default function Inbox({
                               />
 
                               <div className="min-w-0 flex-1">
-                                <h2 dir={dirOf(item.title)} className="line-clamp-2 text-[0.95rem] font-medium leading-snug">
+                                <h2 dir={dirOf(item.title)} className="text-[0.95rem] font-medium leading-snug [overflow-wrap:anywhere]">
                                   {item.title}
                                   {item.starred ? (
                                     <span title="Starred — on the Write page's Starred tab" className="ms-1.5 inline-block align-[-1px] text-amber-500">
@@ -1101,6 +1203,7 @@ export default function Inbox({
                                 </h2>
 
                                 <div className="mt-0.5 flex flex-wrap items-center gap-x-1.5 gap-y-1 text-xs text-[var(--color-muted)]">
+                                  <ImportanceChip level={levelOf(item)} />
                                   <span className="max-w-[16rem] truncate">{item.outlet ?? item.feed_title}</span>
                                   {item.published_at ? <span>· {relativeDate(item.published_at)}</span> : null}
                                   {foundInText(item) ? (
@@ -1176,6 +1279,37 @@ export default function Inbox({
         </Modal>
       ) : null}
     </div>
+  );
+}
+
+const CHIP: Record<Importance, string> = {
+  breaking: "bg-red-600 text-white",
+  high: "bg-amber-100 text-amber-900",
+  medium: "bg-slate-100 text-slate-600",
+  evergreen: "bg-emerald-50 text-emerald-800",
+};
+
+/** The most important stage among some items, or null when none is rated. */
+function topLevel(items: Item[]): Importance | null {
+  const now = Date.now();
+  let best: Importance | null = null;
+  for (const i of items) {
+    const l = levelOf(i, now);
+    if (l && (best === null || importanceRank(l) < importanceRank(best))) best = l;
+  }
+  return best;
+}
+
+/** How much an item matters, as a small label. Nothing until it is rated. */
+function ImportanceChip({ level }: { level: Importance | null }) {
+  if (!level) return null;
+  return (
+    <span
+      title={`Importance: ${IMPORTANCE_LABEL[level].toLowerCase()}`}
+      className={`shrink-0 rounded-full px-1.5 py-px text-[11px] font-medium ${CHIP[level]}`}
+    >
+      {IMPORTANCE_LABEL[level]}
+    </span>
   );
 }
 
@@ -1332,7 +1466,10 @@ function Preview({
             )}
           </h2>
           <div className="mt-1 flex flex-wrap items-center justify-between gap-2">
-            <p className="min-w-0 text-xs text-[var(--color-muted)]">{meta.join(" · ")}</p>
+            <p className="flex min-w-0 flex-wrap items-center gap-1.5 text-xs text-[var(--color-muted)]">
+              <ImportanceChip level={levelOf(item)} />
+              <span>{meta.join(" · ")}</span>
+            </p>
             {item.url ? (
               <div role="tablist" aria-label="What the pane shows" className="inline-flex shrink-0 rounded-full border border-[var(--color-rule)] p-0.5 text-xs">
                 {(["text", "page"] as const).map((v) => (
@@ -1407,6 +1544,13 @@ function Preview({
           >
             <IconClipboard /> Paste text
           </button>
+          {item.source_id !== null ? (
+            <LitReviewButton
+              target="source"
+              id={item.source_id}
+              className={`${button} border border-[var(--color-rule)] hover:border-[var(--color-accent)] hover:text-[var(--color-accent)]`}
+            />
+          ) : null}
         </div>
 
         {verdict === "enough" ? (

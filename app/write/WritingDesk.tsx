@@ -13,6 +13,7 @@ import type { CitablePassage } from "@/lib/cite-search";
 import { ArticleLink, hostOf } from "../components/ArticleLink";
 import { useDeskHeight } from "../components/desk";
 import { TextWebCheck } from "../components/TextWebCheck";
+import { LitReviewButton } from "../components/LitReview";
 import type { WebReport } from "@/lib/web-checks";
 
 interface Reference {
@@ -482,6 +483,20 @@ export function WritingDesk({
         : null;
   };
 
+  /** What is selected in the draft, with its paragraph, for a review of just that part; null for none. */
+  const selectedInDraft = () => {
+    const box = document.querySelector<HTMLElement>('[role="textbox"][aria-label="Draft"]');
+    const sel = window.getSelection();
+    if (!box || !sel || !sel.rangeCount || sel.isCollapsed) return null;
+    const range = sel.getRangeAt(0);
+    if (!box.contains(range.commonAncestorContainer)) return null;
+    const focus = sel.toString().replace(/\s+/g, " ").trim();
+    if (focus.length < 12) return null;
+    const node = range.commonAncestorContainer;
+    const block = (node instanceof Element ? node : node.parentElement)?.closest("p, li, blockquote, h1, h2, h3, h4");
+    return { focus, context: block && box.contains(block) ? (block.textContent ?? undefined) : undefined };
+  };
+
   /** Puts markup where the cursor is — or was, when a dialog took it — in the editor's own terms. */
   const insert = (html: string) => {
     const box = document.querySelector<HTMLElement>('[role="textbox"][aria-label="Draft"]');
@@ -823,9 +838,18 @@ export function WritingDesk({
               >
                 Export .docx
               </a>
+              {id !== null ? (
+                <LitReviewButton
+                  target="draft"
+                  id={id}
+                  disabled={!body.trim()}
+                  pickFocus={selectedInDraft}
+                  className="inline-flex items-center gap-1.5 rounded border border-[var(--color-rule)] bg-white px-3 py-1.5 text-sm font-medium transition hover:bg-[var(--color-accent-soft)] disabled:opacity-40"
+                />
+              ) : null}
               <span className="text-xs text-[var(--color-muted)]">
                 The check reads your draft against your library and reports. It never edits what you
-                wrote.
+                wrote. Select part of the draft first to review just that.
               </span>
             </div>
 

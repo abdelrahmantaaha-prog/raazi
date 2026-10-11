@@ -152,6 +152,36 @@ section("Bundles: the subject level");
   check("with no bundles the event pass asks nothing", (await B.groupEventsInBundles()).asked === 0);
 }
 
+section("Importance: four stages, rated once, sorted most important first");
+{
+  const B = await import("../lib/inbox-bundles.ts");
+  const I = await import("../lib/importance.ts");
+  const members = new Map([["S7", [1, 2]], ["I3", [3]], ["I4", [4]], ["I5", [5]]]);
+  const r = B.ratingsFromModel(members, {
+    breaking: ["S7"],
+    high: ["I3", " I999 "],
+    medium: ["I3", "I4"],
+    evergreen: [],
+  });
+  check("a story's accounts all get its stage", r.get(1) === "breaking" && r.get(2) === "breaking", JSON.stringify([...r]));
+  check("an id named twice keeps the more important stage", r.get(3) === "high");
+  check("unknown ids are dropped and what the model left out stays unrated", r.size === 4 && !r.has(5), JSON.stringify([...r]));
+  check("a missing list is no answer, not a crash", B.ratingsFromModel(members, {}).size === 0);
+
+  const now = Date.parse("2026-10-11T12:00:00Z");
+  check("breaking stays breaking for a day", I.effectiveImportance("breaking", "2026-10-11T02:00:00Z", now) === "breaking");
+  check("and is high after that", I.effectiveImportance("breaking", "2026-10-09T12:00:00Z", now) === "high");
+  check("other stages do not fade", I.effectiveImportance("evergreen", "2020-01-01T00:00:00Z", now) === "evergreen");
+  check("an unknown stage is unrated", I.effectiveImportance("urgent", null, now) === null);
+  const order = ["evergreen", null, "medium", "high", "breaking"].sort((a, b) => I.importanceRank(a) - I.importanceRank(b));
+  check("breaking, high, medium, unrated, evergreen", JSON.stringify(order) === JSON.stringify(["breaking", "high", "medium", null, "evergreen"]), JSON.stringify(order));
+  check("a topic is placed by its most important article", I.topicScore([2, 0, 4]) < I.topicScore([1, 1, 1, 1]));
+  check("and among equals, the one with more of them goes first", I.topicScore([0, 0, 2]) < I.topicScore([0, 2, 2]));
+  check("an empty topic goes last", I.topicScore([]) > I.topicScore([4]));
+  const rated = await B.rateInbox({ timeoutMs: 5000 });
+  check("an empty inbox never reaches the model for rating", rated.asked === 0 && rated.model === null && rated.error === null, JSON.stringify(rated));
+}
+
 section("Applying the groups keeps your decisions and is idempotent");
 {
   const mk = (title, outlet, at) =>

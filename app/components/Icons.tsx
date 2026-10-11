@@ -156,3 +156,13 @@ export function IconSend(p: IconProps) {
 export function IconDismiss(p: IconProps) {
   return svg({ size: 14, ...p }, <path d="M7 7l10 10M17 7 7 17" />);
 }
+
+/** Literature review & news: an open book with a magnifying glass. */
+export function IconReview(p: IconProps) {
+  return svg(p, [
+    <path key="a" d="M3 5.5c2.6-1 5.4-1 8 .6v12.4c-2.6-1.6-5.4-1.6-8-.6Z" />,
+    <path key="b" d="M11 6.1c1.6-1 3.3-1.4 5-1.3M11 18.5c.9-.6 1.8-.9 2.8-1.1" />,
+    <circle key="c" cx="17.5" cy="13.5" r="3" />,
+    <path key="d" d="m21.5 17.5-1.9-1.9" />,
+  ]);
+}

@@ -566,6 +566,28 @@ export function migrate(db: Database.Database) {
   migrateCalendar(db);
   migrateLessons(db);
   migrateBundles(db);
+  // How much an inbox item matters — breaking, high, medium or evergreen —
+  // given once by the sorting pass (lib/inbox-bundles.ts rateInbox). Null
+  // until rated. See lib/importance.ts.
+  addColumn(db, "feed_items", "importance", "TEXT");
+  addColumn(db, "feed_items", "importance_at", "TEXT");
+  // Literature review & news: research and news on a draft, a source, or a
+  // passage highlighted in one. Every review kept; see lib/litreview.ts.
+  db.exec(`
+    CREATE TABLE IF NOT EXISTS lit_reviews (
+      id          INTEGER PRIMARY KEY AUTOINCREMENT,
+      target      TEXT    NOT NULL,   -- 'draft' | 'source'
+      target_id   INTEGER NOT NULL,
+      focus       TEXT,               -- the highlighted passage, if any
+      context     TEXT,               -- the paragraph around it
+      title       TEXT    NOT NULL,
+      run_id      INTEGER,
+      report_json TEXT,
+      created_at  TEXT    NOT NULL DEFAULT (datetime('now')),
+      finished_at TEXT
+    );
+    CREATE INDEX IF NOT EXISTS idx_lit_reviews_target ON lit_reviews(target, target_id);
+  `);
   migrateEscapes(db);
   migrateCitations(db);
   migrateTranslations(db);

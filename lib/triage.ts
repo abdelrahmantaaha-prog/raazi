@@ -60,11 +60,13 @@ export interface HeldItem {
   /** The subject bundle the grouping pass put it in, if any. See lib/inbox-bundles.ts. */
   bundle_id: number | null;
   bundle_label: string | null;
+  /** breaking | high | medium | evergreen, or null until the sorting pass rates it. See lib/importance.ts. */
+  importance: string | null;
 }
 
 const HELD_COLUMNS = `
   i.id, i.feed_id, i.title, i.summary, i.url, i.published_at, i.seen_at,
-  i.source_id, i.note, i.clipped_at,
+  i.source_id, i.note, i.clipped_at, i.importance,
   f.title AS feed_title, f.outlet, f.reliability,
   (SELECT c.text FROM chunks c WHERE c.source_id = i.source_id ORDER BY c.seq LIMIT 1) AS lede,
   (SELECT COUNT(*) FROM chunks c WHERE c.source_id = i.source_id) AS chunks,

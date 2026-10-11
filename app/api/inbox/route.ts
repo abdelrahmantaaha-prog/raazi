@@ -2,7 +2,7 @@ import { NextResponse } from "next/server";
 import { badRequest, readBody } from "@/lib/http";
 import { clipStamp, discard, file, heldCount, keep, listHeld, pasteText, undo } from "@/lib/triage";
 import { regroupHeld } from "@/lib/inbox-groups";
-import { bundleInbox, groupEventsInBundles } from "@/lib/inbox-bundles";
+import { bundleInbox, groupEventsInBundles, rateInbox } from "@/lib/inbox-bundles";
 import { kickWorker } from "@/lib/worker";
 
 export const dynamic = "force-dynamic";
@@ -41,6 +41,9 @@ export async function POST(req: Request) {
     const rules = regroupHeld();
     const bundled = await bundleInbox();
     const events = bundled.error ? null : await groupEventsInBundles();
+    // And how much each new item matters, for the priority order. Rated once
+    // per item, so a second press asks only about what is new.
+    const rated = await rateInbox();
     const grouped = rules.grouped + (events?.grouped ?? 0);
     const stories = rules.stories + (events?.stories ?? 0);
     const folded = rules.folded + (events?.folded ?? 0);
@@ -52,7 +55,12 @@ export async function POST(req: Request) {
         }${grouped ? ` and ${grouped} of them into ${stories} stor${stories === 1 ? "y" : "ies"}` : ""}${
           folded ? `, folding ${folded} duplicate${folded === 1 ? "" : "s"}` : ""
         }.${events?.errors ? ` ${events.errors} bundle${events.errors === 1 ? "" : "s"} could not be read.` : ""}`;
-    return NextResponse.json({ rules, bundled, events, grouped, stories, folded, note, items: listHeld(200, q), held: heldCount() });
+    const ratedNote = rated.error
+      ? ` Importance could not be rated (${rated.error}).`
+      : rated.rated
+        ? ` ${rated.rated} rated by importance.`
+        : "";
+    return NextResponse.json({ rules, bundled, events, rated, grouped, stories, folded, note: note + ratedNote, items: listHeld(200, q), held: heldCount() });
   }
 
   // Pasting is about one article at a time — it is the paywalled one you went

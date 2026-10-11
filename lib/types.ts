@@ -68,6 +68,9 @@ export type TaskKind =
   /** Checks a draft or a source on the open web, asked for by hand. See
    *  handleTextWebcheck in lib/pipeline/webcheck.ts. */
   | "webcheck_text"
+  /** Finds research and news on a draft, a source or a highlighted passage,
+   *  asked for by hand. See lib/pipeline/litreview.ts. */
+  | "litreview"
   | "resolve"
   | "entry"
   | "transcribe"

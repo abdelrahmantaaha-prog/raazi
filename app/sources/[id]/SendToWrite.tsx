@@ -2,7 +2,7 @@
 
 import { useEffect, useRef, useState } from "react";
 import { dirOf } from "@/lib/dir";
-import { IconSend } from "../../components/Icons";
+import { IconReview, IconSend } from "../../components/Icons";
 
 export interface SendAt {
   /** The selected passage, as the reader saw it. */
@@ -43,11 +43,14 @@ export function SendToWrite({
   sourceId,
   theme,
   onClose,
+  onReview,
 }: {
   at: SendAt;
   sourceId: number;
   theme: { bg: string; fg: string; muted: string; rule: string };
   onClose: () => void;
+  /** Opens a literature review of the passage; the reader holds the window, since this card closes on any click outside it. */
+  onReview?: () => void;
 }) {
   const [drafts, setDrafts] = useState<DraftRow[] | null>(null);
   const [choosing, setChoosing] = useState(false);
@@ -245,6 +248,17 @@ export function SendToWrite({
           >
             {last ? "Another draft…" : <><IconSend size={13} /> Send to Write…</>}
           </button>
+          {onReview ? (
+            <button
+              type="button"
+              onClick={onReview}
+              title="Claude searches for research, papers and news on this passage, and writes a short review of what has been written"
+              className="inline-flex items-center gap-1.5 rounded-full px-3 py-1 text-xs"
+              style={{ border: `1px solid ${theme.rule}` }}
+            >
+              <IconReview size={13} /> Literature review &amp; news
+            </button>
+          ) : null}
         </div>
       )}
 

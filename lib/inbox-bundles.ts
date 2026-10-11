@@ -5,6 +5,7 @@ import { getConfig } from "./config";
 import { isLiteModel } from "./keys";
 import { modelsFor } from "./providers";
 import { applyGroups, heldAccounts, headlineLines, pairsFromModel, type HeldAccount } from "./inbox-groups";
+import { IMPORTANCE, type Importance } from "./importance";
 
 /**
  * Bundles: the subject level of the inbox, and the event pass inside it.
@@ -411,6 +412,117 @@ so that a journalist reads each event once.
   when it is the same event. Never put two S ids in one group.
 - Leave out everything that stands alone. An empty list is a fine answer.
 - Return ids exactly as given.`;
+
+const RATE_SCHEMA: Schema = {
+  type: Type.OBJECT,
+  properties: Object.fromEntries(
+    IMPORTANCE.map((level) => [level, { type: Type.ARRAY, items: { type: Type.STRING }, description: `The ids that are ${level}.` }])
+  ),
+  required: [...IMPORTANCE],
+};
+
+const RATE_SYSTEM = `You rate the headlines waiting in a political journalist's inbox by how much
+they matter, so the most important are read first. You see only headlines, each
+with an outlet or a count of accounts, a time, and sometimes the subject it was
+filed under. Put every id in exactly one of four lists:
+
+- breaking: happening now or in the last hours, and big — an attack, a leader's
+  death or resignation, a war escalating, an election result, a major ruling or
+  decision just out. A desk would drop everything. Rare: a few in a hundred.
+- high: significant news on a subject that matters — a consequential decision,
+  vote, policy, deal, investigation or report; a major development in a running
+  story. Several outlets on one thing usually means at least high.
+- medium: routine news — incremental updates, reactions, statements, smaller or
+  local stories, scheduled events going as expected.
+- evergreen: not tied to the day — analysis, explainers, features, profiles,
+  opinion, interviews, history. It would read the same next week.
+
+Judge by what the headline reports, not how it is worded; an alarming headline
+on a minor matter is medium. Use the NOW time to judge what is breaking — an old
+item is not breaking however big it was. Return ids exactly as given.`;
+
+/** Which item gets which stage, after the guards. An id named twice keeps the more important stage. Pure. */
+export function ratingsFromModel(
+  membersOf: Map<string, number[]>,
+  answer: Partial<Record<Importance, string[]>>
+): Map<number, Importance> {
+  const out = new Map<number, Importance>();
+  for (const level of IMPORTANCE) {
+    for (const raw of answer?.[level] ?? []) {
+      for (const id of membersOf.get(String(raw).trim()) ?? []) if (!out.has(id)) out.set(id, level);
+    }
+  }
+  return out;
+}
+
+export interface RateResult {
+  asked: number;
+  rated: number;
+  model: string | null;
+  error: string | null;
+}
+
+/**
+ * Gives every unrated item in the inbox its stage. Never throws; says what
+ * happened.
+ *
+ * Each item is rated once, when it is first seen, so pressing Group related
+ * again costs nothing for what is already rated. Headlines only, in chunks,
+ * on the cheap grouping model; a story's accounts travel as one line and get
+ * one stage. What the model leaves out stays unrated and is asked again next
+ * time.
+ */
+export async function rateInbox(opts: { timeoutMs?: number; chunk?: number } = {}): Promise<RateResult> {
+  const items = db()
+    .prepare(
+      `SELECT i.id AS itemId, s.id AS sourceId, ss.story_id AS storyId, i.title,
+              COALESCE(s.outlet, f.outlet, f.title) AS outlet,
+              COALESCE(i.published_at, s.published_at, i.seen_at) AS at,
+              b.label AS bundle
+         FROM feed_items i
+         JOIN feeds f ON f.id = i.feed_id
+         JOIN sources s ON s.id = i.source_id
+    LEFT JOIN story_sources ss ON ss.source_id = s.id
+    LEFT JOIN inbox_bundle_items bi ON bi.item_id = i.id
+    LEFT JOIN inbox_bundles b ON b.id = bi.bundle_id
+        WHERE i.state = 'held' AND i.decided_at IS NULL AND i.importance IS NULL
+        ORDER BY at, i.id`
+    )
+    .all() as HeldItemLine[];
+  const result: RateResult = { asked: items.length, rated: 0, model: null, error: null };
+  if (!items.length) return result;
+  const { lines, membersOf } = bundleLines(items);
+  const chunk = Math.max(20, opts.chunk ?? BUNDLE_CHUNK);
+  const models = new Set<string>();
+  const put = db().prepare("UPDATE feed_items SET importance = ?, importance_at = datetime('now') WHERE id = ? AND importance IS NULL");
+  const now = new Date().toISOString().slice(0, 16).replace("T", " ");
+
+  for (let i = 0; i < lines.length; i += chunk) {
+    const part = lines.slice(i, i + chunk);
+    try {
+      const res = await generateJson<Partial<Record<Importance, string[]>>>({
+        stage: "group",
+        system: RATE_SYSTEM,
+        schema: RATE_SCHEMA,
+        temperature: 0,
+        timeoutMs: opts.timeoutMs ?? 120_000,
+        parts: [`NOW: ${now} UTC\nHEADLINES (${part.length}), oldest first:\n${part.join("\n")}`],
+      });
+      if (res.model) models.add(res.model);
+      const ratings = ratingsFromModel(membersOf, res.data);
+      tx(() => {
+        for (const [id, level] of ratings) result.rated += put.run(level, id).changes;
+      });
+    } catch (err) {
+      result.error = (err instanceof Error ? err.message : String(err)).slice(0, 200);
+      console.warn(`[corpus] inbox: the model could not rate headlines — ${result.error}`);
+      break;
+    }
+  }
+  result.model = [...models].join(", ") || null;
+  if (result.rated) console.log(`[corpus] inbox: ${result.rated} item(s) rated by ${result.model ?? "the model"}`);
+  return result;
+}
 
 /** A bundle as the inbox shows it. */
 export function listBundles(): { id: number; label: string; items: number }[] {
