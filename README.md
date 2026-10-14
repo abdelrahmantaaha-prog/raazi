@@ -217,7 +217,23 @@ reference is completed from the source it came from, so it reads the same
 whichever of the four Cite buttons made it, and exports to a Word footnote
 that ends in the link.
 
-Text pasted into a draft arrives as plain paragraphs: a blank line starts a new
+A citation marker points at its reference by id, never by position, and is
+numbered by where that reference is first cited — the order Word numbers the
+footnotes in — so the screen and the export always agree, and moving a
+paragraph renumbers everything after it. Citing a source that is already in
+the list reuses its number rather than adding it again; different pages of one
+book stay separate references. Copying from a draft carries each marker's
+reference with it, so cutting a paragraph and pasting it elsewhere — in the
+same draft or another — keeps every citation a citation; a reference that
+comes over from another draft joins the one already there if it is the same
+source. A marker is only ever removed by removing its reference; one whose
+reference cannot be found shows `[?]` rather than vanishing, and a bracketed
+number typed as plain text is pointed out under the references, since it looks
+like a citation and exports as characters. Opening a draft brings it up to
+these rules: duplicate references merged, markers renumbered, reference text
+re-read from its source.
+
+Text pasted into a draft from outside Corpus arrives as plain paragraphs: a blank line starts a new
 one, a wrapped line closes up. Nothing else comes with it — no fonts, no
 colours — because a document that changes appearance depending on where a
 paragraph came from is not a document.
@@ -725,6 +741,7 @@ lib/
   ingest/            pdf, epub, text, web parsers, and the token cleaner
   pipeline/          extract, resolve, entry, verify, tag, ocr, transcribe, poll, brief
   markers.ts         the one citation grammar every reader of an entry agrees on
+  cite-markers.ts    the same for a draft: the editor, the save and the Word export
   sentences.ts       sentence splitting that knows "U.S." is not the end of one
   feeds.ts           feeds, their items, and what has already been read
   curator.ts         what your discards teach the feeds: standing, patterns, vetoes

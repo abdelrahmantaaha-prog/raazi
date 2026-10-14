@@ -9,8 +9,8 @@ import {
   readBody,
 } from "@/lib/http";
 import {
-  addCitation,
   citationsFor,
+  citeReference,
   getDraft,
   removeCitation,
   updateCitation,
@@ -44,7 +44,11 @@ export async function GET(_req: Request, ctx: { params: Promise<{ id: string }> 
   return NextResponse.json({ citations: citationsFor(id) });
 }
 
-/** Adds a reference — one of yours, or one from outside the library. */
+/**
+ * Cites a reference — one of yours, or one from outside the library — and
+ * says which id the marker should carry: a new reference's, or that of the
+ * one already in the list when it is the same reference.
+ */
 export async function POST(req: Request, ctx: { params: Promise<{ id: string }> }) {
   const id = asId((await ctx.params).id);
   if (id === null) return badRequest("Not a valid id.");
@@ -57,12 +61,15 @@ export async function POST(req: Request, ctx: { params: Promise<{ id: string }> 
   if (origin !== "library" && origin !== "outside") return badRequest("Unknown origin.");
   const sourceId = optionalId(body.sourceId);
   const mentionId = optionalId(body.mentionId);
-  if (sourceId === null || mentionId === null) return badRequest("sourceId and mentionId must be ids.");
+  const chunkId = optionalId(body.chunkId);
+  if (sourceId === null || mentionId === null || chunkId === null) {
+    return badRequest("sourceId, mentionId and chunkId must be ids.");
+  }
 
   if (!getDraft(id)) return notFound("No such draft.");
 
   try {
-    const citations = addCitation(id, {
+    const { id: cited, citations } = citeReference(id, {
       origin,
       text: fields.text ?? undefined,
       author: fields.author ?? null,
@@ -73,8 +80,10 @@ export async function POST(req: Request, ctx: { params: Promise<{ id: string }> 
       quote: fields.quote ?? null,
       source_id: sourceId ?? null,
       mention_id: mentionId ?? null,
+      chunk_id: chunkId ?? null,
     });
-    return NextResponse.json({ citations });
+    if (cited === null) return badRequest("A reference needs a title, an author, an address or some words.");
+    return NextResponse.json({ citations, cited });
   } catch (err) {
     if (/FOREIGN KEY/i.test((err as Error).message)) {
       return notFound("The source or passage this cites no longer exists.");

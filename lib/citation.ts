@@ -17,6 +17,10 @@
  *
  * It is dropped when it repeats the author, which is the ordinary case for a
  * wire story filed under the outlet's own name ("Reuters, Reuters").
+ *
+ * Two habits of web pages are undone on the way: a byline that begins "By",
+ * and a headline that ends with the site's name ("… | Statista"), which with
+ * the outlet added read "…, Statista, Statista".
  */
 export function formatCitation(parts: {
   author?: string | null;
@@ -25,16 +29,27 @@ export function formatCitation(parts: {
   locator?: string | null;
   outlet?: string | null;
 }): string {
+  const outlet = parts.outlet?.trim() || null;
+  const title = withoutSiteName(parts.title.trim(), outlet);
   const locator =
-    parts.locator && parts.locator.trim() && parts.locator.trim() !== parts.title.trim()
+    parts.locator && parts.locator.trim() && parts.locator.trim() !== title && parts.locator.trim() !== parts.title.trim()
       ? parts.locator.trim()
       : null;
 
-  const author = parts.author?.trim() || null;
-  const outlet = parts.outlet?.trim() || null;
-  const publication = outlet && !same(outlet, author) && !same(outlet, parts.title) ? outlet : null;
+  const author = parts.author?.trim().replace(/^by\s+/i, "") || null;
+  const publication = outlet && !same(outlet, author) && !same(outlet, title) ? outlet : null;
 
-  return [author, parts.title, publication, parts.year, locator].filter(Boolean).join(", ");
+  return [author, title, publication, parts.year?.trim() || null, locator].filter(Boolean).join(", ");
+}
+
+/** "Headline | Outlet" → "Headline", when the tail is the outlet's name. */
+function withoutSiteName(title: string, outlet: string | null): string {
+  if (!outlet) return title;
+  const m = /^(.*\S)\s+[|–—-]\s+([^|–—-]+)$/.exec(title);
+  if (!m) return title;
+  const tail = m[2].trim().toLowerCase().replace(/\.(com|org|net|co\.il|co\.uk)$/, "");
+  const name = outlet.toLowerCase().replace(/\.(com|org|net|co\.il|co\.uk)$/, "");
+  return same(tail, name) ? m[1] : title;
 }
 
 /** Two names for the same thing, give or take case and a leading "The". */

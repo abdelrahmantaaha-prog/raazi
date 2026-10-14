@@ -2,6 +2,7 @@ import { db } from "./db";
 import { htmlToText } from "./richtext";
 import { formatCitation } from "./citation";
 import { formatLocator } from "./chunk";
+import { normalizeMarkers, retargetMarkers, stripMarkers } from "./cite-markers";
 import type { Locator } from "./types";
 
 /**
@@ -102,9 +103,13 @@ export function saveDraft(
   const refuse = wouldEmpty && current.body_md.trim() !== "";
 
   // Reduced to the allowed markup before anything else reads it, so the
-  // plain-text form below and the row itself both come from the clean copy.
+  // plain-text form below and the row itself both come from the clean copy;
+  // and every citation marker numbered against the references as they stand
+  // here, whatever the page that sent it believed.
   const html =
-    refuse || patch.body_html === undefined ? current.body_html : sanitizeHtml(patch.body_html);
+    refuse || patch.body_html === undefined
+      ? current.body_html
+      : normalizeMarkers(sanitizeHtml(patch.body_html), citationsFor(id));
 
   // The plain-text form is derived from the HTML rather than sent alongside it,
   // so the two cannot drift apart.
@@ -231,9 +236,10 @@ export function reorderNotes(draftId: number, ids: number[]): DraftNote[] {
  * are folded into `strong` and `em` so there is one spelling of each.
  *
  * Attributes are not filtered but rebuilt: the only ones that survive are
- * `href` on a link, and only when it is http or https, and `data-note` on a
- * span, and only when it is a number — the citation marker the export reads.
- * Every event handler, style, class, id and src goes, whatever it was called.
+ * `href` on a link, and only when it is http or https, and on a citation
+ * marker its `data-cite` and `data-note` numbers and `contenteditable="false"`
+ * (lib/cite-markers.ts). Every event handler, style, class, id and src goes,
+ * whatever it was called.
  *
  * Written against the same tokeniser idea as lib/richtext.ts rather than a
  * DOM library: this runs on the server, the input is small, and a parser we
@@ -379,16 +385,19 @@ export function sanitizeHtml(html: string): string {
       if (!/^https?:\/\/[^\s]+$/i.test(clean)) continue;
       rebuilt = ` href="${escapeAttr(clean)}" rel="noopener noreferrer"`;
     } else if (tag === "span") {
-      const note = attr(attrs, "data-note");
-      const cite = attr(attrs, "data-cite");
-      // A span exists here for one reason: to carry a citation marker.
-      if (!note || !/^\d{1,6}$/.test(note.trim())) continue;
-      // The id has to survive the save. Without it a reopened draft could only
-      // match markers to references by position, so a reference deleted before
-      // the autosave caught up shifted every later marker onto its neighbour's
-      // source and dropped the last one — footnotes lost, others misattributed.
-      if (cite && /^\d{1,12}$/.test(cite.trim())) rebuilt = ` data-cite="${cite.trim()}"`;
-      rebuilt += ` data-note="${note.trim()}"`;
+      const note = attr(attrs, "data-note")?.trim();
+      const cite = attr(attrs, "data-cite")?.trim();
+      const hasCite = !!cite && /^\d{1,12}$/.test(cite);
+      const hasNote = !!note && /^\d{1,6}$/.test(note);
+      // A span exists here for one reason: to carry a citation marker. The id
+      // is what it points at; the index is only for older copies of Corpus.
+      if (!hasCite && !hasNote) continue;
+      if (hasCite) rebuilt = ` data-cite="${cite}"`;
+      if (hasNote) rebuilt += ` data-note="${note}"`;
+      // Kept uneditable through the save. Stripping this made every reopened
+      // marker a span you could type into, and the export drops whatever is
+      // inside a marker, so the words typed there vanished from the Word file.
+      rebuilt += ` contenteditable="false"`;
     }
 
     out += `<${tag}${rebuilt}>`;
@@ -449,17 +458,82 @@ export function renderCitation(c: {
   return url ? `${parts}${parts ? ". " : ""}${url}` : parts;
 }
 
-export function addCitation(
-  draftId: number,
-  c: Partial<DraftCitation> & { origin?: "library" | "outside" }
-): DraftCitation[] {
-  const next =
-    ((
-      db()
-        .prepare("SELECT COALESCE(MAX(seq), -1) AS m FROM draft_citations WHERE draft_id=?")
-        .get(draftId) as { m: number }
-    ).m ?? -1) + 1;
+interface SourceRow {
+  title: string;
+  author: string | null;
+  year: string | null;
+  outlet: string | null;
+  url: string | null;
+}
 
+function sourceRow(id: number | null | undefined): SourceRow | undefined {
+  if (!id) return undefined;
+  // An article often has a publication date and no year of its own; a
+  // reference with no date at all reads as undated when it is not.
+  return db()
+    .prepare(
+      `SELECT title, author, outlet, url,
+              COALESCE(NULLIF(TRIM(year), ''), substr(published_at, 1, 4)) AS year
+         FROM sources WHERE id=?`
+    )
+    .get(id) as SourceRow | undefined;
+}
+
+/**
+ * The heading a chunker gives the whole of an article. It names no place in
+ * the source, so as a locator it only made a footnote read "…, 2026, Text"
+ * and made a second citation of the same article look like a different one.
+ */
+const NOT_A_PLACE = /^(text|body|article|content|main|full text|untitled)$/i;
+
+function place(locator: string | null | undefined): string | null {
+  const l = locator?.trim();
+  return l && !NOT_A_PLACE.test(l) ? l : null;
+}
+
+/** Where a passage sits, from its chunk: a page, a timecode or a chapter. */
+function placeOfChunk(chunkId: number | null | undefined, sourceId: number | null | undefined): string | null {
+  if (!chunkId || !sourceId) return null;
+  const c = db()
+    .prepare("SELECT locator_json FROM chunks WHERE id=? AND source_id=?")
+    .get(chunkId, sourceId) as { locator_json: string } | undefined;
+  if (!c) return null;
+  try {
+    return formatLocator(JSON.parse(c.locator_json) as Locator) || null;
+  } catch {
+    return null;
+  }
+}
+
+const squash = (s: string | null | undefined) =>
+  (s ?? "").normalize("NFKC").toLowerCase().replace(/[\s.,;:]+/g, " ").trim();
+const bareUrl = (s: string | null | undefined) => (s ?? "").trim().toLowerCase().replace(/\/+$/, "");
+
+/**
+ * Whether two references are the same reference.
+ *
+ * The same source at the same place is one reference however it was reached:
+ * the shelf, the library search and the reader's Send to Write each used to
+ * add a row of their own, so a source cited three ways sat in the list three
+ * times under three numbers. Different pages of one book are different
+ * references, as a footnote style would have them.
+ */
+export function sameReference(
+  a: Pick<DraftCitation, "source_id" | "url" | "locator" | "text">,
+  b: Pick<DraftCitation, "source_id" | "url" | "locator" | "text">
+): boolean {
+  const samePlace = squash(place(a.locator)) === squash(place(b.locator));
+  if (a.source_id && b.source_id) return a.source_id === b.source_id && samePlace;
+  if (a.url && b.url) return bareUrl(a.url) === bareUrl(b.url) && samePlace;
+  if (a.source_id || b.source_id || a.url || b.url) return false;
+  return squash(a.text) !== "" && squash(a.text) === squash(b.text);
+}
+
+/** The reference's fields, completed from its source, and the line it reads as. */
+function completeReference(
+  c: Partial<DraftCitation> & { chunk_id?: number | null },
+  s: SourceRow | undefined
+) {
   // A citation of something in the library is completed from the source
   // itself, whatever the caller happened to pass.
   //
@@ -467,23 +541,14 @@ export function addCitation(
   // passage), the shelf beside the draft, and a mention in the reader — and
   // each used to send a different subset of the fields. The shelf sent only
   // the rendered text and a source id, so every reference made from it landed
-  // with author, title, year and outlet all null; the reference list had
-  // nothing to show but a string, and nothing to re-render when the citation
-  // style changed. Filling the gaps from `source_id` here means one rule
-  // instead of four, and a reference that knows what it refers to.
-  const s = c.source_id
-    ? (db()
-        .prepare("SELECT title, author, year, outlet, url FROM sources WHERE id=?")
-        .get(c.source_id) as
-        | { title: string; author: string | null; year: string | null; outlet: string | null; url: string | null }
-        | undefined)
-    : undefined;
-
+  // with author, title, year and outlet all null. Filling the gaps from
+  // `source_id` here means one rule instead of four, and a reference that
+  // knows what it refers to.
   const author = c.author?.trim() || s?.author?.trim() || null;
   const title = c.title?.trim() || s?.title?.trim() || null;
   const year = c.year?.trim() || s?.year?.trim() || null;
   const outlet = c.outlet?.trim() || s?.outlet?.trim() || null;
-  const locator = c.locator?.trim() || null;
+  const locator = place(c.locator) ?? placeOfChunk(c.chunk_id, c.source_id);
 
   // The source's own address, so the exported footnote becomes a link a reader
   // can follow — which for an article is the whole difference between a
@@ -491,34 +556,75 @@ export function addCitation(
   let url = c.url?.trim() || null;
   if (!url && s?.url && /^https?:\/\//i.test(s.url)) url = s.url;
 
-  const text =
-    c.text?.trim() ||
-    (title ? formatCitation({ author, title, year, outlet, locator }) : renderCitation({ author, year, locator, url }));
-  if (!text) return citationsFor(draftId);
+  // A reference to the library is always rendered from its parts. The line
+  // the page sent was whatever that button had on screen — with a section
+  // heading as the place, or the outlet repeated — and it went into the
+  // footnote as sent. Only a reference with no source behind it keeps the
+  // words it was given.
+  const rendered = title
+    ? formatCitation({ author, title, year, outlet, locator })
+    : renderCitation({ author, year, locator, url });
+  const text = (s ? rendered : c.text?.trim() || rendered) || c.text?.trim() || "";
+  return { author, title, year, outlet, locator, url, text };
+}
 
-  db()
-    .prepare(
-      `INSERT INTO draft_citations
-         (draft_id, origin, text, author, title, year, locator, outlet, url, quote, source_id, mention_id, seq)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
-    )
-    .run(
-      draftId,
-      c.origin ?? "library",
-      text,
-      author,
-      title,
-      year,
-      locator,
-      outlet,
-      url,
-      c.quote ?? null,
-      c.source_id ?? null,
-      c.mention_id ?? null,
-      next
-    );
+/**
+ * Cites a reference in a draft: the one already in its list when it is the
+ * same reference, a new one otherwise. Returns the id to put in the marker.
+ */
+export function citeReference(
+  draftId: number,
+  c: Partial<DraftCitation> & { origin?: "library" | "outside"; chunk_id?: number | null }
+): { id: number | null; citations: DraftCitation[] } {
+  const s = sourceRow(c.source_id);
+  const ref = completeReference(c, s);
+  if (!ref.text) return { id: null, citations: citationsFor(draftId) };
 
-  return citationsFor(draftId);
+  const existing = citationsFor(draftId).find((r) =>
+    sameReference(r, { source_id: c.source_id ?? null, url: ref.url, locator: ref.locator, text: ref.text })
+  );
+  if (existing) return { id: existing.id, citations: citationsFor(draftId) };
+
+  const next =
+    ((
+      db()
+        .prepare("SELECT COALESCE(MAX(seq), -1) AS m FROM draft_citations WHERE draft_id=?")
+        .get(draftId) as { m: number }
+    ).m ?? -1) + 1;
+
+  const id = Number(
+    db()
+      .prepare(
+        `INSERT INTO draft_citations
+           (draft_id, origin, text, author, title, year, locator, outlet, url, quote, source_id, mention_id, seq)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
+      )
+      .run(
+        draftId,
+        c.origin ?? "library",
+        ref.text,
+        ref.author,
+        ref.title,
+        ref.year,
+        ref.locator,
+        ref.outlet,
+        ref.url,
+        c.quote ?? null,
+        c.source_id ?? null,
+        c.mention_id ?? null,
+        next
+      ).lastInsertRowid
+  );
+
+  return { id, citations: citationsFor(draftId) };
+}
+
+/** Adds a reference (or finds the one already there) and returns the list. */
+export function addCitation(
+  draftId: number,
+  c: Partial<DraftCitation> & { origin?: "library" | "outside"; chunk_id?: number | null }
+): DraftCitation[] {
+  return citeReference(draftId, c).citations;
 }
 
 export function updateCitation(
@@ -569,7 +675,94 @@ export function updateCitation(
   return citationsFor(draftId);
 }
 
+/**
+ * Removes a reference, and its markers with it.
+ *
+ * The page takes them out of the text it is showing too; doing it here as
+ * well means a draft is never left citing a reference that is not there,
+ * whatever happens to the page's next save.
+ */
 export function removeCitation(draftId: number, id: number): DraftCitation[] {
-  db().prepare("DELETE FROM draft_citations WHERE id=? AND draft_id=?").run(id, draftId);
+  const tx = db().transaction(() => {
+    db().prepare("DELETE FROM draft_citations WHERE id=? AND draft_id=?").run(id, draftId);
+    const row = db().prepare("SELECT body_html FROM drafts WHERE id=?").get(draftId) as
+      | { body_html: string | null }
+      | undefined;
+    if (!row?.body_html) return;
+    const html = normalizeMarkers(stripMarkers(row.body_html, id), citationsFor(draftId));
+    if (html !== row.body_html) {
+      db().prepare("UPDATE drafts SET body_html=?, body_md=? WHERE id=?").run(html, htmlToText(html), draftId);
+    }
+  });
+  tx();
   return citationsFor(draftId);
+}
+
+/**
+ * Brings a draft's references and markers up to the current rules.
+ *
+ * - A marker from before ids were recorded gets the id at its index — what
+ *   the desk has always shown for it — so nothing later can shift it.
+ * - A reference to the library is re-rendered from its parts, filling any
+ *   the source can supply; one typed by hand keeps its words.
+ * - The same reference listed twice becomes one: every marker for the later
+ *   copy points at the earlier, and the later copy goes.
+ * - Every marker is numbered by first appearance.
+ *
+ * Idempotent, and it changes what a draft *cites* never; only how. Run when a
+ * draft is opened, so drafts written under the old rules — or pulled from a
+ * laptop still running them — are put right before you see them. Does not
+ * touch `updated_at`: a repair is not an edit.
+ */
+export function repairCitations(draftId: number): boolean {
+  let changed = false;
+  const tx = db().transaction(() => {
+    const row = db().prepare("SELECT body_html FROM drafts WHERE id=?").get(draftId) as
+      | { body_html: string | null }
+      | undefined;
+    if (!row) return;
+    const before = row.body_html ?? "";
+    // Legacy markers first, against the list exactly as it is stored.
+    let html = normalizeMarkers(before, citationsFor(draftId));
+
+    const kept: DraftCitation[] = [];
+    for (const r of citationsFor(draftId)) {
+      const twin = kept.find((k) => sameReference(k, r));
+      if (twin) {
+        html = retargetMarkers(html, r.id, twin.id);
+        db().prepare("DELETE FROM draft_citations WHERE id=?").run(r.id);
+        changed = true;
+        continue;
+      }
+      kept.push(r);
+      if (r.origin !== "library" || !r.source_id) continue;
+      const s = sourceRow(r.source_id);
+      if (!s) continue;
+      const ref = completeReference({ ...r, text: undefined }, s);
+      if (
+        ref.text !== r.text ||
+        ref.locator !== r.locator ||
+        ref.year !== r.year ||
+        ref.url !== r.url ||
+        ref.author !== r.author ||
+        ref.title !== r.title ||
+        ref.outlet !== r.outlet
+      ) {
+        db()
+          .prepare(
+            "UPDATE draft_citations SET text=?, author=?, title=?, year=?, locator=?, outlet=?, url=? WHERE id=?"
+          )
+          .run(ref.text, ref.author, ref.title, ref.year, ref.locator, ref.outlet, ref.url, r.id);
+        changed = true;
+      }
+    }
+
+    html = normalizeMarkers(html, citationsFor(draftId));
+    if (html !== before) {
+      db().prepare("UPDATE drafts SET body_html=?, body_md=? WHERE id=?").run(html, htmlToText(html), draftId);
+      changed = true;
+    }
+  });
+  tx();
+  return changed;
 }

@@ -1,12 +1,17 @@
 "use client";
 
 import { useCallback, useEffect, useRef, useState } from "react";
-import { citationMarker, sanitizeDraftHtml } from "./citations";
+import {
+  clipboardHtml,
+  markerHtml,
+  numbering,
+  readClip,
+  renumberDom,
+  retargetClip,
+  type PortableRef,
+} from "./citations";
 
-export interface CitationRef {
-  id: number;
-  text: string;
-}
+export type CitationRef = PortableRef;
 
 /**
  * A rich text editor, built on contenteditable and nothing else.
@@ -19,31 +24,47 @@ export interface CitationRef {
  * so far refused every dependency it could write instead.
  *
  * The one thing execCommand cannot do is citations, so those are inserted
- * directly as a marked, uneditable span. They carry the reference's id — the
- * note text lives with the draft — so correcting a reference updates every
- * place it appears rather than the first one you find, and the number shown
- * is recomputed from the list's order whenever that changes.
+ * directly as a marked, uneditable span carrying the reference's id (see
+ * lib/cite-markers.ts). The number a marker shows is redrawn on every edit
+ * from the order references are first cited — the order the export numbers
+ * its footnotes in — so the screen and the Word file always agree.
  */
 export function Editor({
   html,
   citations,
+  draftId,
   onChange,
   onCite,
   onLibrary,
+  onAdopt,
   dir,
 }: {
   html: string;
+  /** The draft's references, in stored order. */
   citations: CitationRef[];
+  /** The open draft, written onto the clipboard so a paste knows where it came from. */
+  draftId: number | null;
   onChange: (html: string) => void;
   /** Asked for when you press Cite with nothing selected to attach it to. */
   onCite: () => void;
   /** Opens the search for something in the library to cite. */
   onLibrary?: () => void;
+  /**
+   * Makes references pasted from elsewhere this draft's own: given what each
+   * pasted marker pointed at, returns the id it should point at here, and the
+   * reference list as it now stands.
+   */
+  onAdopt?: (refs: PortableRef[]) => Promise<{ ids: Map<number, number>; citations: CitationRef[] }>;
   dir?: "ltr" | "rtl";
 }) {
   const box = useRef<HTMLDivElement>(null);
   /** What we last wrote into the box, so we don't fight the cursor. */
   const mine = useRef<string>("");
+  /** The latest references and draft, for handlers that outlive a render. */
+  const refs = useRef<CitationRef[]>(citations);
+  refs.current = citations;
+  const draft = useRef<number | null>(draftId);
+  draft.current = draftId;
 
   // Only ever push HTML in when it did not come from here. Re-setting innerHTML
   // on every keystroke would drop the caret to the start of the document, which
@@ -72,12 +93,27 @@ export function Editor({
     }
   }, []);
 
+  /**
+   * Hands the box's HTML up, with every marker numbered for where it now
+   * stands. Moving a sentence changes which reference is cited first, so the
+   * numbers are redrawn on every edit, not only when the list changes.
+   */
   const emit = useCallback(() => {
     const el = box.current;
     if (!el) return;
+    renumberDom(el, refs.current);
     mine.current = el.innerHTML;
     onChange(el.innerHTML);
   }, [onChange]);
+
+  // A reference added, removed or merged: redraw the markers to match.
+  useEffect(() => {
+    const el = box.current;
+    if (el && renumberDom(el, citations)) {
+      mine.current = el.innerHTML;
+      onChange(el.innerHTML);
+    }
+  }, [citations, onChange]);
 
   /**
    * What the caret is standing in, so the toolbar can show it.
@@ -149,73 +185,102 @@ export function Editor({
     [run, active.block]
   );
 
-  /** Puts a citation marker where the caret is. */
+  /** Puts a marker for a reference already in the list where the caret is. */
   const insertCitation = useCallback(
-    (index: number) => {
+    (refId: number) => {
       const el = box.current;
-      const ref = citations[index];
-      if (!el || !ref) return;
+      if (!el || !refs.current.some((r) => r.id === refId)) return;
       el.focus();
       // contenteditable="false" keeps the marker atomic: backspace removes the
       // whole thing rather than eating the number a digit at a time.
-      document.execCommand("insertHTML", false, citationMarker(ref.id, index));
+      document.execCommand("insertHTML", false, markerHtml(refId) + "&nbsp;");
       emit();
     },
-    [emit, citations]
+    [emit]
   );
 
-  // Paste as plain text. Pasting from a web page otherwise drags in fonts,
-  // colours and background images, and a document that changes appearance
-  // depending on where a paragraph came from is not a document.
+  // Copy, cut and paste.
+  //
+  // Copying out of a draft writes the selection as markup, each marker
+  // carrying the reference it points at (see ./citations.ts). Pasting that
+  // back — into this draft or another, now or after a reload — keeps every
+  // marker a marker: one whose reference is in this draft stays pointed at
+  // it, and one from elsewhere brings its reference along, joining the one
+  // already here when the same source is cited rather than adding it twice.
+  //
+  // Anything from outside Corpus arrives as plain text. Pasting from a web
+  // page otherwise drags in fonts, colours and background images, and a
+  // document that changes appearance depending on where a paragraph came from
+  // is not a document.
   //
   // As *paragraphs*, though, not as one block of text with the line breaks
   // left in. `insertText` turns every newline into a `<br>`, and a `<br>` is
   // the one piece of markup the screen and the Word export disagree about:
   // tight on screen, a full paragraph in the exported file, because
   // htmlToDocx has to end the block at one. Two pages pasted out of a PDF
-  // arrived looking like prose and exported as sixty paragraphs.
-  //
-  // So a blank line starts a new paragraph, and a single newline — which in
-  // pasted text is almost always a wrapped line rather than a break the
-  // author meant — closes up into a space.
-  /**
-   * The last thing cut or copied out of this editor.
-   *
-   * Moving a paragraph is cut and paste, and pasting as plain text turned
-   * every citation marker in it into the literal characters `[3]` — no longer
-   * renumbered, no longer removed with its reference, and exported as text
-   * rather than a footnote. Matching the clipboard's plain text against what
-   * we last took out of here tells us the paste is a move rather than
-   * something from outside, so it can go back as markup with its markers
-   * intact, while a paragraph from a web page still arrives as plain words.
-   */
-  const taken = useRef<{ text: string; html: string } | null>(null);
-
+  // arrived looking like prose and exported as sixty paragraphs. So a blank
+  // line starts a new paragraph, and a single newline — which in pasted text
+  // is almost always a wrapped line rather than a break the author meant —
+  // closes up into a space.
   useEffect(() => {
     const el = box.current;
     if (!el) return;
 
-    const remember = () => {
+    const onCopy = (e: ClipboardEvent) => {
       const sel = document.getSelection();
-      if (!sel || sel.isCollapsed || !sel.anchorNode || !el.contains(sel.anchorNode)) return;
+      if (!sel || sel.isCollapsed || !sel.rangeCount || !e.clipboardData) return;
       const range = sel.getRangeAt(0);
-      const holder = document.createElement("div");
-      holder.appendChild(range.cloneContents());
-      taken.current = { text: sel.toString(), html: holder.innerHTML };
+      if (!el.contains(range.commonAncestorContainer)) return;
+      e.preventDefault();
+      e.clipboardData.setData("text/plain", sel.toString());
+      e.clipboardData.setData("text/html", clipboardHtml(range.cloneContents(), draft.current, refs.current));
+      if (e.type === "cut") {
+        document.execCommand("delete");
+        emit();
+      }
+    };
+
+    const putBack = (html: string, at: Range | null) => {
+      el.focus();
+      if (at) {
+        const sel = window.getSelection();
+        sel?.removeAllRanges();
+        sel?.addRange(at);
+      }
+      document.execCommand("insertHTML", false, html);
+      emit();
     };
 
     const onPaste = (e: ClipboardEvent) => {
       e.preventDefault();
-      const text = e.clipboardData?.getData("text/plain") ?? "";
+      const clip = readClip(e.clipboardData?.getData("text/html") ?? "");
 
-      // A move: put back exactly what was taken, markers and all.
-      const held = taken.current;
-      if (held && text && held.text === text) {
-        document.execCommand("insertHTML", false, sanitizeDraftHtml(held.html));
-        emit();
+      if (clip) {
+        const here = new Set(refs.current.map((r) => r.id));
+        const sameDraft = clip.draftId !== null && clip.draftId === draft.current;
+        // A marker needs adopting when it is from another draft, or from this
+        // one but its reference has been removed since it was copied.
+        const adopt = [...clip.refs]
+          .filter(([id, ref]) => ref !== null && !(sameDraft && here.has(id)))
+          .map(([, ref]) => ref as PortableRef);
+        if (!adopt.length || !onAdopt) {
+          putBack(retargetClip(clip, new Map()), null);
+          return;
+        }
+        // The caret is remembered across the round trip to the server, so the
+        // text lands where it was pasted rather than wherever focus wandered.
+        const sel = window.getSelection();
+        const at = sel && sel.rangeCount ? sel.getRangeAt(0).cloneRange() : null;
+        void onAdopt(adopt)
+          .then(({ ids, citations: next }) => {
+            if (next.length) refs.current = next;
+            putBack(retargetClip(clip, ids), at);
+          })
+          .catch(() => putBack(retargetClip(clip, new Map()), at));
         return;
       }
 
+      const text = e.clipboardData?.getData("text/plain") ?? "";
       const paragraphs = text
         .replace(/\r\n?/g, "\n")
         .split(/\n\s*\n+/)
@@ -234,15 +299,18 @@ export function Editor({
       emit();
     };
 
-    el.addEventListener("copy", remember);
-    el.addEventListener("cut", remember);
+    el.addEventListener("copy", onCopy);
+    el.addEventListener("cut", onCopy);
     el.addEventListener("paste", onPaste);
     return () => {
-      el.removeEventListener("copy", remember);
-      el.removeEventListener("cut", remember);
+      el.removeEventListener("copy", onCopy);
+      el.removeEventListener("cut", onCopy);
       el.removeEventListener("paste", onPaste);
     };
-  }, [emit]);
+  }, [emit, onAdopt]);
+
+  /** Each reference's number as the text stands, for the "Cite existing" list. */
+  const numbers = numbering(html, citations);
 
   return (
     <div className="rounded-lg border border-[var(--color-rule)] bg-white">
@@ -303,23 +371,25 @@ export function Editor({
             className="ml-1 max-w-[13rem] rounded border border-[var(--color-rule)] bg-white px-1.5 py-1 text-xs"
             value=""
             onChange={(e) => {
-              const i = Number(e.target.value);
-              if (Number.isFinite(i) && e.target.value !== "") insertCitation(i);
+              const refId = Number(e.target.value);
+              if (e.target.value !== "" && Number.isFinite(refId)) insertCitation(refId);
               e.target.value = "";
             }}
             title="Cite something already in your references"
           >
             <option value="">Cite existing…</option>
-            {citations.map((c, i) => (
-              <option key={c.id} value={i}>
-                [{i + 1}] {c.text.slice(0, 44)}
-              </option>
-            ))}
+            {[...citations]
+              .sort((a, b) => (numbers.get(a.id) ?? Infinity) - (numbers.get(b.id) ?? Infinity))
+              .map((c) => (
+                <option key={c.id} value={c.id}>
+                  {numbers.has(c.id) ? `[${numbers.get(c.id)}]` : "[–]"} {c.text.slice(0, 44)}
+                </option>
+              ))}
           </select>
         )}
 
         <span className="ml-auto text-[0.68rem] text-[var(--color-muted)]">
-          Pastes arrive as plain text
+          Pastes from outside Corpus arrive as plain text
         </span>
       </div>
 

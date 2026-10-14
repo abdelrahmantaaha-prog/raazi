@@ -7,7 +7,15 @@ import { formatDateTime, relativeDate } from "@/lib/dates";
 import { Button } from "../components/ui";
 import { Modal } from "../components/Modal";
 import { Editor } from "./Editor";
-import { citationMarker, renumberDom, renumberHtml } from "./citations";
+import {
+  markerHtml,
+  normalizeMarkers,
+  numbering,
+  removeMarkersDom,
+  renumberDom,
+  strayBrackets,
+  type PortableRef,
+} from "./citations";
 import { LibraryCite, type LibraryPick } from "./LibraryCite";
 import type { CitablePassage } from "@/lib/cite-search";
 import { ArticleLink, hostOf } from "../components/ArticleLink";
@@ -16,17 +24,7 @@ import { TextWebCheck } from "../components/TextWebCheck";
 import { LitReviewButton } from "../components/LitReview";
 import type { WebReport } from "@/lib/web-checks";
 
-interface Reference {
-  id: number;
-  origin: "library" | "outside";
-  text: string;
-  author: string | null;
-  title: string | null;
-  year: string | null;
-  locator: string | null;
-  outlet: string | null;
-  url: string | null;
-}
+type Reference = PortableRef;
 
 interface DraftSummary {
   id: number;
@@ -43,6 +41,7 @@ interface Note {
   citation: string | null;
   entity_id: number | null;
   source_id: number | null;
+  chunk_id: number | null;
 }
 
 interface Hit {
@@ -189,14 +188,16 @@ export function WritingDesk({
     setLoaded(false);
     setPaneError(null);
     try {
-      const res = await fetch(`/api/drafts/${draftId}`, { cache: "no-store" });
+      // Opening, unlike re-reading the shelf, first puts the draft's citations
+      // right on the server: duplicates merged, markers numbered.
+      const res = await fetch(`/api/drafts/${draftId}?repair=1`, { cache: "no-store" });
       const data = res.ok ? await res.json() : null;
       if (!data?.draft) {
         setPaneError("That draft is no longer here.");
         return;
       }
       const citations: Reference[] = data.citations ?? [];
-      const html = renumberHtml(
+      const html = normalizeMarkers(
         data.draft.body_html || (data.draft.body_md ? `<p>${escapeHtml(data.draft.body_md)}</p>` : ""),
         citations
       );
@@ -286,16 +287,6 @@ export function WritingDesk({
       if (saveTimer.current) clearTimeout(saveTimer.current);
     };
   }, [title, body, id, loaded]);
-
-  // Keep the in-text markers honest whenever the reference list changes:
-  // the number each shows and the index the export reads are both derived from
-  // the list's current order, never stored. Done on the live DOM so the caret
-  // stays put, and emitted as a body change so it is saved.
-  useEffect(() => {
-    const box = document.querySelector<HTMLElement>('[role="textbox"][aria-label="Draft"]');
-    if (!box) return;
-    if (renumberDom(box, refs)) setBody(box.innerHTML);
-  }, [refs]);
 
   /**
    * Reads one list out of a pane response, or throws with the server's reason.
@@ -497,8 +488,13 @@ export function WritingDesk({
     return { focus, context: block && box.contains(block) ? (block.textContent ?? undefined) : undefined };
   };
 
-  /** Puts markup where the cursor is — or was, when a dialog took it — in the editor's own terms. */
-  const insert = (html: string) => {
+  /**
+   * Puts markup where the cursor is — or was, when a dialog took it — in the
+   * editor's own terms, with the markers numbered against `list`: the
+   * references as the server just returned them, which this render's `refs`
+   * does not yet hold.
+   */
+  const insert = (html: string, list: Reference[] = refs) => {
     const box = document.querySelector<HTMLElement>('[role="textbox"][aria-label="Draft"]');
     if (!box) return;
     box.focus();
@@ -510,6 +506,7 @@ export function WritingDesk({
       sel?.addRange(range);
     }
     document.execCommand("insertHTML", false, html);
+    renumberDom(box, list);
     setBody(box.innerHTML);
   };
 
@@ -530,7 +527,7 @@ export function WritingDesk({
    * the finished piece does not care which of your bookshelves a book was on.
    */
   const cite = async (
-    ref: Partial<Reference> & { quote?: string; sourceId?: number; mentionId?: number },
+    ref: Partial<Reference> & { quote?: string; sourceId?: number; mentionId?: number; chunkId?: number },
     opts: { withQuote?: string } = {}
   ) => {
     if (id === null) return;
@@ -541,19 +538,23 @@ export function WritingDesk({
         headers: { "content-type": "application/json" },
         body: JSON.stringify(ref),
       });
-      const citations = await listFrom<Reference>(res, "citations");
+      const data = (await res.json().catch(() => ({}))) as { citations?: Reference[]; cited?: number; error?: string };
+      if (!res.ok || typeof data.cited !== "number") throw new Error(data.error ?? "That didn't work.");
+      const citations = data.citations ?? [];
       setRefs(citations);
 
-      // The marker carries the reference's id; the number it shows is only
-      // the id's position in the list today, and is redrawn when that moves.
-      const index = citations.length - 1;
-      if (index >= 0) {
-        const marker = citationMarker(citations[index].id, index);
-        // Quoted, the sentence goes in as a block quote with its marker at the end.
-        insert(
-          opts.withQuote ? `<blockquote>${escapeHtml(opts.withQuote)} ${marker}</blockquote><p><br></p>` : marker
-        );
-      }
+      // The marker carries the id the server chose — the reference already in
+      // the list when this one is the same, so citing a source twice gives it
+      // one number, not two. The number it shows is drawn from where it is
+      // first cited, and redrawn as the text moves.
+      const marker = markerHtml(data.cited);
+      // Quoted, the sentence goes in as a block quote with its marker at the end.
+      insert(
+        opts.withQuote
+          ? `<blockquote>${escapeHtml(opts.withQuote)} ${marker}</blockquote><p><br></p>`
+          : `${marker}&nbsp;`,
+        citations
+      );
       setCiteOpen(false);
       setLibraryOpen(false);
     } catch (err) {
@@ -579,6 +580,7 @@ export function WritingDesk({
         locator: p.locator || null,
         quote: p.quote,
         sourceId: p.source_id,
+        chunkId: p.chunk_id,
       },
       withQuote ? { withQuote: p.quote } : {}
     );
@@ -609,6 +611,13 @@ export function WritingDesk({
   };
 
   /** Fetches the draft's web check again once one finishes. */
+  // The reference list in the order the text cites it, which is the order
+  // the export numbers footnotes in; references cited nowhere come last.
+  const numbers = numbering(body, refs);
+  const cited = refs.filter((r) => numbers.has(r.id)).sort((a, b) => numbers.get(a.id)! - numbers.get(b.id)!);
+  const uncited = refs.filter((r) => !numbers.has(r.id));
+  const stray = strayBrackets(body);
+
   const reloadWebCheck = async (draftId: number) => {
     const res = await fetch(`/api/drafts/${draftId}`, { cache: "no-store" });
     const data = res.ok ? await res.json() : null;
@@ -620,13 +629,65 @@ export function WritingDesk({
     setPaneError(null);
     try {
       const res = await fetch(`/api/drafts/${id}/citations?citation=${refId}`, { method: "DELETE" });
-      // The effect on `refs` renumbers every marker still in the text and
-      // removes the ones that pointed at what was just dropped.
-      setRefs(await listFrom<Reference>(res, "citations"));
+      const list = await listFrom<Reference>(res, "citations");
+      // Its markers go with it — here, deliberately, and nowhere else: a
+      // marker is never dropped just because its reference cannot be found.
+      const box = document.querySelector<HTMLElement>('[role="textbox"][aria-label="Draft"]');
+      if (box) {
+        removeMarkersDom(box, refId);
+        renumberDom(box, list);
+        setBody(box.innerHTML);
+      }
+      setRefs(list);
     } catch (err) {
       setPaneError((err as Error).message);
     }
   };
+
+  /**
+   * Makes references pasted from another draft this draft's own.
+   *
+   * Each is cited here the same way the Cite buttons cite, so one already in
+   * the list is reused rather than added again; a source deleted from the
+   * library since comes over as a reference typed by hand, which is what it
+   * now is.
+   */
+  const adopt = useCallback(
+    async (incoming: Reference[]) => {
+      const draftId = idRef.current;
+      const ids = new Map<number, number>();
+      let citations: Reference[] = [];
+      if (draftId === null) return { ids, citations };
+      for (const r of incoming) {
+        const body = {
+          origin: r.origin,
+          text: r.text,
+          author: r.author,
+          title: r.title,
+          year: r.year,
+          locator: r.locator,
+          url: r.url,
+          quote: r.quote ?? undefined,
+          sourceId: r.source_id ?? undefined,
+        };
+        const post = (b: object) =>
+          fetch(`/api/drafts/${draftId}/citations`, {
+            method: "POST",
+            headers: { "content-type": "application/json" },
+            body: JSON.stringify(b),
+          });
+        let res = await post(body);
+        if (res.status === 404 && body.sourceId) res = await post({ ...body, origin: "outside", sourceId: undefined });
+        const data = (await res.json().catch(() => ({}))) as { citations?: Reference[]; cited?: number };
+        if (!res.ok || typeof data.cited !== "number") continue;
+        ids.set(r.id, data.cited);
+        citations = data.citations ?? citations;
+      }
+      if (citations.length && idRef.current === draftId) setRefs(citations);
+      return { ids, citations };
+    },
+    []
+  );
 
   // ---- the one thing that does call a model ------------------------------
 
@@ -796,6 +857,8 @@ export function WritingDesk({
             <Editor
               html={body}
               citations={refs}
+              draftId={id}
+              onAdopt={adopt}
               onChange={setBody}
               onCite={() => {
                 rememberCaret();
@@ -820,9 +883,9 @@ export function WritingDesk({
                 {countCharacters(body).toLocaleString()} characters
               </span>
               <span className="text-[var(--color-muted)]">{readingTime(countWords(body))} to read</span>
-              {refs.length > 0 ? (
+              {cited.length > 0 ? (
                 <span className="text-[var(--color-muted)]">
-                  {refs.length} citation{refs.length === 1 ? "" : "s"}
+                  {cited.length} reference{cited.length === 1 ? "" : "s"} cited
                 </span>
               ) : null}
             </div>
@@ -865,15 +928,30 @@ export function WritingDesk({
               />
             )}
 
-            {refs.length > 0 && (
+            {(refs.length > 0 || stray.length > 0) && (
               <div className="rounded-lg border border-[var(--color-rule)] bg-white p-3">
                 <h3 className="mb-2 text-xs font-medium uppercase tracking-[0.12em] text-[var(--color-muted)]">
                   References
                 </h3>
+                {/* A bracketed number typed, or left behind when a citation
+                    was flattened to text, looks like a citation and is not
+                    one: it exports as the characters themselves. */}
+                {stray.length > 0 && (
+                  <p className="mb-2 rounded border border-amber-200 bg-amber-50 px-2 py-1.5 text-xs text-amber-900">
+                    {stray.length === 1
+                      ? `${stray[0]} in the text is typed characters, not a citation: it will not become a footnote, and may not mean the reference numbered ${stray[0]} here. Delete it and cite the source again.`
+                      : `${stray.join(" ")} in the text are typed characters, not citations: they will not become footnotes, and may not mean the references with those numbers here. Delete them and cite the sources again.`}
+                  </p>
+                )}
                 <ol className="space-y-1 text-sm">
-                  {refs.map((r, i) => (
-                    <li key={r.id} className="flex items-baseline gap-2">
-                      <span className="tabular-nums text-[var(--color-muted)]">[{i + 1}]</span>
+                  {[...cited, ...uncited].map((r) => (
+                    <li key={r.id} className={`flex items-baseline gap-2 ${numbers.has(r.id) ? "" : "opacity-60"}`}>
+                      <span
+                        className="tabular-nums text-[var(--color-muted)]"
+                        title={numbers.has(r.id) ? undefined : "Not cited anywhere in the text, so it will not be exported"}
+                      >
+                        {numbers.has(r.id) ? `[${numbers.get(r.id)}]` : "[–]"}
+                      </span>
                       <span className="min-w-0 flex-1" dir={dirOf(r.text)}>
                         {r.text}
                         {/* The address the reference rests on, as a link you
@@ -902,7 +980,7 @@ export function WritingDesk({
                       <button
                         onClick={() => void dropRef(r.id)}
                         className="shrink-0 text-xs text-[var(--color-muted)] hover:text-red-700"
-                        aria-label={`Remove reference ${i + 1}`}
+                        aria-label={`Remove reference ${numbers.get(r.id) ?? r.text.slice(0, 30)}`}
                         title="Remove this reference and its markers from the text"
                       >
                         ✕
@@ -911,7 +989,9 @@ export function WritingDesk({
                   ))}
                 </ol>
                 <p className="mt-2 text-[0.68rem] text-[var(--color-muted)]">
-                  These export as Word footnotes, numbered by where they first appear.
+                  Numbered by where each is first cited, as the Word footnotes will be. Citing a source
+                  that is already here reuses its number.
+                  {uncited.length > 0 ? " Greyed references are not cited in the text and are left out of the export." : ""}
                 </p>
               </div>
             )}
@@ -1097,6 +1177,7 @@ export function WritingDesk({
                                     text: n.citation ?? "",
                                     quote: n.text,
                                     sourceId: n.source_id ?? undefined,
+                                    chunkId: n.chunk_id ?? undefined,
                                   })
                                 }
                               >
@@ -1179,6 +1260,7 @@ export function WritingDesk({
                                 quote: h.quote,
                                 sourceId: h.source_id,
                                 mentionId: h.id,
+                                chunkId: h.chunk_id,
                               })
                             }
                           >

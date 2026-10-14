@@ -122,28 +122,34 @@ section("Names that begin with an article, and acronyms, still link");
 }
 
 // ---------------------------------------------------------------------------
-section("Citation markers follow the reference list");
+section("Citation markers are numbered by where they are first cited");
 // ---------------------------------------------------------------------------
 {
-  const { citationMarker, renumberHtml } = await import("../app/write/citations.ts");
+  const { markerHtml, normalizeMarkers } = await import("../lib/cite-markers.ts");
   const refs = [{ id: 10 }, { id: 11 }, { id: 12 }];
-  const html =
-    "<p>One" + citationMarker(10, 0) + "two" + citationMarker(11, 1) + "three" + citationMarker(12, 2) + "</p>";
+  // Cited in the text in the order 12, 10, 11 — not the order they were added.
+  const html = "<p>One" + markerHtml(12) + "two" + markerHtml(10) + "three" + markerHtml(11) + "again" + markerHtml(12) + "</p>";
+  const out = normalizeMarkers(html, refs);
 
-  check("a marker carries its id", /data-cite="11"/.test(citationMarker(11, 1)));
-  check("and the current index for the export", /data-note="1"/.test(citationMarker(11, 1)));
-  check("untouched when the list is unchanged", renumberHtml(html, refs) === html);
+  check("a marker carries its id", /data-cite="11"/.test(markerHtml(11)));
+  check("the first cited is [1], whatever its place in the list", /One<span data-cite="12"[^>]*>\[1\]</.test(out), out);
+  check("the next is [2]", /two<span data-cite="10"[^>]*>\[2\]</.test(out), out);
+  check("a second citation of a source keeps its number", /again<span data-cite="12"[^>]*>\[1\]</.test(out), out);
+  check("the list index is kept for older copies", /data-cite="11" data-note="1"/.test(out), out);
+  check("stable when nothing changed", normalizeMarkers(out, refs) === out);
 
-  const dropped = renumberHtml(html, [{ id: 11 }, { id: 12 }]);
-  check("a removed reference takes its marker out", !/data-cite="10"/.test(dropped));
-  check("the survivors are renumbered", /data-cite="11" data-note="0"[^>]*>\[1\]</.test(dropped), dropped);
-  check("…all of them", /data-cite="12" data-note="1"[^>]*>\[2\]</.test(dropped), dropped);
-  check("the export index never points past the list", !/data-note="2"/.test(dropped));
+  const dropped = normalizeMarkers(out, [{ id: 11 }, { id: 12 }]);
+  check("a missing reference's marker reads [?] and stays", /data-cite="10"[^>]*>\[\?\]</.test(dropped), dropped);
+  check("and takes no number from the others", /three<span data-cite="11"[^>]*>\[2\]</.test(dropped), dropped);
 
   const legacy = '<p>Old<span data-note="1" contenteditable="false">[2]</span> text</p>';
-  const upgraded = renumberHtml(legacy, refs);
+  const upgraded = normalizeMarkers(legacy, refs);
   check("a marker from before ids gets the id at its index", /data-cite="11"/.test(upgraded), upgraded);
-  check("a legacy marker past the end is removed", renumberHtml(legacy, [{ id: 10 }]) === "<p>Old text</p>");
+  check("a legacy marker past the end is removed", normalizeMarkers(legacy, [{ id: 10 }]) === "<p>Old text</p>");
+
+  const typedInto = '<p>A<span data-cite="10" contenteditable="false">[1] and words</span></p>';
+  const rescued = normalizeMarkers(typedInto, refs);
+  check("words typed into a marker are put back after it", /\[1\]<\/span> and words<\/p>$/.test(rescued), rescued);
 }
 
 // ---------------------------------------------------------------------------

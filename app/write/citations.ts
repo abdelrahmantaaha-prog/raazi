@@ -1,92 +1,39 @@
 /**
- * Citation markers in the draft's HTML.
+ * Citation markers in the live editor, and on the clipboard.
  *
- * A marker used to carry only a literal number and a positional index —
- * `<span data-note="2">[3]</span>` — so deleting reference 1 renumbered the
- * list while the text still said [3], and the last index pointed past the end
- * of the array the Word export reads. Now each marker carries the citation's
- * own id in `data-cite`, and both the number it shows and the `data-note`
- * index are recomputed from the current reference list whenever that changes.
- *
- * `data-note` is kept as the *current* index rather than dropped, because
- * lib/richtext.ts reads it to place footnotes and that file is the export's
- * contract with the editor.
- *
- * Pure string functions, so they can be tested without a browser; the desk
- * applies the same rules to the live DOM so the caret is never disturbed.
+ * The grammar itself — what a marker is, how it is numbered — is in
+ * lib/cite-markers.ts, shared with the server and the Word export. This file
+ * applies it to the DOM, where the caret has to survive it, and carries
+ * markers across copy and paste.
  */
+import { markerLabel } from "@/lib/cite-markers";
+
+export { citeOrder, markerHtml, normalizeMarkers, numbering, strayBrackets } from "@/lib/cite-markers";
 
 export interface CitedRef {
   id: number;
 }
 
-const MARKER_STYLE =
-  "vertical-align:super;font-size:0.72em;color:var(--color-accent);padding:0 1px;cursor:default";
-
-/** The marker for a reference at its position in the list. */
-export function citationMarker(refId: number, index: number): string {
-  return (
-    `<span data-cite="${refId}" data-note="${index}" contenteditable="false" ` +
-    `style="${MARKER_STYLE}">[${index + 1}]</span>&nbsp;`
-  );
-}
-
-/** `[3]` for the third reference. */
-export function markerText(index: number): string {
-  return `[${index + 1}]`;
-}
-
-const SPAN = /<span\b([^>]*)>(\[\d+\]|\[\?\])<\/span>/gi;
-
-/**
- * Brings every marker in a stored draft up to date with the reference list.
- *
- * A marker whose reference has been removed is taken out of the text; a
- * marker from before ids were recorded (`data-note` only) is upgraded to carry
- * the id of whatever sits at that index today, which is the best that can be
- * said of it.
- */
-export function renumberHtml(html: string, refs: CitedRef[]): string {
-  if (!html) return html;
-  return html.replace(SPAN, (whole, attrs: string) => {
-    const cite = /data-cite="(\d+)"/.exec(attrs);
-    const note = /data-note="(\d+)"/.exec(attrs);
-    if (!cite && !note) return whole;
-
-    let id = cite ? Number(cite[1]) : NaN;
-    if (!cite && note) {
-      const legacy = refs[Number(note[1])];
-      if (!legacy) return "";
-      id = legacy.id;
-    }
-    const index = refs.findIndex((r) => r.id === id);
-    if (index < 0) return "";
-
-    let next = attrs;
-    next = cite
-      ? next.replace(/data-cite="\d+"/, `data-cite="${id}"`)
-      : ` data-cite="${id}"${next}`;
-    next = note
-      ? next.replace(/data-note="\d+"/, `data-note="${index}"`)
-      : `${next} data-note="${index}"`;
-    return `<span${next}>${markerText(index)}</span>`;
-  });
+/** What a reference needs to be recreated in another draft. */
+export interface PortableRef {
+  id: number;
+  origin: "library" | "outside";
+  text: string;
+  author: string | null;
+  title: string | null;
+  year: string | null;
+  locator: string | null;
+  outlet: string | null;
+  url: string | null;
+  quote?: string | null;
+  source_id?: number | null;
 }
 
 /**
- * What may survive a move inside the draft.
+ * What may come back in through a paste from this editor.
  *
- * Moving a paragraph means cut and paste, and the paste handler takes the
- * clipboard's plain text — deliberately, so a paragraph dragged in from a web
- * page does not bring its fonts and colours with it. But a citation marker is
- * a span, and plain text flattens it to the four characters `[3]`: it stops
- * renumbering, stops being removed when its reference is deleted, and exports
- * as literal text rather than a footnote. Moving a paragraph quietly cost you
- * every citation in it.
- *
- * So text that came out of this editor is put back as markup, through this
- * allowlist. Everything the editor can produce is kept and nothing else is:
- * no styles, no classes, no colours, and a span only when it is a marker.
+ * Everything the editor can produce is kept and nothing else is: no styles,
+ * no classes, no colours, and a span only when it is a marker.
  */
 const ALLOWED = new Set(["p", "h1", "h2", "h3", "blockquote", "ul", "ol", "li", "b", "strong", "i", "em", "br"]);
 
@@ -95,6 +42,8 @@ export function sanitizeDraftHtml(html: string): string {
   const re = /<(\/?)([a-zA-Z][a-zA-Z0-9]*)((?:[^>"']|"[^"]*"|'[^']*')*)(\/?)>/g;
   let last = 0;
   let m: RegExpExecArray | null;
+  /** Whether each open span is a marker we emitted, so its closer is paired. */
+  const spans: boolean[] = [];
   while ((m = re.exec(html))) {
     out += html.slice(last, m.index);
     last = m.index + m[0].length;
@@ -103,17 +52,16 @@ export function sanitizeDraftHtml(html: string): string {
     const attrs = m[3] ?? "";
 
     if (tag === "span") {
-      // Kept only when it is a marker, and re-emitted in canonical form so
-      // nothing of where it has been travels with it.
-      const cite = /data-cite="(\d+)"/.exec(attrs);
-      const note = /data-note="(\d+)"/.exec(attrs);
-      if (!closing && cite) {
-        out += `<span data-cite="${cite[1]}" data-note="${note ? note[1] : 0}" contenteditable="false" style="${MARKER_STYLE}">`;
-      } else if (closing) {
-        // A closing span is emitted only if we opened one; an unmatched close
-        // is harmless in a fragment the browser is about to parse.
-        out += "</span>";
+      if (closing) {
+        if (spans.pop()) out += "</span>";
+        continue;
       }
+      // Kept only when it is a marker, and re-emitted in canonical form so
+      // nothing of where it has been travels with it. Its label is redrawn
+      // as soon as it is in the draft.
+      const cite = /data-cite="(\d{1,12})"/.exec(attrs);
+      if (cite) out += `<span data-cite="${cite[1]}" contenteditable="false">`;
+      spans.push(Boolean(cite));
       continue;
     }
 
@@ -125,45 +73,159 @@ export function sanitizeDraftHtml(html: string): string {
 }
 
 /**
- * The same rules applied to the live editor, in place.
+ * Brings every marker in the live editor into canonical form, in place.
  *
- * Returns true when anything changed, so the caller knows whether to emit the
- * new HTML. Mutating the spans rather than rewriting `innerHTML` is what keeps
- * the caret where it was.
+ * Mutating the spans rather than rewriting `innerHTML` is what keeps the
+ * caret where it was. Returns true when anything changed, so the caller knows
+ * to emit the new HTML. `refs` is the reference list in stored order.
  */
 export function renumberDom(root: HTMLElement, refs: CitedRef[]): boolean {
+  const known = new Set(refs.map((r) => r.id));
+  const seqIndex = new Map(refs.map((r, i) => [r.id, i]));
+  const numbers = new Map<number, number>();
   let changed = false;
+
   for (const span of Array.from(root.querySelectorAll<HTMLElement>("span[data-cite], span[data-note]"))) {
-    const cite = span.dataset.cite;
-    const note = span.dataset.note;
-    let id = cite ? Number(cite) : NaN;
-    if (!cite && note !== undefined) {
-      const legacy = refs[Number(note)];
+    let id = span.dataset.cite ? Number(span.dataset.cite) : NaN;
+    if (!Number.isFinite(id)) {
+      // From before ids were recorded: the reference at that index today.
+      const legacy = refs[Number(span.dataset.note)];
       if (!legacy) {
-        span.remove();
+        span.replaceWith(document.createTextNode((span.textContent ?? "").replace(/\[(?:\d+|\?)\]/, "")));
         changed = true;
         continue;
       }
       id = legacy.id;
-    }
-    const index = refs.findIndex((r) => r.id === id);
-    if (index < 0) {
-      span.remove();
-      changed = true;
-      continue;
-    }
-    if (span.dataset.cite !== String(id)) {
       span.dataset.cite = String(id);
       changed = true;
     }
-    if (span.dataset.note !== String(index)) {
-      span.dataset.note = String(index);
+
+    let n: number | null = null;
+    if (known.has(id)) {
+      if (!numbers.has(id)) numbers.set(id, numbers.size + 1);
+      n = numbers.get(id)!;
+    }
+
+    const note = seqIndex.get(id);
+    if (note === undefined ? span.dataset.note !== undefined : span.dataset.note !== String(note)) {
+      if (note === undefined) delete span.dataset.note;
+      else span.dataset.note = String(note);
       changed = true;
     }
-    if (span.textContent !== markerText(index)) {
-      span.textContent = markerText(index);
+
+    const label = markerLabel(n);
+    const text = span.textContent ?? "";
+    if (text !== label || span.childNodes.length !== 1) {
+      // Anything typed into the marker goes back out after it.
+      const stray = text.replace(/\[(?:\d+|\?)\]/, "");
+      if (stray) span.after(document.createTextNode(stray));
+      span.textContent = label;
+      changed = true;
+    }
+    if (span.getAttribute("contenteditable") !== "false") {
+      span.setAttribute("contenteditable", "false");
+      changed = true;
+    }
+    // Markers inserted before the styling moved to the stylesheet carried
+    // their own; the stylesheet is the one place it lives now.
+    if (span.hasAttribute("style")) {
+      span.removeAttribute("style");
       changed = true;
     }
   }
   return changed;
+}
+
+/** Takes the markers for one reference out of the live editor. */
+export function removeMarkersDom(root: HTMLElement, id: number): boolean {
+  const spans = Array.from(root.querySelectorAll<HTMLElement>(`span[data-cite="${id}"]`));
+  for (const s of spans) s.remove();
+  return spans.length > 0;
+}
+
+// ---------------------------------------------------------------------------
+// The clipboard
+// ---------------------------------------------------------------------------
+
+/**
+ * Copying out of a draft writes the selection as markup, with each marker
+ * carrying the reference it points at.
+ *
+ * The paste handler used to take the clipboard's plain text and guess whether
+ * it was a move by comparing it with the last thing copied — so any paste
+ * whose text differed by a space, came from another draft, or followed a
+ * reload, turned every marker in it into the literal characters "[3]": no
+ * longer a footnote, and after the next renumbering pointing at a different
+ * source than the one it showed. Now the clipboard says what it holds.
+ */
+export const CLIP_ATTR = "data-corpus-draft";
+
+export function clipboardHtml(fragment: DocumentFragment, draftId: number | null, refs: PortableRef[]): string {
+  const holder = document.createElement("div");
+  holder.setAttribute(CLIP_ATTR, String(draftId ?? ""));
+  holder.appendChild(fragment);
+  const byId = new Map(refs.map((r) => [r.id, r]));
+  for (const span of Array.from(holder.querySelectorAll<HTMLElement>("span[data-cite]"))) {
+    const ref = byId.get(Number(span.dataset.cite));
+    if (ref) span.setAttribute("data-ref", JSON.stringify(portable(ref)));
+  }
+  return holder.outerHTML;
+}
+
+function portable(r: PortableRef): PortableRef {
+  return {
+    id: r.id,
+    origin: r.origin,
+    text: r.text,
+    author: r.author,
+    title: r.title,
+    year: r.year,
+    locator: r.locator,
+    outlet: r.outlet,
+    url: r.url,
+    quote: r.quote ?? null,
+    source_id: r.source_id ?? null,
+  };
+}
+
+export interface DraftClip {
+  /** The draft it was copied from; null when that was not recorded. */
+  draftId: number | null;
+  /** The copied markup, with markers still pointing at the source draft's ids. */
+  root: HTMLElement;
+  /** Each cited id in the clip, with the reference it pointed at when copied. */
+  refs: Map<number, PortableRef | null>;
+}
+
+/** Reads a clipboard that came from a draft; null for anything else. */
+export function readClip(html: string): DraftClip | null {
+  if (!html.includes(CLIP_ATTR)) return null;
+  const doc = new DOMParser().parseFromString(html, "text/html");
+  const root = doc.querySelector<HTMLElement>(`[${CLIP_ATTR}]`);
+  if (!root) return null;
+  const draft = Number(root.getAttribute(CLIP_ATTR));
+  const refs = new Map<number, PortableRef | null>();
+  for (const span of Array.from(root.querySelectorAll<HTMLElement>("span[data-cite]"))) {
+    const id = Number(span.dataset.cite);
+    if (refs.get(id)) continue;
+    let ref: PortableRef | null = null;
+    try {
+      const parsed = JSON.parse(span.getAttribute("data-ref") ?? "null");
+      if (parsed && typeof parsed === "object" && typeof parsed.text === "string") ref = parsed as PortableRef;
+    } catch {
+      /* a marker without its reference still pastes; it reads [?] */
+    }
+    refs.set(id, ref);
+  }
+  return { draftId: Number.isFinite(draft) && draft > 0 ? draft : null, root, refs };
+}
+
+/** Points the clip's markers at this draft's ids. */
+export function retargetClip(clip: DraftClip, map: Map<number, number>): string {
+  for (const span of Array.from(clip.root.querySelectorAll<HTMLElement>("span[data-cite]"))) {
+    const to = map.get(Number(span.dataset.cite));
+    if (to !== undefined) span.dataset.cite = String(to);
+    span.removeAttribute("data-ref");
+  }
+  return sanitizeDraftHtml(clip.root.innerHTML);
 }

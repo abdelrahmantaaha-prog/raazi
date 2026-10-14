@@ -39,12 +39,18 @@ const section = (t) => console.log(`\n${t}`);
 // ---------------------------------------------------------------------------
 section("A moved paragraph keeps its citations");
 // ---------------------------------------------------------------------------
-const { sanitizeDraftHtml, citationMarker, renumberHtml } = await import("../app/write/citations.ts");
+const { sanitizeDraftHtml } = await import("../app/write/citations.ts");
+const { markerHtml, normalizeMarkers } = await import("../lib/cite-markers.ts");
 
-const marker = citationMarker(42, 2);
+const marker = markerHtml(42, 3, 2);
 check("a marker survives the round trip", sanitizeDraftHtml(marker).includes('data-cite="42"'));
-check("and keeps its index", sanitizeDraftHtml(marker).includes('data-note="2"'));
 check("and stays uneditable", sanitizeDraftHtml(marker).includes('contenteditable="false"'));
+// What the clipboard carries is dropped: it describes the reference, and the
+// paste decides which reference in this draft the marker points at.
+check(
+  "and loses what the clipboard added",
+  !sanitizeDraftHtml(`<span data-cite="42" data-ref='{"text":"x"}'>[3]</span>`).includes("data-ref")
+);
 
 const moved = sanitizeDraftHtml(`<p>A sentence ${marker} and more.</p>`);
 check("the paragraph around it survives", moved.startsWith("<p>") && moved.includes("and more."));
@@ -55,10 +61,15 @@ check(
 );
 
 // The whole point: after a move the marker still renumbers.
-const afterDelete = renumberHtml(moved, [{ id: 7 }, { id: 42 }]);
-check("a moved marker still renumbers", afterDelete.includes('data-note="1"') && afterDelete.includes("[2]"), afterDelete);
-const orphaned = renumberHtml(moved, [{ id: 7 }]);
-check("and is still removed when its reference goes", !orphaned.includes("data-cite"), orphaned);
+const afterMove = normalizeMarkers(`<p>First${markerHtml(7)}</p>${moved}`, [{ id: 42 }, { id: 7 }]);
+check("a moved marker is renumbered for where it now stands", /data-cite="42"[^>]*>\[2\]/.test(afterMove), afterMove);
+const orphaned = normalizeMarkers(moved, [{ id: 7 }]);
+check("a pasted marker whose reference is not here reads [?] rather than vanishing", /\[\?\]/.test(orphaned), orphaned);
+
+// A span Chrome wraps around a marker when two paragraphs are merged is not
+// the marker, and must not hide it from renumbering.
+const wrapped = normalizeMarkers(`<p><span style="x">Text ${markerHtml(42, 9)}</span></p>`, [{ id: 42 }]);
+check("a marker inside a styled span is still renumbered", /data-cite="42"[^>]*>\[1\]/.test(wrapped), wrapped);
 
 // What must NOT come back.
 const dirty =

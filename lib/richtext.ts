@@ -17,6 +17,8 @@ import type { DocxBlock, DocxNote, DocxRun } from "./docx";
  */
 
 export interface Citation {
+  /** The reference's id, which a marker's `data-cite` names. */
+  id?: number;
   /** The rendered note, e.g. "Wald, Saudi, Inc., 2018, p. 142." */
   text: string;
   /** The source's own address, when it has one: the exported footnote ends
@@ -66,10 +68,11 @@ function decode(s: string): string {
 /**
  * Turns the editor's HTML into Word blocks plus the notes they refer to.
  *
- * Citations are carried in the markup as `<span data-note="3">`, an index into
- * the draft's citation list — the note text is not written into the document
- * body, so editing a citation updates every place it appears rather than the
- * first one you happen to find.
+ * Citations are carried in the markup as `<span data-cite="ID">`, the id of a
+ * reference in the draft's list (lib/cite-markers.ts) — the note text is not
+ * written into the document body, so editing a citation updates every place
+ * it appears rather than the first one you happen to find. A marker from
+ * before ids, with only `data-note`, is read as an index into the list.
  */
 export function htmlToDocx(
   html: string,
@@ -77,8 +80,10 @@ export function htmlToDocx(
 ): { blocks: DocxBlock[]; notes: DocxNote[] } {
   const blocks: DocxBlock[] = [];
   const notes: DocxNote[] = [];
-  /** Citation index → note index, so one source cited twice is one footnote. */
-  const noteOf = new Map<number, number>();
+  /** Citation → note index, so one source cited twice is one footnote. */
+  const noteOf = new Map<Citation, number>();
+  const byId = new Map<number, Citation>();
+  for (const c of citations) if (c.id !== undefined) byId.set(c.id, c);
 
   let kind: DocxBlock["kind"] = "paragraph";
   let level: 1 | 2 | 3 = 1;
@@ -149,19 +154,22 @@ export function htmlToDocx(
       if (t.closing) {
         insideMarker = false;
       } else {
-        const m = /data-note="(\d+)"/.exec(t.attrs);
-        if (m) {
+        const cite = /data-cite="(\d+)"/.exec(t.attrs);
+        const index = /data-note="(\d+)"/.exec(t.attrs);
+        if (cite || index) {
           insideMarker = true;
-          const index = Number(m[1]);
-          const citation = citations[index];
+          // The id decides. The index is only for a marker that has no id;
+          // read when both were there, it pointed a marker at whatever had
+          // moved into its old place in the list.
+          const citation = cite ? byId.get(Number(cite[1])) : citations[Number(index![1])];
           if (citation) {
             // One source cited three times is one footnote referenced three
             // times, which is what a reader expects and what Word does natively.
-            let note = noteOf.get(index);
+            let note = noteOf.get(citation);
             if (note === undefined) {
               note = notes.length;
               notes.push({ text: citation.text, url: citation.url ?? null });
-              noteOf.set(index, note);
+              noteOf.set(citation, note);
             }
             runs.push({ note });
           }

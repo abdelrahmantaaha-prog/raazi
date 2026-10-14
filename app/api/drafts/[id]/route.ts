@@ -1,13 +1,20 @@
 import { NextResponse } from "next/server";
 import { textWebCheck } from "@/lib/web-checks";
 import { asId, badRequest, notFound, optionalString, readBody } from "@/lib/http";
-import { citationsFor, deleteDraft, getDraft, notesFor, saveDraft } from "@/lib/drafts";
+import { citationsFor, deleteDraft, getDraft, notesFor, repairCitations, saveDraft } from "@/lib/drafts";
 
 export const dynamic = "force-dynamic";
 
-export async function GET(_req: Request, ctx: { params: Promise<{ id: string }> }) {
+/**
+ * A draft, its shelf and its references. `?repair=1` — sent when the desk
+ * opens a draft, not when it re-reads the shelf — first brings its citations
+ * up to the current rules (`repairCitations`), so a page already showing the
+ * draft is never handed references it has not seen.
+ */
+export async function GET(req: Request, ctx: { params: Promise<{ id: string }> }) {
   const id = asId((await ctx.params).id);
   if (id === null) return badRequest("Not a valid id.");
+  if (new URL(req.url).searchParams.get("repair") === "1" && getDraft(id)) repairCitations(id);
   const draft = getDraft(id);
   if (!draft) return notFound("No such draft.");
   return NextResponse.json({ draft, notes: notesFor(id), citations: citationsFor(id), webCheck: textWebCheck("draft", id) ?? null });

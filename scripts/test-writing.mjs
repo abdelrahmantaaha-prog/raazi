@@ -184,7 +184,10 @@ section("A citation of a library source carries the source's address");
   addCitation(draftId, { origin: "outside", text: "Something read elsewhere" });
   const list = cites(draftId);
   check("the source's address is filled in", list[0].url === "https://example.org/story/1", list[0].url);
-  check("the text as given is kept", list[0].text === "A wire story, 2026");
+  // A library reference is rendered from its source, not from whatever line
+  // the button had on screen; only a reference with no source keeps its words.
+  check("a library reference reads from its source", list[0].text === "A wire story", list[0].text);
+  check("an outside reference keeps the words it was given", list[2].text === "Something read elsewhere");
   check("a source with no address gets none", list[1].url === null);
   check("an outside reference is untouched", list[2].url === null);
   deleteDraft(draftId);
@@ -236,20 +239,22 @@ section("A citation marker keeps its reference's id through a save");
 // source and dropped the last one from the text — and from the Word export.
 {
   const { sanitizeHtml } = await import("../lib/drafts.ts");
-  const { renumberHtml } = await import("../app/write/citations.ts");
+  const { normalizeMarkers } = await import("../lib/cite-markers.ts");
 
   const marker = (id, i) => `<span data-cite="${id}" data-note="${i}" contenteditable="false" style="x">[${i + 1}]</span>`;
   const body = `<p>One${marker(10, 0)} two${marker(11, 1)} three${marker(12, 2)}</p>`;
   const stored = sanitizeHtml(body);
   check("the id survives", /data-cite="10"/.test(stored) && /data-cite="12"/.test(stored), stored);
-  check("and nothing else on the span does", !/style|contenteditable/.test(stored), stored);
+  check("no style survives", !/style/.test(stored), stored);
+  // Dropping this made every reopened marker a span you could type into.
+  check("but the marker stays uneditable", /data-cite="10" data-note="0" contenteditable="false"/.test(stored), stored);
 
   // Reference 10 deleted; the stored text still carries the old indices.
-  const reopened = renumberHtml(stored, [{ id: 11 }, { id: 12 }]);
-  check("only the deleted reference's marker goes", (reopened.match(/<span/g) ?? []).length === 2, reopened);
+  const reopened = normalizeMarkers(stored, [{ id: 11 }, { id: 12 }]);
+  check("a marker whose reference is gone says so instead of vanishing", /data-cite="10" contenteditable="false">\[\?\]/.test(reopened), reopened);
   check("the others still point at their own sources",
-    /two<span data-cite="11" data-note="0">\[1\]/.test(reopened) &&
-      /three<span data-cite="12" data-note="1">\[2\]/.test(reopened),
+    /two<span data-cite="11" data-note="0" contenteditable="false">\[1\]/.test(reopened) &&
+      /three<span data-cite="12" data-note="1" contenteditable="false">\[2\]/.test(reopened),
     reopened);
   check("a junk id is not carried", !/data-cite/.test(sanitizeHtml('<span data-cite="x1" data-note="0">[1]</span>')));
 }
@@ -307,7 +312,7 @@ section("A draft body cannot carry anything that runs");
   // The citation marker is the one span the export understands.
   check(
     "a citation marker survives",
-    sanitizeHtml('<span data-note="3">[1]</span>') === '<span data-note="3">[1]</span>',
+    sanitizeHtml('<span data-note="3">[1]</span>') === '<span data-note="3" contenteditable="false">[1]</span>',
     sanitizeHtml('<span data-note="3">[1]</span>')
   );
   check(

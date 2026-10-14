@@ -251,6 +251,19 @@ body {
 .prose-draft ul { list-style: disc; padding-inline-start: 1.5em; }
 .prose-draft ol { list-style: decimal; padding-inline-start: 1.5em; }
 .prose-draft li + li { margin-top: 0.25em; }
+/* A citation marker. Styled here rather than inline, because the saved draft
+   keeps no style attributes: markers used to lose their look on reopening. */
+.prose-draft span[data-cite],
+.prose-draft span[data-note] {
+  vertical-align: super;
+  font-size: 0.72em;
+  font-style: normal;
+  color: var(--color-accent);
+  padding: 0 1px;
+  cursor: default;
+  user-select: all;
+  unicode-bidi: isolate;
+}
 
 /* ---------------------------------------------------------------------------
    Every page arrives the same way
