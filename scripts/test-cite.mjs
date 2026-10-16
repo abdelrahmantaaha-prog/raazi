@@ -131,6 +131,55 @@ check("and does not grow a URL in the middle of the sentence", !after.text.inclu
 check("while the address is still on the row", after.url === "https://www.pbs.org/newshour/politics/iowa");
 
 // ---------------------------------------------------------------------------
+section("A reference without a year survives the library being opened again");
+// ---------------------------------------------------------------------------
+// The migration runs on every open. Without a year the new rendering starts
+// with the old one, and the outlet was taken for a locator and written out
+// once more each time — en.wikisource.org ninety times by 16 October 2026.
+const { migrateCitations } = await import("../lib/db/migrate-citations.ts");
+
+db()
+  .prepare(
+    `INSERT INTO sources (id, title, author, year, outlet, url, kind, status)
+     VALUES (902, 'Leadership and structure', NULL, NULL, 'FEC.gov',
+             'https://www.fec.gov/about/leadership-and-structure/', 'url', 'ready'),
+            (903, 'Address to the Knights of Columbus', 'Theodore Roosevelt', NULL, 'en.wikisource.org',
+             'https://en.wikisource.org/wiki/Address_to_the_Knights_of_Columbus', 'url', 'ready')`
+  )
+  .run();
+
+refs = addCitation(draftId, { origin: "library", text: "", source_id: 902 });
+const yearless = refs[refs.length - 1];
+refs = addCitation(draftId, { origin: "library", text: "", source_id: 903, locator: "para. 3" });
+const yearlessAt = refs[refs.length - 1];
+check("a year-less reference names its outlet once", yearless.text === "Leadership and structure, FEC.gov", yearless.text);
+
+const textOf = (id) => db().prepare("SELECT text FROM draft_citations WHERE id=?").get(id).text;
+const changed = [];
+for (let i = 0; i < 5; i++) changed.push(migrateCitations(db()));
+check("five more opens change nothing", changed.every((n) => n === 0), changed.join(","));
+check("and the outlet is still there once", textOf(yearless.id) === "Leadership and structure, FEC.gov", textOf(yearless.id));
+check(
+  "a year-less reference with a locator keeps both, once",
+  textOf(yearlessAt.id) === "Theodore Roosevelt, Address to the Knights of Columbus, en.wikisource.org, para. 3",
+  textOf(yearlessAt.id)
+);
+check("the reference with a year is untouched too", textOf(one.id) === after.text, textOf(one.id));
+
+// What the broken migration left behind is the formatter's own output, so
+// the next open folds it back to a single outlet — and then leaves it alone.
+db()
+  .prepare("UPDATE draft_citations SET text=? WHERE id=?")
+  .run(`Leadership and structure${", FEC.gov".repeat(19)}`, yearless.id);
+check("a reference with the outlet repeated is mended", migrateCitations(db()) === 1);
+check("down to a single outlet", textOf(yearless.id) === "Leadership and structure, FEC.gov", textOf(yearless.id));
+check("and stays that way", migrateCitations(db()) === 0 && textOf(yearless.id) === "Leadership and structure, FEC.gov");
+
+// A reference corrected by hand is still left alone.
+db().prepare("UPDATE draft_citations SET text=? WHERE id=?").run("FEC, Leadership (2024)", yearless.id);
+check("a hand-edited reference is not rewritten", migrateCitations(db()) === 0 && textOf(yearless.id) === "FEC, Leadership (2024)");
+
+// ---------------------------------------------------------------------------
 section("Outside links open in the one article window");
 // ---------------------------------------------------------------------------
 const { articleHref, hostOf, ARTICLE_WINDOW } = await import("../app/components/ArticleLink.tsx");

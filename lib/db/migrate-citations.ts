@@ -28,7 +28,7 @@ export function migrateCitations(db: Database.Database) {
 
   const rows = db
     .prepare(
-      `SELECT c.id, c.text, c.author, c.title, c.year, c.locator, c.url,
+      `SELECT c.id, c.text, c.author, c.title, c.year, c.locator, c.outlet, c.url,
               s.title AS s_title, s.author AS s_author, s.year AS s_year,
               s.outlet AS s_outlet, s.url AS s_url
          FROM draft_citations c
@@ -42,6 +42,7 @@ export function migrateCitations(db: Database.Database) {
     title: string | null;
     year: string | null;
     locator: string | null;
+    outlet: string | null;
     url: string | null;
     s_title: string | null;
     s_author: string | null;
@@ -83,7 +84,18 @@ export function migrateCitations(db: Database.Database) {
     } else if (base && current.startsWith(`${base}, `)) {
       // Exactly the old rendering plus one trailing piece. A reference edited
       // by hand does not look like this.
-      trailer = current.slice(base.length + 2).trim() || null;
+      //
+      // Without a year the new rendering ("author, title, outlet") starts
+      // with the old one too, and its outlet looks like that trailing piece.
+      // Taken for a locator, the outlet was written out again after itself on
+      // every open — 90 copies by 16 October 2026. Copies of the outlet at the
+      // head of the trailer are the formatter's own, so they go.
+      let rest = current.slice(base.length + 2).trim();
+      if (outlet) {
+        while (rest.startsWith(`${outlet}, `)) rest = rest.slice(outlet.length + 2).trim();
+        if (rest === outlet) rest = "";
+      }
+      trailer = rest || null;
       untouched = true;
     }
 
@@ -98,7 +110,7 @@ export function migrateCitations(db: Database.Database) {
       title === r.title &&
       year === r.year &&
       url === r.url &&
-      outlet === null
+      outlet === (r.outlet?.trim() || null)
     ) {
       continue;
     }
