@@ -90,6 +90,7 @@ export function WebCheckReport({
   writtenAt,
   onRecheck,
   busy,
+  disabled,
   what: named,
 }: {
   report: WebReport;
@@ -98,7 +99,10 @@ export function WebCheckReport({
   /** When the entry was last written, to say if the check predates it. */
   writtenAt?: string;
   onRecheck: () => void;
+  /** A check is starting or under way. */
   busy?: boolean;
+  /** There is nothing to check, e.g. the draft has been emptied. */
+  disabled?: boolean;
 }) {
   const counts = (Object.keys(VERDICT) as WebVerdict[])
     .map((v) => [v, report.findings.filter((f) => f.verdict === v).length] as const)
@@ -201,8 +205,12 @@ export function WebCheckReport({
           <span>
             “Not found” means the search turned up nothing either way — not that the {what} is wrong.
           </span>
-          <button onClick={onRecheck} disabled={busy} className="font-medium underline">
-            Check again
+          <button
+            onClick={onRecheck}
+            disabled={busy || disabled}
+            className="font-medium underline disabled:cursor-not-allowed disabled:no-underline disabled:opacity-50"
+          >
+            {busy ? "Checking…" : "Check again"}
           </button>
         </p>
       </div>

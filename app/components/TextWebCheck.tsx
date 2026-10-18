@@ -33,6 +33,14 @@ export function TextWebCheck({
 }) {
   const router = useRouter();
   const [run, setRun] = useState<number | null>(null);
+  // Whether that run is still going. The chip outlives it, to say how it
+  // ended; the button must not. A run that failed or paused never reports
+  // "done", and holding the button for one left "Check again" dead until the
+  // page was reloaded.
+  const [checking, setChecking] = useState(false);
+  // Remounts the chip on every attempt: asking again can hand back the same
+  // paused run, and a chip already settled on it would not look again.
+  const [attempt, setAttempt] = useState(0);
   const [busy, setBusy] = useState(false);
   const [message, setMessage] = useState<string | null>(null);
 
@@ -41,10 +49,14 @@ export function TextWebCheck({
     setMessage(null);
     try {
       const res = await fetch(`/api/${target === "draft" ? "drafts" : "sources"}/${id}/webcheck`, { method: "POST" });
-      const data = (await res.json().catch(() => ({}))) as { error?: string; runId?: number };
+      const data = (await res.json().catch(() => ({}))) as { error?: string; runId?: number; note?: string };
       if (!res.ok && res.status !== 202) throw new Error(data.error ?? "The check could not start.");
       setRun(data.runId ?? null);
-      setMessage(`Checking the ${WHAT[target]}'s main claims on the web. The verdicts appear here in a few minutes.`);
+      setChecking(data.runId != null);
+      setAttempt((n) => n + 1);
+      setMessage(
+        data.note ?? `Checking the ${WHAT[target]}'s main claims on the web. The verdicts appear here in a few minutes.`
+      );
     } catch (err) {
       setMessage((err as Error).message);
     } finally {
@@ -54,16 +66,22 @@ export function TextWebCheck({
 
   const finished = () => {
     setRun(null);
+    setChecking(false);
     setMessage(null);
     if (onDone) onDone();
     else router.refresh();
+  };
+
+  const stopped = () => {
+    setChecking(false);
+    setMessage("The check stopped before it finished. You can check again.");
   };
 
   return (
     <div className="space-y-2">
       {!report && (
         <div className="flex flex-wrap items-center gap-2">
-          <Button onClick={start} disabled={disabled || busy || run !== null}>
+          <Button onClick={start} disabled={disabled || busy || checking}>
             {busy ? "Starting…" : "Check on the web"}
           </Button>
           <span className="text-xs text-[var(--color-muted)]">
@@ -72,9 +90,16 @@ export function TextWebCheck({
         </div>
       )}
       {message && <p className="text-sm">{message}</p>}
-      {run && <RunChip runId={run} onDone={finished} />}
+      {run && <RunChip key={attempt} runId={run} onDone={finished} onStopped={stopped} />}
       {report && (
-        <WebCheckReport report={report} what={WHAT[target]} writtenAt={changedAt} onRecheck={start} busy={busy || run !== null} />
+        <WebCheckReport
+          report={report}
+          what={WHAT[target]}
+          writtenAt={changedAt}
+          onRecheck={start}
+          busy={busy || checking}
+          disabled={disabled}
+        />
       )}
     </div>
   );

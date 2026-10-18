@@ -46,11 +46,14 @@ const SETTLED = new Set(["done", "failed", "paused_user", "paused_budget", "paus
 export function RunChip({
   runId,
   onDone,
+  onStopped,
   className = "",
 }: {
   runId: number | null | undefined;
   /** Called once when the run finishes. Defaults to refreshing the page. */
   onDone?: () => void;
+  /** Called once when the run stops short of done — failed, paused, or no longer listed. */
+  onStopped?: () => void;
   className?: string;
 }) {
   const router = useRouter();
@@ -59,6 +62,8 @@ export function RunChip({
   const finished = useRef<number | null>(null);
   const onDoneRef = useRef(onDone);
   onDoneRef.current = onDone;
+  const onStoppedRef = useRef(onStopped);
+  onStoppedRef.current = onStopped;
 
   useEffect(() => {
     if (!runId) return;
@@ -66,6 +71,12 @@ export function RunChip({
     let timer: ReturnType<typeof setTimeout> | null = null;
     setRun(null);
     setGone(false);
+
+    const stopped = () => {
+      if (finished.current === runId) return;
+      finished.current = runId;
+      onStoppedRef.current?.();
+    };
 
     const tick = async () => {
       if (cancelled) return;
@@ -76,7 +87,10 @@ export function RunChip({
       try {
         const res = await fetch(`/api/runs/${runId}`, { cache: "no-store" });
         if (res.status === 404) {
-          if (!cancelled) setGone(true);
+          if (!cancelled) {
+            setGone(true);
+            stopped();
+          }
           return;
         }
         const data = (await res.json()) as { run?: RunState | null };
@@ -84,13 +98,15 @@ export function RunChip({
         const r = data.run ?? null;
         if (!r) {
           setGone(true);
+          stopped();
           return;
         }
         setRun(r);
         if (SETTLED.has(r.state)) {
-          if (r.state === "done" && finished.current !== runId) {
+          if (finished.current !== runId) {
             finished.current = runId;
-            if (onDoneRef.current) onDoneRef.current();
+            if (r.state !== "done") onStoppedRef.current?.();
+            else if (onDoneRef.current) onDoneRef.current();
             else router.refresh();
           }
           return;
