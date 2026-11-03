@@ -134,6 +134,9 @@ export function WritingDesk({
   const [checking, setChecking] = useState(false);
   const [checkError, setCheckError] = useState<string | null>(null);
   const [pane, setPane] = useState<"sources" | "check">("sources");
+  /** Review mode, and the paragraphs passed in it (see ./review.ts). */
+  const [reviewing, setReviewing] = useState(false);
+  const [reviewed, setReviewed] = useState<string[]>([]);
 
   /**
    * The desk fills the window and its two columns scroll on their own, so the
@@ -207,6 +210,7 @@ export function WritingDesk({
       setRefs(citations);
       setNotes(data.notes ?? []);
       setReport(data.draft.check_json ? JSON.parse(data.draft.check_json) : null);
+      setReviewed(parseReviewed(data.draft.reviewed_json));
       setWebCheck({ report: data.webCheck ?? null, updatedAt: data.draft.updated_at });
       // Opening is not editing: what came off the disk is what is on the disk,
       // so the autosave below has nothing to do until you type.
@@ -337,6 +341,8 @@ export function WritingDesk({
       setNotes([]);
       setRefs([]);
       setReport(null);
+      setReviewed([]);
+      setReviewing(false);
       setChecking(false);
       lastSaved.current = { id: null, title: "", body: "" };
     }
@@ -689,6 +695,26 @@ export function WritingDesk({
     []
   );
 
+  /**
+   * Keeps the list of reviewed paragraphs. Shown at once and saved behind it,
+   * against the draft it was made on; the list is small, so it goes whole.
+   */
+  const saveReview = useCallback(async (keys: string[]) => {
+    const draftId = idRef.current;
+    if (draftId === null) return;
+    setReviewed(keys);
+    try {
+      const res = await fetch(`/api/drafts/${draftId}/review`, {
+        method: "PUT",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ reviewed: keys }),
+      });
+      if (!res.ok) throw new Error("The review was not saved.");
+    } catch (err) {
+      if (idRef.current === draftId) setPaneError((err as Error).message);
+    }
+  }, []);
+
   // ---- the one thing that does call a model ------------------------------
 
   /**
@@ -869,6 +895,10 @@ export function WritingDesk({
                 setLibraryOpen(true);
               }}
               dir={dirOf(stripTags(body)) as "ltr" | "rtl"}
+              reviewing={reviewing}
+              reviewed={reviewed}
+              onReviewing={setReviewing}
+              onReviewed={saveReview}
             />
 
             {/* Under the text, where you look when you are writing to a length.
@@ -1368,6 +1398,16 @@ function rank(v: Verdict["verdict"]): number {
 
 function escapeHtml(s: string): string {
   return s.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
+}
+
+/** The stored list of reviewed paragraphs; anything unreadable is an empty one. */
+function parseReviewed(json: string | null | undefined): string[] {
+  try {
+    const list = json ? JSON.parse(json) : [];
+    return Array.isArray(list) ? list.filter((k): k is string => typeof k === "string") : [];
+  } catch {
+    return [];
+  }
 }
 
 /**

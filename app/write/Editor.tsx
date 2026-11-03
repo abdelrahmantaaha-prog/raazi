@@ -1,6 +1,6 @@
 "use client";
 
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useId, useRef, useState } from "react";
 import {
   clipboardHtml,
   markerHtml,
@@ -10,6 +10,7 @@ import {
   retargetClip,
   type PortableRef,
 } from "./citations";
+import { reviewSheet, reviewUnits, unitOf, type ReviewUnit } from "./review";
 
 export type CitationRef = PortableRef;
 
@@ -38,6 +39,10 @@ export function Editor({
   onLibrary,
   onAdopt,
   dir,
+  reviewing = false,
+  reviewed = [],
+  onReviewing,
+  onReviewed,
 }: {
   html: string;
   /** The draft's references, in stored order. */
@@ -56,6 +61,13 @@ export function Editor({
    */
   onAdopt?: (refs: PortableRef[]) => Promise<{ ids: Map<number, number>; citations: CitationRef[] }>;
   dir?: "ltr" | "rtl";
+  /** Review mode is on: the paragraphs passed are shown, and the bar to pass them. */
+  reviewing?: boolean;
+  /** The fingerprints of the paragraphs marked reviewed (see ./review.ts). */
+  reviewed?: string[];
+  onReviewing?: (on: boolean) => void;
+  /** The reviewed list as it now stands, for the desk to keep. */
+  onReviewed?: (keys: string[]) => void;
 }) {
   const box = useRef<HTMLDivElement>(null);
   /** What we last wrote into the box, so we don't fight the cursor. */
@@ -309,6 +321,134 @@ export function Editor({
     };
   }, [emit, onAdopt]);
 
+  // ---- review mode -------------------------------------------------------
+  //
+  // You read the draft over where it is, in the editor, and pass it a
+  // paragraph at a time: the one the caret is in has a bar beside it, and one
+  // you have passed has its first line highlighted. The text stays editable
+  // throughout, because the point of reading it over is to fix what you find.
+  // See ./review.ts for why none of this is written into the draft.
+
+  /** Scopes the review stylesheet to this editor's box. */
+  const editorId = useId();
+  const scope = `[data-editor="${editorId}"]`;
+  /** The units as the text last stood, for the buttons and the keyboard. */
+  const units = useRef<ReviewUnit[]>([]);
+  const [current, setCurrent] = useState<HTMLElement | null>(null);
+  const [sheet, setSheet] = useState("");
+  const [tally, setTally] = useState({ done: 0, total: 0, at: -1 });
+
+  // Redrawn whenever the text, the list or the caret's paragraph changes.
+  // Only after the text is in the box, which is why this reads the DOM in an
+  // effect rather than the HTML during render.
+  useEffect(() => {
+    const el = box.current;
+    if (!el) return;
+    const list = reviewUnits(el, scope);
+    units.current = list;
+    const passed = new Set(reviewed);
+    setSheet(reviewing ? reviewSheet(list, passed, current) : "");
+    setTally({
+      done: list.filter((u) => passed.has(u.key)).length,
+      total: list.length,
+      at: list.findIndex((u) => u.el === current),
+    });
+  }, [html, reviewed, reviewing, current, scope]);
+
+  // Which paragraph the caret is in, wherever it was moved from.
+  useEffect(() => {
+    const follow = () => {
+      const el = box.current;
+      const sel = document.getSelection();
+      if (!el || !sel?.anchorNode || !el.contains(sel.anchorNode)) return;
+      setCurrent(unitOf(el, sel.anchorNode));
+    };
+    document.addEventListener("selectionchange", follow);
+    return () => document.removeEventListener("selectionchange", follow);
+  }, []);
+
+  /** Puts the caret at the start of a unit and brings it to the middle of the view. */
+  const goTo = useCallback((unit: ReviewUnit | undefined) => {
+    const el = box.current;
+    if (!el || !unit) return;
+    el.focus();
+    const range = document.createRange();
+    range.selectNodeContents(unit.el);
+    range.collapse(true);
+    const sel = window.getSelection();
+    sel?.removeAllRanges();
+    sel?.addRange(range);
+    unit.el.scrollIntoView({ block: "center", behavior: "smooth" });
+    setCurrent(unit.el);
+  }, []);
+
+  /** The reviewed list with one unit's mark flipped, keeping only paragraphs still in the draft. */
+  const flip = useCallback(
+    (unit: ReviewUnit, on: boolean): Set<string> => {
+      const present = new Set(units.current.map((u) => u.key));
+      const next = new Set(reviewed.filter((k) => present.has(k)));
+      if (on) next.add(unit.key);
+      else next.delete(unit.key);
+      onReviewed?.([...next]);
+      return next;
+    },
+    [reviewed, onReviewed]
+  );
+
+  const step = useCallback(
+    (by: 1 | -1) => {
+      const list = units.current;
+      const at = list.findIndex((u) => u.el === current);
+      goTo(list[at === -1 ? 0 : Math.min(list.length - 1, Math.max(0, at + by))]);
+    },
+    [current, goTo]
+  );
+
+  /** The next unit not yet passed after `from`, coming round to the top. */
+  const nextOpen = (passed: Set<string>, from: number) => {
+    const list = units.current;
+    for (let i = 1; i <= list.length; i++) {
+      const u = list[(from + i) % list.length];
+      if (!passed.has(u.key)) return u;
+    }
+    return undefined;
+  };
+
+  /** Passes the paragraph you are on and takes you to the next one waiting. */
+  const passAndNext = useCallback(() => {
+    const list = units.current;
+    const at = list.findIndex((u) => u.el === current);
+    if (at === -1) {
+      goTo(nextOpen(new Set(reviewed), -1));
+      return;
+    }
+    const passed = flip(list[at], true);
+    const next = nextOpen(passed, at);
+    if (next) goTo(next);
+  }, [current, reviewed, flip, goTo]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  /** Into review mode at the first paragraph not yet passed, unless the caret is already in one. */
+  const startReview = () => {
+    onReviewing?.(true);
+    if (!current || !box.current?.contains(current)) goTo(nextOpen(new Set(reviewed), -1) ?? units.current[0]);
+  };
+
+  const onKeyDown = (e: React.KeyboardEvent) => {
+    if (!reviewing) return;
+    if (e.key === "Enter" && (e.ctrlKey || e.metaKey)) {
+      e.preventDefault();
+      passAndNext();
+    } else if (e.altKey && (e.key === "ArrowDown" || e.key === "ArrowUp")) {
+      e.preventDefault();
+      step(e.key === "ArrowDown" ? 1 : -1);
+    } else if (e.key === "Escape") {
+      onReviewing?.(false);
+    }
+  };
+
+  const here = tally.at === -1 ? undefined : units.current[tally.at];
+  const herePassed = here ? reviewed.includes(here.key) : false;
+
   /** Each reference's number as the text stands, for the "Cite existing" list. */
   const numbers = numbering(html, citations);
 
@@ -388,18 +528,97 @@ export function Editor({
           </select>
         )}
 
+        {onReviewed ? (
+          <>
+            <Divider />
+            <button
+              onMouseDown={(e) => e.preventDefault()}
+              onClick={() => (reviewing ? onReviewing?.(false) : startReview())}
+              aria-pressed={reviewing}
+              className={`rounded px-2 py-1 text-xs font-medium transition ${
+                reviewing
+                  ? "bg-[var(--color-ink)] text-white"
+                  : "text-[var(--color-ink)] hover:bg-[var(--color-accent-soft)]"
+              }`}
+              title="Read the draft over a paragraph at a time and mark each one reviewed"
+            >
+              Review
+              {tally.total > 0 && (tally.done > 0 || reviewing) ? (
+                <span className="ms-1 tabular-nums opacity-70">
+                  {tally.done}/{tally.total}
+                </span>
+              ) : null}
+            </button>
+          </>
+        ) : null}
+
         <span className="ml-auto text-[0.68rem] text-[var(--color-muted)]">
           Pastes from outside Raazi arrive as plain text
         </span>
+
+        {reviewing && (
+          <div className="mt-1.5 flex basis-full flex-wrap items-center gap-x-3 gap-y-1 border-t border-[var(--color-rule)] pt-1.5 text-xs">
+            <span className="tabular-nums text-[var(--color-muted)]">
+              {tally.at === -1 ? "Click into a paragraph" : `Paragraph ${tally.at + 1} of ${tally.total}`}
+            </span>
+            {/* How far through you are, as the highlights add up. */}
+            <span className="flex items-center gap-1.5 tabular-nums text-[var(--color-muted)]">
+              <span className="h-1.5 w-20 overflow-hidden rounded-full bg-[var(--color-rule)]">
+                <span
+                  className="block h-full bg-[var(--color-reviewed)] shadow-[inset_0_0_0_1px_rgba(0,0,0,0.08)]"
+                  style={{ width: `${tally.total ? (tally.done / tally.total) * 100 : 0}%` }}
+                />
+              </span>
+              {tally.total > 0 && tally.done === tally.total ? "All reviewed" : `${tally.done} reviewed`}
+            </span>
+            <span className="flex items-center gap-1">
+              <ReviewButton title="Previous paragraph (Alt+↑)" disabled={tally.at <= 0} onClick={() => step(-1)}>
+                ↑
+              </ReviewButton>
+              <ReviewButton title="Next paragraph (Alt+↓)" disabled={tally.at >= tally.total - 1} onClick={() => step(1)}>
+                ↓
+              </ReviewButton>
+            </span>
+            <ReviewButton
+              title={herePassed ? "Take the mark off this paragraph" : "Mark this paragraph reviewed"}
+              disabled={!here}
+              on={herePassed}
+              onClick={() => here && flip(here, !herePassed)}
+            >
+              {herePassed ? "✓ Reviewed" : "Mark reviewed"}
+            </ReviewButton>
+            <ReviewButton
+              title="Mark this paragraph reviewed and go to the next one waiting (Ctrl+Enter)"
+              disabled={tally.total === 0 || (herePassed && tally.done === tally.total)}
+              onClick={passAndNext}
+            >
+              Mark &amp; next →
+            </ReviewButton>
+            <span className="text-[0.68rem] text-[var(--color-muted)]">
+              Changing a reviewed paragraph takes its mark off.
+            </span>
+            <button
+              onMouseDown={(e) => e.preventDefault()}
+              onClick={() => onReviewing?.(false)}
+              className="ml-auto rounded px-2 py-1 font-medium text-[var(--color-accent)] hover:bg-[var(--color-accent-soft)]"
+              title="Leave review mode (Esc)"
+            >
+              Done
+            </button>
+          </div>
+        )}
       </div>
 
+      {sheet ? <style>{sheet}</style> : null}
       <div
         ref={box}
+        data-editor={editorId}
         contentEditable
         suppressContentEditableWarning
         dir={dir}
         onInput={emit}
         onBlur={emit}
+        onKeyDown={onKeyDown}
         spellCheck
         role="textbox"
         aria-multiline="true"
@@ -449,6 +668,38 @@ function Tool({
       } ${bold ? "font-bold" : ""} ${italic ? "italic" : ""}`}
     >
       {label}
+    </button>
+  );
+}
+
+/** A button on the review bar; like the toolbar's, it leaves the caret where it was. */
+function ReviewButton({
+  title,
+  onClick,
+  disabled,
+  on,
+  children,
+}: {
+  title: string;
+  onClick: () => void;
+  disabled?: boolean;
+  on?: boolean;
+  children: React.ReactNode;
+}) {
+  return (
+    <button
+      onMouseDown={(e) => e.preventDefault()}
+      onClick={onClick}
+      disabled={disabled}
+      title={title}
+      aria-pressed={on}
+      className={`rounded border px-2 py-0.5 transition disabled:opacity-35 ${
+        on
+          ? "border-transparent bg-[var(--color-reviewed)] text-[var(--color-ink)]"
+          : "border-[var(--color-rule)] bg-white hover:bg-[var(--color-accent-soft)]"
+      }`}
+    >
+      {children}
     </button>
   );
 }

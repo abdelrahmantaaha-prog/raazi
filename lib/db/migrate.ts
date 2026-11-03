@@ -437,6 +437,11 @@ export function migrate(db: Database.Database) {
   // fact-check reads, so neither has to be derived from the other at read time.
   addColumn(db, "drafts", "body_html", "TEXT NOT NULL DEFAULT ''");
 
+  // The paragraphs you have read over and passed, as a JSON list of their
+  // fingerprints (see app/write/review.ts). Kept beside the text rather than
+  // in it, so nothing about a review can reach the markup or the export.
+  addColumn(db, "drafts", "reviewed_json", "TEXT");
+
   // How much of a passage you have read, 0 to 1. A passage of a book runs to
   // several pages, so whole passages were far too coarse a unit: "Read to here"
   // counted the rest of the passage you stopped in, and reading mode counted

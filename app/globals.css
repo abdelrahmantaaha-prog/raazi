@@ -80,6 +80,8 @@
   --color-rule: #e2ddd3;
   --color-accent: #7a4b2a;
   --color-accent-soft: #f0e7dd;
+  /* The first line of a paragraph passed in review mode. */
+  --color-reviewed: #dde8c6;
   --font-serif: "Amiri", Georgia, "Iowan Old Style", "Times New Roman", serif;
   --font-sans: "Amiri", ui-sans-serif, system-ui, -apple-system, "Segoe UI", sans-serif;
 }

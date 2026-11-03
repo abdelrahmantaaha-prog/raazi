@@ -24,6 +24,8 @@ export interface Draft {
   body_md: string;
   check_json: string | null;
   checked_at: string | null;
+  /** The fingerprints of the paragraphs marked reviewed, as a JSON list. */
+  reviewed_json: string | null;
   created_at: string;
   updated_at: string;
 }
@@ -124,6 +126,39 @@ export function saveDraft(
       "UPDATE drafts SET title=?, body_html=?, body_md=?, updated_at=datetime('now') WHERE id=?"
     )
     .run(patch.title?.trim() || current.title, html, text, id);
+}
+
+/**
+ * Which paragraphs of a draft you have reviewed, by fingerprint.
+ *
+ * A fingerprint is of the paragraph's words, so editing a paragraph you had
+ * passed takes it off the list by itself: what you approved is no longer what
+ * is there. Saving a review does not touch `updated_at` — reading a draft
+ * over is not writing it, and the list of drafts is ordered by writing.
+ */
+export function reviewedFor(id: number): string[] {
+  const row = db().prepare("SELECT reviewed_json FROM drafts WHERE id=?").get(id) as
+    | { reviewed_json: string | null }
+    | undefined;
+  return parseReviewed(row?.reviewed_json ?? null);
+}
+
+export function saveReviewed(id: number, keys: unknown): string[] {
+  const clean = parseReviewed(JSON.stringify(keys ?? []));
+  db().prepare("UPDATE drafts SET reviewed_json=? WHERE id=?").run(JSON.stringify(clean), id);
+  return clean;
+}
+
+/** Short opaque strings, no repeats, and not without end. */
+function parseReviewed(json: string | null): string[] {
+  if (!json) return [];
+  try {
+    const list = JSON.parse(json);
+    if (!Array.isArray(list)) return [];
+    return [...new Set(list.filter((k): k is string => typeof k === "string" && /^[a-z0-9]{1,24}$/.test(k)))].slice(0, 5000);
+  } catch {
+    return [];
+  }
 }
 
 export function deleteDraft(id: number): void {
