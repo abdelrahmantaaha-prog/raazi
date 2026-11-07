@@ -134,6 +134,14 @@ function assemble(flavour) {
   if (fs.existsSync(pub)) {
     fs.cpSync(pub, path.join(server, "public"), { recursive: true });
   }
+  // The page view's pdf.js, which prebuild copies into public/ from
+  // node_modules. Without it a PDF opens as text with a note, not as pages.
+  for (const rel of ["public/pdfjs/pdf.min.mjs", "public/pdfjs/pdf.worker.min.mjs", "public/pdfjs/cmaps"]) {
+    if (!fs.existsSync(path.join(server, rel))) {
+      console.error(`[dist] REFUSING to ship ${flavour}: server/${rel} is missing`);
+      process.exit(1);
+    }
+  }
 
   const exe = path.join(root, "Raazi.exe");
   if (fs.existsSync(exe)) fs.copyFileSync(exe, path.join(out, "Raazi.exe"));

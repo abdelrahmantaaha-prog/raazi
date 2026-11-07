@@ -22,12 +22,16 @@ import { Lookup, type LookupAt } from "./Lookup";
 import { SendToWrite, type SendAt } from "./SendToWrite";
 import { LitReviewWindow } from "../../components/LitReview";
 import { ReaderParagraph } from "./ReaderParagraph";
+import { PdfPages, type PageBlock, type PdfApi } from "./PdfPages";
+import { tidySelection } from "@/lib/pdf-align";
 
 export interface Passage {
   id: number;
   seq: number;
   text: string;
   locator: string;
+  /** The page of the source file it starts on, when it has pages. */
+  page?: number | null;
   label: string | null;
   extracted: boolean;
   /** `model` is which model read the passage and found this, when known. */
@@ -58,6 +62,8 @@ interface Prefs {
   voice?: string;
   /** Speaking speed. 1 is the voice's own pace. */
   rate: number;
+  /** How large the page view draws a PDF's pages, in percent of the screen's fit. */
+  zoom: number;
   /** Bumped when a default changes in a way that should reach saved prefs. */
   v: number;
 }
@@ -71,8 +77,17 @@ const DEFAULTS: Prefs = {
   justify: true,
   mode: "scroll",
   rate: 1,
+  zoom: 100,
   v: 3,
 };
+
+/**
+ * How a PDF is shown: its own pages, or Raazi's text of it. Remembered per
+ * source, because the answer depends on the PDF — a well-made one reads best
+ * as itself, and a scan or a badly encoded one reads better as text.
+ */
+type View = "page" | "text";
+const viewKey = (sourceId: number) => `corpus.reader.view.${sourceId}`;
 
 const THEMES = {
   paper: { bg: "#fbfaf7", fg: "#1c1a17", muted: "#6b665e", rule: "#e2ddd3", mark: "#efe4d6" },
@@ -113,6 +128,7 @@ const READING_LINE = 140;
  */
 export function Reader({
   passages,
+  pdf = false,
   title,
   author,
   sourceId,
@@ -123,6 +139,8 @@ export function Reader({
   onClose,
 }: {
   passages: Passage[];
+  /** The source is a PDF, so its own pages can be shown. */
+  pdf?: boolean;
   title: string;
   author: string | null;
   sourceId: number;
@@ -159,6 +177,22 @@ export function Reader({
   /** A literature review of what you highlighted, and the paragraph it was in. */
   const [review, setReview] = useState<{ focus: string; context?: string } | null>(null);
   const selectionContext = useRef<string | undefined>(undefined);
+
+  /** A PDF's own pages, or the text. Read from storage with the prefs below. */
+  const [view, setView] = useState<View>(pdf ? "page" : "text");
+  /** The page view could not open the PDF, and the reader fell back to text. */
+  const [pageFailed, setPageFailed] = useState(false);
+  const pages = pdf && view === "page" && !pageFailed;
+  /** What the page view offers: a selection on the page as the extracted text. */
+  const pdfApi = useRef<PdfApi | null>(null);
+  /**
+   * Where you were when you switched views, to return to once the other view
+   * has laid itself out. The page view lays itself out only after the PDF has
+   * opened, so this waits for it.
+   */
+  const pendingJump = useRef<{ id: number; offset: number } | null>(null);
+  /** The opening position is restored once, by whichever view is first ready. */
+  const restoredOnce = useRef(false);
 
   const scroller = useRef<HTMLDivElement>(null);
   /** The in-flight soft scroll, so a second advance retargets it rather than
@@ -403,10 +437,13 @@ export function Reader({
         merged.v = DEFAULTS.v;
         setPrefs(merged);
       }
+      const v = localStorage.getItem(viewKey(sourceId));
+      if (v === "page" || v === "text") setView(v);
     } catch {
       /* first run */
     }
     setReady(true);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
   useEffect(() => {
@@ -421,10 +458,30 @@ export function Reader({
    * single time, and the one time you don't you scroll for a minute looking for
    * your place. So it restores, and says so, and offers the way back to the top.
    */
-  useLayoutEffect(() => {
-    if (!ready) return;
+  /**
+   * Returns to a place instantly, without the banner — for switching between
+   * the pages and the text, where the place is the one you were just at.
+   */
+  const jumpNow = useCallback((at: { id: number; offset: number }) => {
+    const el = scroller.current;
+    const target = el?.querySelector<HTMLElement>(`section[data-chunk="${at.id}"]`);
+    if (!el || !target) return;
+    el.scrollTop = target.offsetTop - READING_LINE + (target.offsetHeight || 0) * at.offset;
+    lastJump.current = { at, top: el.scrollTop };
+  }, []);
+
+  /**
+   * The last place returned to, and where the page was left. The page view
+   * regroups its pages by passage once it has found the text on them, which
+   * moves where a passage begins; a place restored before that is restored
+   * again, unless you have scrolled away from it since.
+   */
+  const lastJump = useRef<{ at: { id: number; offset: number }; top: number } | null>(null);
+
+  const restorePosition = useCallback((): (() => void) | undefined => {
     const el = scroller.current;
     if (!el) return;
+    restoredOnce.current = true;
 
     // A passage asked for by the link that opened the reader comes first;
     // otherwise the place you left off.
@@ -440,6 +497,7 @@ export function Reader({
 
     const into = asked ? 0 : (target.offsetHeight || 0) * (position.offset ?? 0);
     el.scrollTop = target.offsetTop - READING_LINE + into;
+    lastJump.current = { at: { id: chunkId, offset: asked ? 0 : position.offset ?? 0 }, top: el.scrollTop };
     lastSaved.current = { id: chunkId, offset: asked ? 0 : position.offset ?? 0 };
     setProgress(fraction());
 
@@ -458,7 +516,41 @@ export function Reader({
       if (flash) clearTimeout(flash);
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [ready]);
+  }, []);
+
+  // The text view is laid out as soon as it renders. The page view says when
+  // it is, through `onPagesReady`.
+  useLayoutEffect(() => {
+    if (!ready || pages) return;
+    const at = pendingJump.current;
+    if (at) {
+      pendingJump.current = null;
+      jumpNow(at);
+      return;
+    }
+    if (!restoredOnce.current) return restorePosition();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [ready, pages]);
+
+  const onPagesReady = useCallback(() => {
+    const at = pendingJump.current;
+    pendingJump.current = null;
+    if (at) jumpNow(at);
+    else if (!restoredOnce.current) restorePosition();
+  }, [jumpNow, restorePosition]);
+
+  const onPagesSettled = useCallback(() => {
+    const was = lastJump.current;
+    const el = scroller.current;
+    if (!was || !el || Math.abs(el.scrollTop - was.top) > 2) return;
+    jumpNow(was.at);
+  }, [jumpNow]);
+
+  const onPagesFailed = useCallback((why: string) => {
+    console.warn("[corpus] page view unavailable:", why);
+    setPageFailed(true);
+    setVoiceNote("The PDF itself could not be opened, so this is Raazi's text of it.");
+  }, []);
 
   // The reading line and the debounced save hang off one listener on the
   // element that actually moves. Progress does not: it is a fact about what
@@ -550,13 +642,52 @@ export function Reader({
    */
   const showParagraph = useCallback((index: number) => {
     const el = scroller.current;
-    const target = el?.querySelector<HTMLElement>(`[data-para="${index}"]`);
+    // On a PDF's pages a paragraph that could not be found there has no place
+    // of its own; its passage's pages are the nearest thing.
+    const target =
+      el?.querySelector<HTMLElement>(`[data-para="${index}"]`) ??
+      (paragraphs[index]
+        ? el?.querySelector<HTMLElement>(`section[data-chunk="${paragraphs[index].chunkId}"]`)
+        : null);
     if (!el || !target) return;
     const delta = target.getBoundingClientRect().top - el.getBoundingClientRect().top;
     // A third of the way down rather than the very top: a paragraph pinned to
     // the ceiling with the rest of the screen empty below it reads as broken.
     softScrollTo(el, Math.max(0, el.scrollTop + delta - el.clientHeight * 0.32), glide);
-  }, [glide]);
+  }, [glide, paragraphs]);
+
+  const switchView = useCallback(
+    (next: View) => {
+      const at = currentPassage();
+      if (at) pendingJump.current = at;
+      setView(next);
+      try {
+        localStorage.setItem(viewKey(sourceId), next);
+      } catch {
+        /* remembered for this sitting only */
+      }
+    },
+    [currentPassage, sourceId]
+  );
+
+  /** The book's passages as the page view needs them. */
+  const pageBlocks = useMemo<PageBlock[]>(() => {
+    const pageOf = new Map(passages.map((p) => [p.id, p.page ?? null]));
+    let first = 0;
+    return blocks.map((b) => {
+      const out = {
+        key: b.key,
+        chunkId: b.chunkId,
+        page: pageOf.get(b.chunkId) ?? null,
+        paragraphs: b.paragraphs,
+        first,
+        divider: b.divider,
+        mentions: b.mentions,
+      };
+      first += b.paragraphs.length;
+      return out;
+    });
+  }, [blocks, passages]);
 
   /**
    * "I have read this one." The only thing in the reader that records progress.
@@ -917,16 +1048,21 @@ export function Reader({
       // Deferred a tick: on a double-click the selection is not final yet.
       setTimeout(() => {
         const sel = window.getSelection();
-        const text = sel?.toString().trim() ?? "";
-        if (!sel || sel.isCollapsed || !text) {
+        const raw = sel?.toString().trim() ?? "";
+        if (!sel || sel.isCollapsed || !raw) {
           setLookup(null);
           setSend(null);
           return;
         }
         const box = sel.getRangeAt(0).getBoundingClientRect();
         if (!box.width && !box.height) return;
-        // The paragraph it was in, should you ask for a literature review of it.
         const anchor = sel.anchorNode instanceof Element ? sel.anchorNode : sel.anchorNode?.parentElement;
+        // On a PDF's page, what the browser selected is the page's text as
+        // pdf.js laid it out — a break at every line end, a hyphen in every
+        // broken word. It is taken back to Raazi's text of the same words.
+        const onPage = anchor?.closest?.(".textLayer") ? pdfApi.current : null;
+        const text = onPage ? tidySelection(raw) : raw;
+        // The paragraph it was in, should you ask for a literature review of it.
         selectionContext.current =
           anchor?.closest?.("p, li, blockquote, h1, h2, h3, h4, section[data-chunk]")?.textContent?.slice(0, 6000) ?? undefined;
 
@@ -940,11 +1076,23 @@ export function Reader({
           if (text.length < 12) return;
           const node = sel.anchorNode instanceof Element ? sel.anchorNode : sel.anchorNode?.parentElement;
           const chunk = node?.closest?.("section[data-chunk]")?.getAttribute("data-chunk");
+          const chunkId = chunk ? Number(chunk) : null;
           setLookup(null);
-          setSend({ text, chunkId: chunk ? Number(chunk) : null, x: box.left + box.width / 2, y: box.top });
+          if (onPage) {
+            const found = onPage.resolve(raw, chunkId);
+            selectionContext.current = found.context?.slice(0, 6000);
+            setSend({ text: found.text, chunkId: found.chunkId, x: box.left + box.width / 2, y: box.top });
+          } else {
+            setSend({ text, chunkId, x: box.left + box.width / 2, y: box.top });
+          }
           return;
         }
         setSend(null);
+        if (onPage) {
+          // The paragraph it is in, from the text rather than the whole page.
+          const chunk = anchor?.closest?.("section[data-chunk]")?.getAttribute("data-chunk");
+          selectionContext.current = onPage.resolve(raw, chunk ? Number(chunk) : null).context?.slice(0, 6000);
+        }
         setLookup({ word: text, x: box.left + box.width / 2, y: box.top });
       }, 0);
     };
@@ -1096,6 +1244,26 @@ export function Reader({
             {Math.round(progress * 100)}%
           </span>
 
+          {pdf && !pageFailed && (
+            <span
+              className="flex overflow-hidden rounded"
+              style={{ border: `1px solid ${theme.rule}` }}
+              title="The PDF's own pages, or Raazi's text of it"
+            >
+              {(["page", "text"] as const).map((v) => (
+                <button
+                  key={v}
+                  onClick={() => view !== v && switchView(v)}
+                  aria-pressed={view === v}
+                  className="px-2 py-1 hover:opacity-70"
+                  style={view === v ? { background: theme.fg, color: theme.bg } : { color: theme.muted }}
+                >
+                  {v === "page" ? "Page" : "Text"}
+                </button>
+              ))}
+            </span>
+          )}
+
           <button
             onClick={() =>
               setPrefs({ ...prefs, mode: prefs.mode === "focus" ? "scroll" : "focus" })
@@ -1191,24 +1359,39 @@ export function Reader({
         {panel === "type" && (
           <div className="mx-auto max-w-5xl px-5 pb-3" style={{ borderTop: `1px solid ${theme.rule}` }}>
             <div className="flex flex-wrap items-center gap-x-6 gap-y-3 pt-3 text-sm">
-              <Stepper
-                label="Text"
-                value={prefs.size}
-                onChange={(size) => setPrefs({ ...prefs, size })}
-                min={14}
-                max={30}
-                theme={theme}
-                suffix="px"
-              />
-              <Stepper
-                label="Width"
-                value={prefs.measure}
-                onChange={(measure) => setPrefs({ ...prefs, measure })}
-                min={24}
-                max={52}
-                theme={theme}
-                suffix="em"
-              />
+              {pages ? (
+                <Stepper
+                  label="Zoom"
+                  value={prefs.zoom}
+                  onChange={(zoom) => setPrefs({ ...prefs, zoom })}
+                  min={50}
+                  max={250}
+                  step={10}
+                  theme={theme}
+                  suffix="%"
+                />
+              ) : (
+                <>
+                  <Stepper
+                    label="Text"
+                    value={prefs.size}
+                    onChange={(size) => setPrefs({ ...prefs, size })}
+                    min={14}
+                    max={30}
+                    theme={theme}
+                    suffix="px"
+                  />
+                  <Stepper
+                    label="Width"
+                    value={prefs.measure}
+                    onChange={(measure) => setPrefs({ ...prefs, measure })}
+                    min={24}
+                    max={52}
+                    theme={theme}
+                    suffix="em"
+                  />
+                </>
+              )}
               <Segmented
                 value={prefs.theme}
                 options={[
@@ -1219,12 +1402,14 @@ export function Reader({
                 onChange={(v) => setPrefs({ ...prefs, theme: v as Prefs["theme"] })}
                 theme={theme}
               />
-              <Toggle
-                label="Serif"
-                on={prefs.serif}
-                onChange={(serif) => setPrefs({ ...prefs, serif })}
-                theme={theme}
-              />
+              {!pages && (
+                <Toggle
+                  label="Serif"
+                  on={prefs.serif}
+                  onChange={(serif) => setPrefs({ ...prefs, serif })}
+                  theme={theme}
+                />
+              )}
               {canSpeak && (
                 <VoicePicker
                   voices={voices}
@@ -1236,12 +1421,14 @@ export function Reader({
                   theme={theme}
                 />
               )}
-              <Toggle
-                label="Justify"
-                on={prefs.justify}
-                onChange={(justify) => setPrefs({ ...prefs, justify })}
-                theme={theme}
-              />
+              {!pages && (
+                <Toggle
+                  label="Justify"
+                  on={prefs.justify}
+                  onChange={(justify) => setPrefs({ ...prefs, justify })}
+                  theme={theme}
+                />
+              )}
               <Toggle
                 label="Show entities"
                 on={prefs.highlights}
@@ -1255,10 +1442,18 @@ export function Reader({
                 className="mt-3 w-full rounded px-2 py-1.5 text-sm"
                 style={{ background: theme.bg, color: theme.fg, border: `1px solid ${theme.rule}` }}
                 onChange={(e) => {
-                  const el = scroller.current?.querySelector<HTMLElement>(`#${CSS.escape(e.target.value)}`);
-                  if (el && scroller.current) {
-                    scroller.current.scrollTo({ top: el.offsetTop - READING_LINE, behavior: "smooth" });
-                  }
+                  const sc = scroller.current;
+                  if (!sc) return;
+                  // A chapter not found on the PDF's pages is jumped to by its passage.
+                  const chunkId = blocks.find((b) => b.key === e.target.value)?.chunkId;
+                  const el =
+                    sc.querySelector<HTMLElement>(`#${CSS.escape(e.target.value)}`) ??
+                    sc.querySelector<HTMLElement>(`section[data-chunk="${chunkId}"]`);
+                  if (!el) return;
+                  // Measured as rectangles: on the pages, the anchor sits inside
+                  // a positioned page, so its offsetTop is from the page's top.
+                  const top = sc.scrollTop + el.getBoundingClientRect().top - sc.getBoundingClientRect().top;
+                  sc.scrollTo({ top: top - READING_LINE, behavior: "smooth" });
                 }}
                 defaultValue=""
               >
@@ -1348,6 +1543,29 @@ export function Reader({
         </div>
       )}
 
+      {pages ? (
+        // Room at the foot, in reading mode, for the last paragraph to reach
+        // the reading line, as the text view has.
+        <div className={prefs.mode === "focus" ? "pb-[60vh]" : undefined}>
+          <PdfPages
+            sourceId={sourceId}
+            blocks={pageBlocks}
+            scroller={scroller}
+            zoom={prefs.zoom}
+            cursor={cursor}
+            focus={prefs.mode === "focus"}
+            speaking={listening}
+            theme={theme}
+            themeName={prefs.theme}
+            highlights={prefs.highlights}
+            onOpenEntity={setOpenEntity}
+            onReady={onPagesReady}
+            onSettled={onPagesSettled}
+            onFail={onPagesFailed}
+            api={pdfApi}
+          />
+        </div>
+      ) : (
       <article
         // Room at the foot for the advance bar, and enough beyond it that the
         // last paragraph can still be scrolled up to the reading line.
@@ -1433,6 +1651,7 @@ export function Reader({
           End of {title}.
         </p>
       </article>
+      )}
 
       {/* The advance bar. Fixed to the foot of the screen so the button is in
           the same place every time — the point of the mode is that reading on
@@ -1794,6 +2013,7 @@ function Stepper({
   max,
   theme,
   suffix,
+  step = 1,
 }: {
   label: string;
   value: number;
@@ -1802,6 +2022,7 @@ function Stepper({
   max: number;
   theme: Theme;
   suffix: string;
+  step?: number;
 }) {
   const btn = {
     border: `1px solid ${theme.rule}`,
@@ -1813,7 +2034,7 @@ function Stepper({
       <button
         className="h-6 w-6 rounded hover:opacity-70"
         style={btn}
-        onClick={() => onChange(Math.max(min, value - 1))}
+        onClick={() => onChange(Math.max(min, value - step))}
         aria-label={`Smaller ${label}`}
       >
         −
@@ -1825,7 +2046,7 @@ function Stepper({
       <button
         className="h-6 w-6 rounded hover:opacity-70"
         style={btn}
-        onClick={() => onChange(Math.min(max, value + 1))}
+        onClick={() => onChange(Math.min(max, value + step))}
         aria-label={`Larger ${label}`}
       >
         +

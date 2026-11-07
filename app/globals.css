@@ -318,3 +318,66 @@ body {
      replaced. */
   .page-enter .fixed { animation: none; }
 }
+
+/* ---------------------------------------------------------------------------
+   The reader's page view: pdf.js's text layer.
+
+   The page is a picture on a canvas; over it sits the page's own text, in
+   transparent spans that pdf.js places and scales to lie exactly on the words
+   drawn underneath. That is what makes the picture selectable — and selection
+   is how the dictionary, the writing desk and the literature review are
+   reached, so the page view keeps all three.
+
+   These are pdf.js's own rules for that layer (web/pdf_viewer.css), less the
+   parts for search highlights and forms, which the page view does not use. The
+   layer is sized from `--scale-factor` on the page.
+   --------------------------------------------------------------------------- */
+
+.textLayer {
+  position: absolute;
+  text-align: initial;
+  inset: 0;
+  overflow: clip;
+  opacity: 1;
+  line-height: 1;
+  text-size-adjust: none;
+  forced-color-adjust: none;
+  transform-origin: 0 0;
+  caret-color: CanvasText;
+  z-index: 0;
+}
+.textLayer :is(span, br) {
+  color: transparent;
+  position: absolute;
+  white-space: pre;
+  cursor: text;
+  transform-origin: 0% 0%;
+}
+.textLayer > :not(.markedContent),
+.textLayer .markedContent span:not(.markedContent) {
+  z-index: 1;
+}
+.textLayer span.markedContent {
+  top: 0;
+  height: 0;
+}
+.textLayer ::selection {
+  background: rgba(0 0 255 / 0.25);
+  background: color-mix(in srgb, AccentColor, transparent 75%);
+}
+.textLayer br::selection {
+  background: transparent;
+}
+/* Below the last line: catches a drag that runs off the text, so the
+   selection ends at the text rather than jumping to the top of the page. */
+.textLayer .endOfContent {
+  display: block;
+  position: absolute;
+  inset: 100% 0 0;
+  z-index: 0;
+  cursor: default;
+  user-select: none;
+}
+.textLayer.selecting .endOfContent {
+  top: 0;
+}

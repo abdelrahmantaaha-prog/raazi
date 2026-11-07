@@ -115,6 +115,7 @@ export function SourceView({
     return (
       <Reader
         passages={passages}
+        pdf={source.kind === "pdf"}
         title={source.title}
         author={source.author}
         sourceId={source.id}

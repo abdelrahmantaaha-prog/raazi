@@ -23,3 +23,6 @@ dist/
 
 # Rendered videos and captured frames — rebuild from video/.
 video/out/
+
+# pdf.js for the page view, copied from node_modules by scripts/pdfjs-assets.mjs.
+public/pdfjs/

@@ -87,20 +87,25 @@ export default async function SourcePage({
     byChunk.get(m.chunk_id)!.push(m);
   }
 
-  const passages: Passage[] = chunks.map((c) => ({
-    id: c.id,
-    seq: c.seq,
-    text: c.text,
-    locator: formatLocator(JSON.parse(c.locator_json) as Locator, c.doc_label),
-    label: c.doc_label,
-    extracted: Boolean(c.extracted_at),
-    mentions: (byChunk.get(c.id) ?? []).map((m) => ({
-      surface: m.surface,
-      entityId: m.entity_id,
-      name: m.canonical_name,
-      model: m.model,
-    })),
-  }));
+  const passages: Passage[] = chunks.map((c) => {
+    const locator = JSON.parse(c.locator_json) as Locator;
+    return {
+      id: c.id,
+      seq: c.seq,
+      text: c.text,
+      locator: formatLocator(locator, c.doc_label),
+      // The page it starts on, which is how the page view finds it in the PDF.
+      page: typeof locator.page === "number" ? locator.page : null,
+      label: c.doc_label,
+      extracted: Boolean(c.extracted_at),
+      mentions: (byChunk.get(c.id) ?? []).map((m) => ({
+        surface: m.surface,
+        entityId: m.entity_id,
+        name: m.canonical_name,
+        model: m.model,
+      })),
+    };
+  });
 
   const words = chunks.reduce((n, c) => n + c.text.split(/\s+/).length, 0);
   const unread = chunks.filter((c) => !c.extracted_at).length;
