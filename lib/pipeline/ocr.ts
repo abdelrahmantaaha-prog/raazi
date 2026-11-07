@@ -179,7 +179,7 @@ export async function handleOcr(task: Task): Promise<void> {
 
 /**
  * The JPEG behind each page, when every page is exactly one JPEG and nothing
- * else — a photo added to Corpus, or most scans. Null when any page is not, and
+ * else — a photo added to Raazi, or most scans. Null when any page is not, and
  * the pages then go as a PDF slice.
  */
 export function pageImages(doc: PDFDocument, indices: number[]): Buffer[] | null {

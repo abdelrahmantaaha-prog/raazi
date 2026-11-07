@@ -848,7 +848,7 @@ export async function generateWebJson<T>(opts: {
   system?: string;
   stage?: Stage;
   timeoutMs?: number;
-  /** Also offer Corpus's research tools — registers, archives, public accounts, ships. */
+  /** Also offer Raazi's research tools — registers, archives, public accounts, ships. */
   research?: boolean;
 }): Promise<CallResult<T> & { seen: string[] }> {
   if (!canSearchWeb()) {

@@ -205,14 +205,14 @@ export function AddSource({ onAdded }: { onAdded: () => void }) {
           </div>
           <p className="text-sm text-[var(--color-muted)]">
             {progress ??
-              "Every file is copied into a folder of its own in Corpus and listed there. Nothing is read — and nothing is spent — until you open the folder and press Read. Subfolders are kept. Word, Excel and PowerPoint files and photos of pages are read too. Files Corpus cannot read (old .doc or .xls files, programs, other picture formats) are listed but left alone."}
+              "Every file is copied into a folder of its own in Raazi and listed there. Nothing is read — and nothing is spent — until you open the folder and press Read. Subfolders are kept. Word, Excel and PowerPoint files and photos of pages are read too. Files Raazi cannot read (old .doc or .xls files, programs, other picture formats) are listed but left alone."}
           </p>
           <input
             ref={dirRef}
             type="file"
             multiple
             className="hidden"
-            // Folder picking: every browser Corpus opens in supports it, but
+            // Folder picking: every browser Raazi opens in supports it, but
             // React does not know the attribute, so it is passed through as is.
             {...({ webkitdirectory: "", directory: "" } as Record<string, string>)}
             onChange={(e) => e.target.files?.length && void submitFolder(e.target.files)}

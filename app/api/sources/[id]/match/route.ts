@@ -49,7 +49,7 @@ export async function GET(req: Request, ctx: { params: Promise<{ id: string }> }
 
   try {
     const res = await fetch(`https://openlibrary.org/search.json?${params}`, {
-      headers: { "user-agent": "Corpus/0.1 (personal research)" },
+      headers: { "user-agent": "Raazi/0.1 (personal research)" },
     });
     if (!res.ok) throw new Error(`Open Library returned ${res.status}`);
     const data = (await res.json()) as { docs?: Doc[] };
@@ -112,7 +112,7 @@ export async function POST(req: Request, ctx: { params: Promise<{ id: string }> 
 
   try {
     const res = await fetch(`https://covers.openlibrary.org/b/id/${body.coverId}-L.jpg`, {
-      headers: { "user-agent": "Corpus/0.1 (personal research)" },
+      headers: { "user-agent": "Raazi/0.1 (personal research)" },
     });
     if (!res.ok) throw new Error(`Cover fetch failed (${res.status}).`);
     const buf = Buffer.from(await res.arrayBuffer());

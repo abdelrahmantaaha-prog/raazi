@@ -6,6 +6,7 @@ next-env.d.ts
 *.tsbuildinfo
 
 # Launcher build output — rebuild with `npm run build:exe`.
+Raazi.exe
 Corpus.exe
 launcher/corpus.ico
 

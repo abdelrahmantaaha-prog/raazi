@@ -118,7 +118,7 @@ export function Editor({
   /**
    * What the caret is standing in, so the toolbar can show it.
    *
-   * Every other set of tabs and toggles in Corpus says which one you are on;
+   * Every other set of tabs and toggles in Raazi says which one you are on;
    * this row of six did not, so the only way to find out whether a paragraph
    * was a heading — or whether the words you were about to type would come
    * out bold — was to type them and look. `selectionchange` is on the
@@ -208,7 +208,7 @@ export function Editor({
   // it, and one from elsewhere brings its reference along, joining the one
   // already here when the same source is cited rather than adding it twice.
   //
-  // Anything from outside Corpus arrives as plain text. Pasting from a web
+  // Anything from outside Raazi arrives as plain text. Pasting from a web
   // page otherwise drags in fonts, colours and background images, and a
   // document that changes appearance depending on where a paragraph came from
   // is not a document.
@@ -389,7 +389,7 @@ export function Editor({
         )}
 
         <span className="ml-auto text-[0.68rem] text-[var(--color-muted)]">
-          Pastes from outside Corpus arrive as plain text
+          Pastes from outside Raazi arrive as plain text
         </span>
       </div>
 

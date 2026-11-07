@@ -6,7 +6,7 @@ import path from "node:path";
 /**
  * LAN mode: the one shared secret between this machine and your phone.
  *
- * By default Corpus listens on 127.0.0.1 only, and nothing here applies —
+ * By default Raazi listens on 127.0.0.1 only, and nothing here applies —
  * whoever can reach it is already sitting at this computer. LAN mode is what
  * you switch on to reach the library from a phone, and it changes two things
  * at once: the server binds every interface, and every request has to carry a
@@ -49,7 +49,7 @@ interface LanStore {
 // not import that module (and the native driver it loads) to find the file.
 // LAN mode, its token and the paired copies belong to the machine rather
 // than to any one discipline: held per discipline, opening another one would
-// take Corpus off the network and hand the phone a different token. They live
+// take Raazi off the network and hand the phone a different token. They live
 // in the shared file beside the registry, with the keys. A copy pointed at a
 // single library (a test) keeps everything in that library.
 const DATA_DIR = process.env.CORPUS_DATA_DIR
@@ -199,19 +199,19 @@ export function signInPage(reason: string): string {
   const esc = (s: string) => s.replace(/&/g, "&amp;").replace(/</g, "&lt;");
   return `<!doctype html><html lang="en"><head><meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>Corpus — sign in</title>
+<title>Raazi — sign in</title>
 <style>
   body{font:16px/1.5 system-ui,sans-serif;background:#f6f2ea;color:#2a2622;margin:0;padding:2rem 1.25rem;max-width:32rem}
   h1{font-size:1.4rem;margin:0 0 .5rem}p{margin:.5rem 0 1rem;color:#5a534b}
   input{font:inherit;width:100%;box-sizing:border-box;padding:.6rem .7rem;border:1px solid #c9c1b4;border-radius:6px;background:#fff}
   button{font:inherit;margin-top:.75rem;padding:.6rem 1rem;border:0;border-radius:6px;background:#7a4b2a;color:#fff}
 </style></head><body>
-<h1>Corpus</h1>
+<h1>Raazi</h1>
 <p>${esc(reason)}</p>
 <form method="get" action="/login">
   <label>Token<br><input name="token" autocomplete="off" autocapitalize="off" spellcheck="false"></label>
   <button type="submit">Sign in</button>
 </form>
-<p>The token is in Settings on the computer running Corpus, as a link you can open or scan.</p>
+<p>The token is in Settings on the computer running Raazi, as a link you can open or scan.</p>
 </body></html>`;
 }

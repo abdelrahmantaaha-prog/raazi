@@ -30,7 +30,7 @@ export async function lookup(url: string): Promise<VideoMeta | null> {
   try {
     const res = await fetch(
       `https://www.youtube.com/oembed?url=${encodeURIComponent(watchUrl(id))}&format=json`,
-      { headers: { "user-agent": "Corpus/0.1 (personal research)" } }
+      { headers: { "user-agent": "Raazi/0.1 (personal research)" } }
     );
     if (!res.ok) return null;
 

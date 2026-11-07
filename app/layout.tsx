@@ -30,7 +30,7 @@ function disciplineName(): string | undefined {
 export const dynamic = "force-dynamic";
 
 export const metadata: Metadata = {
-  title: "Corpus",
+  title: "Raazi",
   description: "A research pedia built from your own sources.",
 };
 

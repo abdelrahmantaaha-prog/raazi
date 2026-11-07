@@ -1,9 +1,9 @@
-// Repairs story grouping built by older rules. Run with Corpus stopped.
+// Repairs story grouping built by older rules. Run with Raazi stopped.
 //
 //   node node_modules/tsx/dist/cli.mjs scripts/split-stories.mjs
 //     takes apart the stories that grew past one event (splitRunaways)
 //   node node_modules/tsx/dist/cli.mjs scripts/split-stories.mjs --since 2026-09-14
-//     files every story Corpus opened since that day again (rebuildStories)
+//     files every story Raazi opened since that day again (rebuildStories)
 //
 // Stories you named or pinned are left alone either way.
 const stories = await import("../lib/stories.ts");

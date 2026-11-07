@@ -80,7 +80,7 @@
                 android:layout_width="match_parent"
                 android:layout_height="wrap_content"
                 android:layout_marginTop="20dp"
-                android:text="Or type the address shown in the Corpus tray menu"
+                android:text="Or type the address shown in the Raazi tray menu"
                 android:textColor="@color/muted"
                 android:textSize="13sp" />
 

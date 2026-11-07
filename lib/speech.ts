@@ -26,7 +26,7 @@
  * me when it is genuinely finished.
  *
  * The one exception to "nothing sent anywhere" is a voice you choose from the
- * Natural list: those are Microsoft's, fetched by Corpus's server (see
+ * Natural list: those are Microsoft's, fetched by Raazi's server (see
  * lib/edge-voice.ts) so that they work in any browser, not only in Edge — and
  * choosing one means the paragraphs being read go to Microsoft. `OnlineSpeaker`
  * plays them. Nothing is sent unless one is chosen.
@@ -135,7 +135,7 @@ export function pickVoice(voices: Voice[], lang: "ar" | "en", preferredUri?: str
 
   // Having chosen a Natural voice, an Arabic chapter is read by a Natural
   // Arabic voice rather than dropping back to the machine's. And without
-  // having chosen one, nothing is sent to Microsoft on Corpus's own initiative.
+  // having chosen one, nothing is sent to Microsoft on Raazi's own initiative.
   const wantsNatural = chosen ? isNatural(chosen) : false;
 
   return (
@@ -151,7 +151,7 @@ export function pickVoice(voices: Voice[], lang: "ar" | "en", preferredUri?: str
 }
 
 /**
- * Microsoft's Natural voices, served through Corpus so that any browser can use
+ * Microsoft's Natural voices, served through Raazi so that any browser can use
  * them. Their `uri` is the voice's name with this prefix, which keeps them
  * apart from the browser's own voices in a saved choice.
  */

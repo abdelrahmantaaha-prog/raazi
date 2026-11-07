@@ -1,6 +1,6 @@
-# Corpus Inbox — browser extension
+# Raazi Inbox — browser extension
 
-Sends the article you are reading into the Corpus inbox, as your browser sees
+Sends the article you are reading into the Raazi inbox, as your browser sees
 it. The feeds fetch a page as a stranger; for a subscription outlet that means a
 headline and a sentence, and the inbox then asks you to paste the article. This
 skips the paste: signed in, paywall open, one click.
@@ -12,7 +12,7 @@ Works in Brave, Chrome and Edge (Manifest V3).
 1. Open `brave://extensions` (or `chrome://extensions`).
 2. Switch on **Developer mode** (top right).
 3. **Load unpacked** → choose this `extension` folder.
-4. Pin the icon. Right-click it → **Options** if Corpus is not at
+4. Pin the icon. Right-click it → **Options** if Raazi is not at
    `http://127.0.0.1:5400`, or is in LAN mode and needs its token.
 
 ## Use
@@ -51,23 +51,23 @@ choose the draft, **Gather quote + send article**. The draft you choose there is
 the one right-click and the shortcut use afterwards; until you choose, it is the
 draft you worked on last.
 
-## Articles inside Corpus
+## Articles inside Raazi
 
 The inbox's reading pane has a **Page** view that shows the article's own page,
-live, inside Corpus. Nearly every news site refuses to be shown inside another
+live, inside Raazi. Nearly every news site refuses to be shown inside another
 page, so on its own that view is blank. The extension lifts the refusal —
 removing `X-Frame-Options` and `Content-Security-Policy` from the response — for
-frames that Corpus's page opens, and nothing else: the rule matches only
-sub-frame requests started by Corpus's own address, and is rewritten when that
-address changes. Untick **Let Corpus show articles inside itself** in Options to
+frames that Raazi's page opens, and nothing else: the rule matches only
+sub-frame requests started by Raazi's own address, and is rewritten when that
+address changes. Untick **Let Raazi show articles inside itself** in Options to
 remove it.
 
-Clicking the icon, or Alt+Shift+C, on Corpus while an article is open in the
+Clicking the icon, or Alt+Shift+C, on Raazi while an article is open in the
 Page view sends *that article*, read out of its frame.
 
 Brave treats a page inside another site as a third party and keeps your logins
-away from it, so a paywalled article inside Corpus usually shows you signed
-out. To have it signed in, allow cross-site cookies for Corpus's address in
+away from it, so a paywalled article inside Raazi usually shows you signed
+out. To have it signed in, allow cross-site cookies for Raazi's address in
 Brave Shields — or open the article in its own tab and send it from there.
 
 The item behaves like anything a feed brought in: it groups with the running

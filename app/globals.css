@@ -15,7 +15,7 @@
      goes on setting the English. One family name covers both scripts and a
      mixed line picks the right face per character, which is why "Amiri" can
      sit at the front of every stack below without taking anything over.
-   - Nothing is fetched from Google at runtime. Corpus runs on a laptop that is
+   - Nothing is fetched from Google at runtime. Raazi runs on a laptop that is
      not always online, and a font that arrives over the network is a font that
      sometimes does not.
 

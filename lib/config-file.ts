@@ -121,7 +121,7 @@ export function adoptSharedConfig(): void {
   adopted = true;
   try {
     const shared = readFrom<Record<string, unknown>>(sharedPath());
-    // The file a Corpus that predates disciplines wrote: always the one at
+    // The file a Raazi that predates disciplines wrote: always the one at
     // the data root, whichever discipline happens to be open now. Reading
     // only the open one meant that opening a brand new discipline first —
     // before anything had been carried across — left the keys and the LAN

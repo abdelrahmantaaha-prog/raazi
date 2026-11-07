@@ -1,20 +1,20 @@
 import type { MetadataRoute } from "next";
 
 /**
- * What makes Corpus installable as an app: its own window, its own taskbar
+ * What makes Raazi installable as an app: its own window, its own taskbar
  * icon, no tabs and no address bar — one place for all of it, rather than one
  * more browser tab among thirty. The launcher opens this window by itself;
  * the manifest is what lets the browser offer to install it too, and gives the
  * window its name and icon either way.
  *
  * The window is still the browser underneath, which is the point: your
- * sign-ins, the Corpus Inbox extension, and the Page view all keep working.
+ * sign-ins, the Raazi Inbox extension, and the Page view all keep working.
  */
 export default function manifest(): MetadataRoute.Manifest {
   return {
     id: "/",
-    name: "Corpus",
-    short_name: "Corpus",
+    name: "Raazi",
+    short_name: "Raazi",
     description: "A research pedia built from your own sources.",
     start_url: "/",
     scope: "/",

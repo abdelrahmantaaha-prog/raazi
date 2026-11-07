@@ -15,11 +15,11 @@ export const dynamic = "force-dynamic";
  * Where you are in a source, and what that sets off.
  *
  * Kept against the source rather than in the browser: the whole point of not
- * having a separate reader app is that Corpus is where the book lives, and a
+ * having a separate reader app is that Raazi is where the book lives, and a
  * position that vanishes with the browser cache is not a position.
  *
  * The same call advances read-along, because the two are the same fact. You
- * have read to here; therefore Corpus may read to here.
+ * have read to here; therefore Raazi may read to here.
  *
  * Every chunk id here is checked against the source in the URL, inside
  * lib/reading.ts: a foreign one used to count as read *here*, and read-along

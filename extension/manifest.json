@@ -1,20 +1,20 @@
 {
   "manifest_version": 3,
-  "name": "Corpus Inbox",
-  "version": "0.4.0",
-  "description": "Send the article you are reading — as you see it, signed in — to your Corpus inbox.",
+  "name": "Raazi Inbox",
+  "version": "0.5.0",
+  "description": "Send the article you are reading — as you see it, signed in — to your Raazi inbox.",
   "permissions": ["activeTab", "scripting", "storage", "declarativeNetRequestWithHostAccess", "contextMenus"],
   "host_permissions": ["http://*/*", "https://*/*"],
   "background": { "service_worker": "background.js" },
   "action": {
     "default_popup": "popup.html",
-    "default_title": "Send to Corpus inbox"
+    "default_title": "Send to Raazi inbox"
   },
   "options_ui": { "page": "options.html", "open_in_tab": false },
   "commands": {
     "clip": {
       "suggested_key": { "default": "Alt+Shift+C" },
-      "description": "Send this page to the Corpus inbox"
+      "description": "Send this page to the Raazi inbox"
     },
     "gather": {
       "suggested_key": { "default": "Alt+Shift+Q" },

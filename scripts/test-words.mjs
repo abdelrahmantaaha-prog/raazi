@@ -5,7 +5,7 @@
  * seconds while the worker ran, and each ask measured the text of the whole
  * library — about a second from a cold disk, on the thread that answers every
  * window. With the machine short of memory that was a cold disk every time,
- * and the windows put up "The Corpus server is down". wordsBySource() measures
+ * and the windows put up "The Raazi server is down". wordsBySource() measures
  * a source once and again only when its chunks change.
  *
  * Runs against a scratch database. No API key needed.

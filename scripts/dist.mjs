@@ -1,8 +1,8 @@
-// Packages Corpus into a folder that can be zipped and handed over.
+// Packages Raazi into a folder that can be zipped and handed over.
 //
 //   dist/client/  — a self-contained copy, empty library
 //
-// The folder carries Corpus.exe, a self-contained server, and its own data/.
+// The folder carries Raazi.exe, a self-contained server, and its own data/.
 // There is no checkout and no `npm install` at the other end: Next's standalone
 // output brings the node_modules it actually uses. Node itself is still required
 // on the machine — the launcher says so plainly if it is missing.
@@ -125,9 +125,9 @@ function assemble(flavour) {
     fs.cpSync(pub, path.join(server, "public"), { recursive: true });
   }
 
-  const exe = path.join(root, "Corpus.exe");
-  if (fs.existsSync(exe)) fs.copyFileSync(exe, path.join(out, "Corpus.exe"));
-  else say("WARNING: Corpus.exe is missing — run npm run build:exe first");
+  const exe = path.join(root, "Raazi.exe");
+  if (fs.existsSync(exe)) fs.copyFileSync(exe, path.join(out, "Raazi.exe"));
+  else say("WARNING: Raazi.exe is missing — run npm run build:exe first");
 
   return out;
 }
@@ -136,25 +136,25 @@ function readme(out) {
   fs.writeFileSync(
     path.join(out, "READ ME.txt"),
     [
-      "Corpus",
+      "Raazi",
       "",
       "A research pedia that grows with your sources, and a newsroom that",
       "watches your beat. Runs on your machine.",
       "",
       "Running it:",
       "  1. Install Node.js (the LTS build) from nodejs.org if it isn't already.",
-      "  2. Run Corpus.exe.",
-      "  3. Corpus opens in its own window (Brave, Chrome or Edge in app mode).",
+      "  2. Run Raazi.exe.",
+      "  3. Raazi opens in its own window (Brave, Chrome or Edge in app mode).",
       "",
       "It sits in the notification area — right-click the tray icon to reopen it,",
       "open the data folder, or quit. Opening it again brings the window already",
       "open to the front rather than opening another. Closing the window leaves it",
       "running, so a long ingest keeps going; quitting from the tray stops it.",
       "",
-      "Using a Corpus on another computer:",
+      "Using a Raazi on another computer:",
       "  Turn on Settings → LAN mode on that computer. Then, on this one, right-click",
-      "  the tray icon → Connect to another Corpus…, paste its address and token,",
-      "  and Connect. The window opens that computer's Corpus, and this one keeps",
+      "  the tray icon → Connect to another Raazi…, paste its address and token,",
+      "  and Connect. The window opens that computer's Raazi, and this one keeps",
       "  a quiet copy of its library in step. If that computer stops answering, you",
       "  are told so and can carry on here; what you did comes back to it when it",
       "  answers again, and if both changed you are asked which to keep.",

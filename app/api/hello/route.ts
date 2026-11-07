@@ -6,7 +6,7 @@ import { lanEnabled } from "@/lib/lan";
 export const dynamic = "force-dynamic";
 
 /**
- * "Is there a Corpus here?"
+ * "Is there a Raazi here?"
  *
  * The Android helper finds this machine by asking every address on the local
  * subnet this question at once. That makes the answer's job narrow: it has to
@@ -34,7 +34,7 @@ export async function GET() {
       )
       .get() as typeof library;
   } catch {
-    // A machine still opening its database is still a Corpus worth listing.
+    // A machine still opening its database is still a Raazi worth listing.
   }
 
   return NextResponse.json(

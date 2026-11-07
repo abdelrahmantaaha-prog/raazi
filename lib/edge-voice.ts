@@ -92,7 +92,7 @@ export interface EdgeVoice {
 let voiceCache: { at: number; voices: EdgeVoice[] } | null = null;
 
 /**
- * The voices the service offers, in the languages Corpus reads.
+ * The voices the service offers, in the languages Raazi reads.
  *
  * Several hundred exist; only Arabic and English are kept, because those are
  * the two scripts the reader tells apart, and a menu of four hundred voices to

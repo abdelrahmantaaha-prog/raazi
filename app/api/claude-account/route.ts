@@ -15,7 +15,7 @@ export const dynamic = "force-dynamic";
 
 whenSignedIn(forgetPlanLimit);
 
-const LOCAL_ONLY = "Open Corpus on this computer to change the Claude account.";
+const LOCAL_ONLY = "Open Raazi on this computer to change the Claude account.";
 
 /** Who Claude Code is signed in as, and how a sign-in in progress is going. */
 export async function GET(req: Request) {

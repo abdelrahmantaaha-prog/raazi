@@ -1,5 +1,5 @@
 /**
- * Starts Corpus in LAN mode: bound to every interface, and demanding the token.
+ * Starts Raazi in LAN mode: bound to every interface, and demanding the token.
  *
  *   node scripts/lan.mjs dev
  *   node scripts/lan.mjs start

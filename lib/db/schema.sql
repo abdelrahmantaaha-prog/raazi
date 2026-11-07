@@ -1,4 +1,4 @@
--- Corpus schema. Applied idempotently on every boot (see lib/db/index.ts).
+-- Raazi schema. Applied idempotently on every boot (see lib/db/index.ts).
 -- Everything here is local; there is no multi-user concern and no migration story
 -- beyond "add columns with ALTER TABLE in migrations.ts".
 

@@ -10,7 +10,7 @@ import {
 /**
  * Auditing an entry by hand.
  *
- * Everything else in Corpus decides what counts as evidence by asking a model.
+ * Everything else in Raazi decides what counts as evidence by asking a model.
  * This is the one place where you overrule it, and the design follows from what
  * makes that worth doing at all: a rejection you have to repeat is not a
  * judgement, it is a chore. So a discard does two separate things, and it is
@@ -30,7 +30,7 @@ import {
  *    father here" will usually not do it a third time, and may. The value is
  *    real and the mechanism is suggestion.
  *
- * Stating that split plainly matters more than it might seem. "Corpus learns
+ * Stating that split plainly matters more than it might seem. "Raazi learns
  * from your corrections" is the kind of claim that quietly means nothing; what
  * is true here is that the same passage cannot come back, and that the model is
  * told why it was wrong.

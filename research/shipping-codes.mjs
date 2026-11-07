@@ -2,7 +2,7 @@
  * Shipping codes in a piece of text: containers, ships, air cargo, bills of
  * lading.
  *
- * Plain JavaScript, because two programs read it: Corpus itself, which scans
+ * Plain JavaScript, because two programs read it: Raazi itself, which scans
  * the passages behind an entry before a web check, and the research tool
  * server Claude Code starts, which knows no TypeScript.
  *

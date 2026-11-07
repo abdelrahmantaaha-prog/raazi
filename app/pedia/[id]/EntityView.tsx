@@ -307,7 +307,7 @@ export function EntityView({
               </summary>
               <div className="space-y-3 border-t border-amber-200 px-4 py-3">
                 <p className="text-xs text-amber-900/80">
-                  Corpus re-read each cited sentence against the exact passages it cites.
+                  Raazi re-read each cited sentence against the exact passages it cites.
                   These are the ones the passages do not carry — either saying more than the
                   sources say, or saying something the sources never say at all. The entry
                   text is untouched. <span className="font-medium">Regenerate</span> hands
@@ -522,7 +522,7 @@ export function EntityView({
               <div className="border-t border-[var(--color-rule)] p-4">
                 <p className="mb-3 text-xs text-[var(--color-muted)]">
                   These are kept out of the entry and out of
-                  anything Corpus writes — including after a source is read again. The
+                  anything Raazi writes — including after a source is read again. The
                   reasons are given back to the model next time it writes about{" "}
                   {entity.canonical_name}.
                 </p>
@@ -1069,7 +1069,7 @@ function NameChooser({
               disabled={busy}
               className="mt-2 text-xs underline hover:text-[var(--color-accent)]"
             >
-              Let Corpus choose again
+              Let Raazi choose again
             </button>
           )}
         </div>

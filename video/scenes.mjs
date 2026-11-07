@@ -56,7 +56,7 @@ export const SCENES = [
     id: "intro",
     min: 6.5,
     ...rollCard,
-    card: card(`<div class="mark">Corpus</div><h1>كوربس</h1>
+    card: card(`<div class="mark">Raazi</div><h1>الرازي</h1>
       <p class="l1">موسوعة بحثية تنمو مع مصادرك</p><p class="l2">وغرفة أخبار تراقب ما يهمّك</p>
       <div class="chips"><span>توثيق كل جملة</span><span>مراجعة مع كل مصدر</span><span>موجز كل صباح</span><span>على جهازك</span></div>`),
   },
@@ -67,7 +67,7 @@ export const SCENES = [
     async run(cam, page) {
       await cam.wait(0.3);
       await cam.caption(chapter(1, "المكتبة", "أضِف مصادرك مرة واحدة",
-        "كتب وأبحاث ومقالات وتسجيلات؛ يقرؤها كوربس ويستخرج منها الأشخاص والمؤسسات والأحداث والأماكن."));
+        "كتب وأبحاث ومقالات وتسجيلات؛ يقرؤها الرازي ويستخرج منها الأشخاص والمؤسسات والأحداث والأماكن."));
       const stats = page.getByText("Entities", { exact: true }).locator("xpath=../..");
       await cam.moveTo(stats, { ms: 1000 });
       await cam.focus(stats, { note: "كل ما استُخرج من مكتبتك", pad: 14, side: "bottom" });
@@ -118,7 +118,7 @@ export const SCENES = [
       if (await page.getByRole("dialog").count()) await cam.click([120, 720], { ms: 700 });
       await cam.scrollBy(-400, { ms: 900 });
       await cam.caption(chapter(3, "التحقّق", "وما لا تسنده الشواهد، يُعلَّم",
-        "يعيد كوربس قراءة كل جملة مقابل مصادرها، ويشير إلى ما لا تحمله منها.", "bl"));
+        "يعيد الرازي قراءة كل جملة مقابل مصادرها، ويشير إلى ما لا تحمله منها.", "bl"));
       await cam.click(page.getByText(/not fully borne out/).first(), { ms: 800 });
       await cam.wait(0.4);
       await cam.focus(page.locator("details").first(), { note: "جملتان بلا سند كافٍ", pad: 6, side: "bottom" });
@@ -297,7 +297,7 @@ export const SCENES = [
     id: "outro",
     min: 6.5,
     ...rollCard,
-    card: card(`<div class="mark">Corpus</div><h1>كوربس</h1>
+    card: card(`<div class="mark">Raazi</div><h1>الرازي</h1>
       <p class="l1">مكتبتك، وقد صارت موسوعةً وغرفةَ أخبار</p><div class="rule"></div>
       <p class="small">يعمل على جهازك · يكتب من مصادرك وحدها</p>`),
   },

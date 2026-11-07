@@ -187,7 +187,7 @@ async function parsePage(title: string): Promise<{ title: string; html: string }
     `&redirects=1&prop=text&page=${encodeURIComponent(title)}`;
   try {
     const res = await fetch(url, {
-      headers: { "user-agent": "Corpus/0.1 (personal research reader)" },
+      headers: { "user-agent": "Raazi/0.1 (personal research reader)" },
     });
     if (!res.ok) return null;
     const data = (await res.json()) as {
@@ -251,7 +251,7 @@ async function english(word: string, want: "ar" | "en"): Promise<Definition | nu
 
   try {
     const res = await fetch(url, {
-      headers: { "user-agent": "Corpus/0.1 (personal research reader)" },
+      headers: { "user-agent": "Raazi/0.1 (personal research reader)" },
     });
     if (!res.ok) return null;
 

@@ -105,7 +105,7 @@ function entriesMarkdown(entityId?: number): string {
   }
 
   return parts.length
-    ? `# Corpus entries\n\n${parts.join("\n\n---\n\n")}\n`
+    ? `# Raazi entries\n\n${parts.join("\n\n---\n\n")}\n`
     : "No entries have been generated yet.\n";
 }
 
@@ -189,7 +189,7 @@ function bibtex(): string {
  * The whole graph as JSON.
  *
  * `SELECT *` on sources ships the `path` column, which is an absolute path
- * into this machine's home directory — a detail of where Corpus happens to be
+ * into this machine's home directory — a detail of where Raazi happens to be
  * installed, in a file whose whole purpose is to be sent somewhere else. The
  * file name is what identifies the source; the directory is nobody's business.
  */

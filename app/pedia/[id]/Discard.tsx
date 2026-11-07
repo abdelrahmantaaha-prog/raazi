@@ -98,7 +98,7 @@ export function DiscardButton({
         value={note}
         onChange={(e) => setNote(e.target.value)}
         rows={2}
-        placeholder="What went wrong, in your words. This is what Corpus is told next time."
+        placeholder="What went wrong, in your words. This is what Raazi is told next time."
         className="mt-2 w-full rounded border border-[var(--color-rule)] bg-white p-2 text-sm"
         dir={dirOf(note)}
       />

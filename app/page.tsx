@@ -431,7 +431,7 @@ function ReadBand({ progress }: { progress: number }) {
 }
 
 /**
- * What Corpus has made of a source so far.
+ * What Raazi has made of a source so far.
  *
  * On a read-along book this is the honest number and it moves as you read: the
  * pedia is built from the passages you have been through, not from the whole

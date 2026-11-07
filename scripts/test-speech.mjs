@@ -540,15 +540,15 @@ section("Without speech support");
   check("and does nothing, quietly", called === 0);
 }
 
-section("The browser talks only to Corpus");
+section("The browser talks only to Raazi");
 {
-  // The Natural voices are fetched by Corpus's own server, so the browser
+  // The Natural voices are fetched by Raazi's own server, so the browser
   // never contacts Microsoft — or anyone — directly.
   const fs = await import("node:fs");
   const src = fs.readFileSync(path.join(root, "lib", "speech.ts"), "utf8");
   const calls = [...src.matchAll(/\bfetch\(\s*"([^"]*)"/g)].map((m) => m[1]);
   check(
-    "the only call is to Corpus's own speech route",
+    "the only call is to Raazi's own speech route",
     calls.length === 1 && calls[0] === "/api/speech",
     calls.join(", ")
   );
@@ -653,7 +653,7 @@ section("Speaking a paragraph in a Natural voice");
   check("all of the paragraph, in order", requests.map((q) => q.text).join(" ") === paragraph);
   check("never more than three requests at once", most <= 3, String(most));
   check(
-    "to Corpus, with the voice and pace",
+    "to Raazi, with the voice and pace",
     requests.every((q) => q.url === "/api/speech" && q.voice === "en-US-AvaNeural" && q.rate === 1.15)
   );
   check("and the first starts playing", el.played.length === 1);

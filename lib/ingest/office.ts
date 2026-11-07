@@ -350,6 +350,6 @@ export function parseOffice(ext: string, bytes: Buffer): OfficeParse {
     case ".odp":
       return parseOdp(bytes);
     default:
-      throw new Error(`Corpus cannot read ${ext} files.`);
+      throw new Error(`Raazi cannot read ${ext} files.`);
   }
 }

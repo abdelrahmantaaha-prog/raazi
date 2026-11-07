@@ -11,7 +11,7 @@ import { findShippingCodes, type ShippingCode } from "../../research/shipping-co
 /**
  * Checks an entry, or its connections, against the open web.
  *
- * Everything else in Corpus judges against your own sources, on purpose: the
+ * Everything else in Raazi judges against your own sources, on purpose: the
  * point of an entry is what THIS library says. This is the one step that looks
  * outside it, and only when you ask — to catch the entry that faithfully
  * repeats a source that was wrong, or a connection a single article got

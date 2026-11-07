@@ -187,7 +187,7 @@ section("An older peer is told apart, not half-copied");
   } catch (e) {
     err = e;
   }
-  check("refused with a reason", /older Corpus/.test(err?.message ?? ""), err?.message);
+  check("refused with a reason", /older Raazi/.test(err?.message ?? ""), err?.message);
   check("nothing here was touched", titles(path.join(HERE, "corpus.db")).join() === "Here main");
   everythingAnswers = 200;
 }

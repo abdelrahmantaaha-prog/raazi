@@ -4,7 +4,7 @@ import { scriptAlign } from "./align/script";
 /**
  * Reading a book beside its translation.
  *
- * Corpus already holds both: a translation is ingested as an ordinary source,
+ * Raazi already holds both: a translation is ingested as an ordinary source,
  * with its own chunks, its own citations and its own place on the shelf. This
  * module does the one thing that makes them a pair — works out which passage
  * answers to which — and hands the reader the result.

@@ -1,12 +1,12 @@
 /**
  * The browser extension's service worker, run against a stand-in for the
- * browser: the rule that lets Corpus show an article inside itself, reading
- * the article out of that frame rather than Corpus's own page, and gathering
+ * browser: the rule that lets Raazi show an article inside itself, reading
+ * the article out of that frame rather than Raazi's own page, and gathering
  * a selected quote onto a draft while the article goes to the inbox.
  *
- * The properties: the refusal to be framed is lifted only for frames Corpus
+ * The properties: the refusal to be framed is lifted only for frames Raazi
  * opens, never for a page in its own tab; switching it off removes the rule;
- * sending from Corpus sends the embedded article, not the inbox; and a quote
+ * sending from Raazi sends the embedded article, not the inbox; and a quote
  * gathered is the selection, sent with the whole article, to the chosen draft,
  * without sending the article twice.
  *
@@ -97,10 +97,10 @@ section("The manifest asks for what the extension needs");
   check("header rules are permitted", manifest.permissions.includes("declarativeNetRequestWithHostAccess"));
   check("so is the right-click menu", manifest.permissions.includes("contextMenus"));
   check("gathering has its own shortcut", Boolean(manifest.commands.gather?.suggested_key?.default));
-  check("and the version moved, so a reload is visible", manifest.version === "0.4.0", manifest.version);
+  check("and the version moved, so a reload is visible", manifest.version === "0.5.0", manifest.version);
 }
 
-section("The refusal to be framed is lifted only inside Corpus");
+section("The refusal to be framed is lifted only inside Raazi");
 {
   const { context } = load();
   const rule = JSON.parse(json(context.embedRule("http://127.0.0.1:5400")));
@@ -108,12 +108,12 @@ section("The refusal to be framed is lifted only inside Corpus");
     json(rule.action.responseHeaders.map((h) => [h.header, h.operation])) ===
       json([["x-frame-options", "remove"], ["content-security-policy", "remove"]]));
   check("only for frames, never for a page in its own tab", json(rule.condition.resourceTypes) === json(["sub_frame"]));
-  check("only when Corpus's page opened the frame, under either name for this machine",
+  check("only when Raazi's page opened the frame, under either name for this machine",
     json(rule.condition.initiatorDomains) === json(["127.0.0.1", "localhost"]), json(rule.condition.initiatorDomains));
   check("nothing matches by the article's address, so no site is singled out", !("requestDomains" in rule.condition) && !("urlFilter" in rule.condition));
 
   const lan = JSON.parse(json(context.embedRule("http://192.168.1.20:5400")));
-  check("a Corpus on the network is matched by its own address alone", json(lan.condition.initiatorDomains) === json(["192.168.1.20"]));
+  check("a Raazi on the network is matched by its own address alone", json(lan.condition.initiatorDomains) === json(["192.168.1.20"]));
   check("a malformed address makes no rule", context.embedRule("not a url") === null);
 }
 
@@ -139,10 +139,10 @@ section("The rule follows the setting");
     off.calls.rules.length === 1 && off.calls.rules[0].addRules.length === 0 && json(off.calls.rules[0].removeRuleIds) === json([1]));
 }
 
-section("Sending from Corpus sends the article open inside it");
+section("Sending from Raazi sends the article open inside it");
 {
   const { context } = load();
-  check("127.0.0.1 and localhost are the same Corpus", context.isCorpus("http://localhost:5400/inbox", "http://127.0.0.1:5400"));
+  check("127.0.0.1 and localhost are the same Raazi", context.isCorpus("http://localhost:5400/inbox", "http://127.0.0.1:5400"));
   check("another port is not", !context.isCorpus("http://127.0.0.1:3000/", "http://127.0.0.1:5400"));
   check("and an article is not", !context.isCorpus("https://paper.example/story", "http://127.0.0.1:5400"));
 
@@ -153,9 +153,9 @@ section("Sending from Corpus sends the article open inside it");
   ];
   const corpus = load({ tabUrl: "http://localhost:5400/inbox", frames });
   const article = await corpus.context.readTab(1);
-  check("every frame is read on Corpus's page", corpus.calls.target.allFrames === true);
+  check("every frame is read on Raazi's page", corpus.calls.target.allFrames === true);
   check("the embedded article comes back, not the inbox or an ad", article.url === "https://paper.example/story" && article.title === "The story");
-  check("marked as read from inside Corpus, with its frame", article.fromFrame === true && article.frameId === 4);
+  check("marked as read from inside Raazi, with its frame", article.fromFrame === true && article.frameId === 4);
 
   const empty = load({ tabUrl: "http://127.0.0.1:5400/inbox", frames: [frames[0]] });
   let refused = null;

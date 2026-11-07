@@ -17,7 +17,7 @@ import java.net.HttpURLConnection
 import java.net.Inet4Address
 import java.net.URL
 
-/** A Corpus that answered for itself. */
+/** A Raazi that answered for itself. */
 data class Server(
     val host: String,
     val port: Int,
@@ -26,7 +26,7 @@ data class Server(
     val entities: Int,
     val entries: Int,
     /**
-     * Whether this Corpus is in LAN mode, and so wants its token on every
+     * Whether this Raazi is in LAN mode, and so wants its token on every
      * request but this one. /api/hello answers before any token is offered —
      * it has to, or a phone could never find the machine to sign in to it.
      */
@@ -43,15 +43,15 @@ data class Server(
 }
 
 /**
- * Finding Corpus on the network.
+ * Finding Raazi on the network.
  *
  * By asking every address on this phone's subnet at once whether it is a
- * Corpus. It is a blunt method and a good one: it needs nothing of the network
+ * Raazi. It is a blunt method and a good one: it needs nothing of the network
  * beyond that the two devices can reach each other, and it finishes in about a
  * second.
  *
  * An mDNS announcement was the obvious alternative and was tried first. It
- * would have been instant, but it needs a responder inside the Corpus server,
+ * would have been instant, but it needs a responder inside the Raazi server,
  * and every pure-JS one reaches for `dgram` in a way Next's bundler will not
  * allow — the attempt took the whole site down twice. Multicast is also dropped
  * by a good many home access points, so the sweep would have had to exist
@@ -67,11 +67,11 @@ object Discovery {
     /** Enough sockets to sweep a /24 quickly without exhausting the file table. */
     private const val PARALLEL = 48
 
-    /** The header a Corpus in LAN mode checks on every request. */
+    /** The header a Raazi in LAN mode checks on every request. */
     const val TOKEN_HEADER = "x-corpus-token"
 
     /**
-     * Whether a token opens this Corpus.
+     * Whether a token opens this Raazi.
      *
      * Asked against a route that is behind the check — /api/settings, which is
      * cheap and answers JSON — because /api/hello is deliberately open and
@@ -99,7 +99,7 @@ object Discovery {
         }
 
     /**
-     * Asks one address whether it is a Corpus.
+     * Asks one address whether it is a Raazi.
      *
      * Everything about this is deliberately impatient: it runs against a couple
      * of hundred addresses that are mostly phones, printers and nothing at all,

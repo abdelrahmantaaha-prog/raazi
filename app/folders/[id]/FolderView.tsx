@@ -70,7 +70,7 @@ export function FolderView({ folder, files }: { folder: FolderRow; files: Row[] 
   }
 
   async function remove() {
-    if (!confirm(`Remove the folder “${folder.name}”? Files not yet read are deleted from Corpus; sources already read from it stay in your Library.`)) return;
+    if (!confirm(`Remove the folder “${folder.name}”? Files not yet read are deleted from Raazi; sources already read from it stay in your Library.`)) return;
     setBusy(true);
     const res = await fetch(`/api/folders/${folder.id}`, { method: "DELETE" });
     if (res.ok) router.push("/folders");
@@ -115,7 +115,7 @@ export function FolderView({ folder, files }: { folder: FolderRow; files: Row[] 
           <p className="mt-1 text-sm text-[var(--color-muted)]">
             {folder.files} file{folder.files === 1 ? "" : "s"} from a {folder.origin} · {folder.added} read ·{" "}
             {folder.waiting} waiting
-            {folder.unsupported ? ` · ${folder.unsupported} Corpus cannot read yet` : ""}
+            {folder.unsupported ? ` · ${folder.unsupported} Raazi cannot read yet` : ""}
           </p>
         </div>
         <div className="flex flex-wrap gap-2">

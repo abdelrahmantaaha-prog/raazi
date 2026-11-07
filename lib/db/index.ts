@@ -35,7 +35,7 @@ const PID_STALE_MS = 24 * 60 * 60_000;
 const PID_REFRESH_MS = 5 * 60_000;
 
 /**
- * Whether some other Corpus process is alive on this library right now.
+ * Whether some other Raazi process is alive on this library right now.
  *
  * The worker claims the pid file when it starts (see claimWorkerPid); a crash
  * leaves the file behind, which is why the answer comes from probing the pid
@@ -105,7 +105,7 @@ function open(): Database.Database {
   const other = anotherInstanceAlive();
   if (other !== null) {
     console.log(
-      `[corpus] another Corpus process (pid ${other}) is using this library — leaving its in-flight tasks alone`
+      `[corpus] another Raazi process (pid ${other}) is using this library — leaving its in-flight tasks alone`
     );
   } else {
     recoverOrphanedTasks(db);
@@ -119,7 +119,7 @@ function open(): Database.Database {
  * work is simply undone. Put it back in the queue.
  *
  * Guarded by a liveness check on the pid file above: "the process died" is
- * only a valid inference when no other Corpus process is alive.
+ * only a valid inference when no other Raazi process is alive.
  */
 function recoverOrphanedTasks(db: Database.Database) {
   const orphaned = db

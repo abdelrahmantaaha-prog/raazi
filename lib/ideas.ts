@@ -5,7 +5,7 @@ import { IDEA_STATES, MAX_OUTLINE_DEPTH, type IdeaState } from "./idea-states";
 /**
  * The notebook that comes before the draft.
  *
- * Corpus could already hold everything except the part where you decide what to
+ * Raazi could already hold everything except the part where you decide what to
  * write. Notes attach to a draft, so keeping one meant starting a draft; and a
  * draft you started because you had a thought at midnight is a draft that sits
  * at nought words reproaching you. An idea is allowed to be one sentence and to

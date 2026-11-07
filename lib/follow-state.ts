@@ -1,7 +1,7 @@
 import { readShared as readStore, writeShared as writeStore } from "./config-file";
 
 /**
- * What a follower remembers: which Corpus it follows, and where the two stood
+ * What a follower remembers: which Raazi it follows, and where the two stood
  * when they last matched. Kept apart from lib/follow.ts, which does the
  * copying, so reading it pulls in nothing else.
  */
@@ -29,7 +29,7 @@ interface Store {
   follow?: Partial<FollowSettings>;
 }
 
-/** Whether this server is a follower's copy: started by the launcher to keep in step with another Corpus. */
+/** Whether this server is a follower's copy: started by the launcher to keep in step with another Raazi. */
 export function isFollower(): boolean {
   return process.env.CORPUS_FOLLOWER === "1";
 }

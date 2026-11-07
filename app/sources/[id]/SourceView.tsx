@@ -404,7 +404,7 @@ export function SourceView({
 
       <details className="rounded-lg border border-[var(--color-rule)] bg-white">
         <summary className="cursor-pointer px-4 py-3 text-sm font-medium">
-          Inspect the passages Corpus works in ({passages.length})
+          Inspect the passages Raazi works in ({passages.length})
         </summary>
         <div className="space-y-3 border-t border-[var(--color-rule)] p-4">
           <p className="text-sm text-[var(--color-muted)]">
@@ -447,11 +447,11 @@ function readBy(p: Passage): string | null {
 }
 
 /**
- * How far you have read, and how far Corpus has got.
+ * How far you have read, and how far Raazi has got.
  *
  * These are two different facts and the old layout ran them together as prose,
  * which made neither legible: "12% read" sat in one grey line and "41 still
- * ahead of Corpus" in another, with nothing to say they were two ends of the
+ * ahead of Raazi" in another, with nothing to say they were two ends of the
  * same measurement. Drawn as one track with two fills, the relationship is the
  * point — you can see the index trailing behind your reading, catching up, or
  * (on a source read eagerly) already finished.
@@ -491,7 +491,7 @@ function ReadingProgress({
         <div
           className="absolute inset-y-0 left-0 rounded-full bg-[var(--color-accent)] opacity-25 transition-[width] duration-500"
           style={{ width: `${corpus}%` }}
-          title={`Corpus has indexed ${corpus}% of this source`}
+          title={`Raazi has indexed ${corpus}% of this source`}
         />
         <div
           className="absolute inset-y-0 left-0 rounded-full bg-[var(--color-accent)] transition-[width] duration-500"
@@ -504,10 +504,10 @@ function ReadingProgress({
         {mode === "shelf"
           ? "Kept on the shelf: readable and searchable, never read into the pedia."
           : corpus >= 99
-          ? "Corpus has read all of it."
+          ? "Raazi has read all of it."
           : mode === "along"
-            ? `Corpus has indexed ${corpus}% — it reads each passage as you get to it.`
-            : `Corpus has indexed ${corpus}%.`}
+            ? `Raazi has indexed ${corpus}% — it reads each passage as you get to it.`
+            : `Raazi has indexed ${corpus}%.`}
       </p>
     </div>
   );

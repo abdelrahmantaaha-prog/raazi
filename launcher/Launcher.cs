@@ -1,19 +1,19 @@
-// Corpus launcher.
+// Raazi launcher.
 //
 // Double-click, and it starts the Next server hidden, waits for it to answer,
-// opens Corpus in its own app window, and sits in the notification area.
-// Right-click the tray icon to reopen, to connect to a Corpus on another
+// opens Raazi in its own app window, and sits in the notification area.
+// Right-click the tray icon to reopen, to connect to a Raazi on another
 // computer, or to quit. Quitting stops the server; closing the window does not,
 // so a long ingest keeps running while you get on with something else.
 //
-// One window. Opening Corpus again — from the tray, the desktop shortcut, or a
+// One window. Opening Raazi again — from the tray, the desktop shortcut, or a
 // second double-click — brings the window already open to the front instead
 // of opening another. The window is the browser in app mode (Brave first, then
 // Chrome, then Edge), so it has no tabs or address bar but keeps your sign-ins,
-// the Corpus Inbox extension, and the Page view.
+// the Raazi Inbox extension, and the Page view.
 //
-// Local, or following another. "Connect to another Corpus" points this
-// launcher at a Corpus running on another machine — the other laptop, over the
+// Local, or following another. "Connect to another Raazi" points this
+// launcher at a Raazi running on another machine — the other laptop, over the
 // LAN or Tailscale. The window opens on that one, and a quiet copy of it runs
 // here beside it (a follower: lib/follow.ts), kept in step every few minutes.
 // When that machine stops answering, the launcher says so and moves the window
@@ -42,10 +42,10 @@ using System.Threading;
 using System.Windows.Forms;
 using Microsoft.Win32;
 
-static class Corpus
+static class Raazi
 {
     const int Port = 5400;
-    const string CopyTitle = "Corpus · this computer's copy";
+    const string CopyTitle = "Raazi · this computer's copy";
     const string SignInArg = "--at-sign-in";
     const string RunKey = @"Software\Microsoft\Windows\CurrentVersion\Run";
     /** Started by Windows at sign-in: up in the tray, no window until asked. */
@@ -65,6 +65,10 @@ static class Corpus
         atSignIn = Array.IndexOf(args, SignInArg) >= 0;
         settings = Settings.Load(Path.Combine(Root, "data", "launcher.ini"));
 
+        MoveRunKeyFromCorpus();
+
+        // Still named for Corpus, Raazi's old name: a Corpus.exe left running
+        // through the rename must count as the one already running.
         using (var mutex = new Mutex(false, "Corpus.Launcher.SingleInstance"))
         {
             bool owned;
@@ -82,7 +86,7 @@ static class Corpus
                 // primary's, which is right unless the primary is down — and
                 // then the running launcher has already opened the copy.
                 if (settings.Remote || Healthy()) Open(false);
-                else Error("Corpus is already starting up. Give it a moment.");
+                else Error("Raazi is already starting up. Give it a moment.");
                 return;
             }
 
@@ -107,7 +111,7 @@ static class Corpus
         if (node == null)
         {
             Error("Node.js isn't installed, or isn't where I expected.\n\n" +
-                  "Install the LTS build from nodejs.org, then run Corpus again.");
+                  "Install the LTS build from nodejs.org, then run Raazi again.");
             return;
         }
 
@@ -119,8 +123,8 @@ static class Corpus
         string nextBin = Path.Combine(Root, "node_modules", "next", "dist", "bin", "next");
         if (!packaged && !File.Exists(nextBin))
         {
-            Error("Corpus isn't set up yet.\n\nOpen a terminal in\n" + Root +
-                  "\nand run:  npm install\n\nThen run Corpus again.");
+            Error("Raazi isn't set up yet.\n\nOpen a terminal in\n" + Root +
+                  "\nand run:  npm install\n\nThen run Raazi again.");
             return;
         }
 
@@ -151,21 +155,21 @@ static class Corpus
         // resumed before you sit down — not a window you did not ask for.
         if (atSignIn)
         {
-            Notify("Corpus started with Windows and is running in the background. Double-click here to open it.");
+            Notify("Raazi started with Windows and is running in the background. Double-click here to open it.");
         }
         else
         {
             Open(false);
             Notify(alreadyRunning
-                ? "Corpus was already running — opened it for you."
-                : "Corpus is running. It stays up if you close its window; quit from here.");
+                ? "Raazi was already running — opened it for you."
+                : "Raazi is running. It stays up if you close its window; quit from here.");
         }
 
         Application.Run();
         Stop();
     }
 
-    // -- following another Corpus ---------------------------------------------
+    // -- following another Raazi ---------------------------------------------
 
     static Control ui;
     static volatile bool offline;
@@ -182,12 +186,12 @@ static class Corpus
     static ToolStripItem resolveItem;
 
     /**
-     * Uses a Corpus on another machine, with a copy of it kept here.
+     * Uses a Raazi on another machine, with a copy of it kept here.
      *
      * The window opens on the other machine at once, if it answers; the copy is
      * started and kept in step on a background thread, so a first copy that
      * takes minutes never holds up the window. The tray stays up even when the
-     * other Corpus cannot be reached, because the tray is where you change your
+     * other Raazi cannot be reached, because the tray is where you change your
      * mind.
      */
     static void RunRemote()
@@ -200,10 +204,10 @@ static class Corpus
         {
             Open(false);
             windowOpened = true;
-            Notify("Using the Corpus at " + HostOf(settings.RemoteUrl) + ". A copy is kept on this computer in case it goes down.");
+            Notify("Using the Raazi at " + HostOf(settings.RemoteUrl) + ". A copy is kept on this computer in case it goes down.");
         }
 
-        var thread = new Thread(FollowLoop) { IsBackground = true, Name = "Corpus follower" };
+        var thread = new Thread(FollowLoop) { IsBackground = true, Name = "Raazi follower" };
         thread.Start();
 
         Application.Run();
@@ -288,7 +292,7 @@ static class Corpus
         if (node == null || (!packaged && !File.Exists(nextBin)))
         {
             Ui(() => Notify("No copy is kept on this computer: " +
-                (node == null ? "Node.js isn't installed." : "Corpus isn't set up here.") +
+                (node == null ? "Node.js isn't installed." : "Raazi isn't set up here.") +
                 " If " + HostOf(settings.RemoteUrl) + " goes down there is nothing to work from."));
             return false;
         }
@@ -302,12 +306,12 @@ static class Corpus
                     adoptedFollower = true;
                     return true;
                 }
-                // A Corpus running here as its own library would keep reading and
+                // A Raazi running here as its own library would keep reading and
                 // spending, and drift from the one being followed.
                 var answer = MessageBox.Show(
-                    "A Corpus is already running on this computer as its own library.\n\n" +
+                    "A Raazi is already running on this computer as its own library.\n\n" +
                     "Keeping a copy of " + HostOf(settings.RemoteUrl) + " here needs it stopped. Stop it?",
-                    "Corpus", MessageBoxButtons.YesNo, MessageBoxIcon.Question);
+                    "Raazi", MessageBoxButtons.YesNo, MessageBoxIcon.Question);
                 if (answer != DialogResult.Yes) return false;
             }
             KillTree(PortOwner());
@@ -376,7 +380,7 @@ static class Corpus
     }
 
     /**
-     * The warning, when the Corpus this computer follows stops answering.
+     * The warning, when the Raazi this computer follows stops answering.
      *
      * A window of its own rather than a balloon, because a balloon is gone in
      * four seconds and this is the moment your changes stop saving.
@@ -384,19 +388,19 @@ static class Corpus
     static void ShowDown(bool withCopy)
     {
         string host = HostOf(settings.RemoteUrl);
-        Notify("The Corpus server at " + host + " is down.");
+        Notify("The Raazi server at " + host + " is down.");
         if (downForm != null && !downForm.IsDisposed)
         {
             downForm.Activate();
             return;
         }
-        string text = "The Corpus server at " + host + " is down. Anything you change in its window now will not be saved.\n\n" +
+        string text = "The Raazi server at " + host + " is down. Anything you change in its window now will not be saved.\n\n" +
             (withCopy
                 ? "You can keep working from this computer's copy" +
                   (lastSyncText.Length > 0 ? ", which has everything up to " + lastSyncText : "") +
                   ". What you change on it goes back to " + host + " as soon as it answers again, before you are switched back."
                 : "This computer keeps no copy of it, so there is nothing to work from until it answers again.");
-        downForm = Prompt("Corpus — the server is down", text,
+        downForm = Prompt("Raazi — the server is down", text,
             withCopy ? new[] { "Work on this computer", "Wait for it" } : new[] { "OK" },
             choice =>
             {
@@ -417,9 +421,9 @@ static class Corpus
             conflictForm.Activate();
             return;
         }
-        conflictForm = Prompt("Corpus — both copies changed",
+        conflictForm = Prompt("Raazi — both copies changed",
             host + " and this computer both changed while they were apart.\n\n" + message + "\n\n" +
-            "Corpus copies a library whole; it can't merge two of them. Choose which to keep. " +
+            "Raazi copies a library whole; it can't merge two of them. Choose which to keep. " +
             "The other is not deleted: it is saved as a backup on its own machine, in data\\backups.\n\n" +
             "Until you choose, you are working on this computer's copy.",
             new[] { "Keep this computer's", "Keep " + host + "'s", "Decide later" },
@@ -450,12 +454,12 @@ static class Corpus
         if (tray == null) return;
         string host = HostOf(settings.RemoteUrl);
         string text = !settings.Remote
-            ? (LanWanted() ? "Corpus — on this network, port " + Port + " (token required)" : "Corpus — running on localhost:" + Port)
+            ? (LanWanted() ? "Raazi — on this network, port " + Port + " (token required)" : "Raazi — running on localhost:" + Port)
             : offline
-                ? "Corpus — " + host + " is down; using this computer's copy"
+                ? "Raazi — " + host + " is down; using this computer's copy"
                 : conflict
-                    ? "Corpus — both copies changed; choose which to keep"
-                    : "Corpus — using " + host + (hasCopy && lastSyncText.Length > 0 ? ", copy " + lastSyncText : "");
+                    ? "Raazi — both copies changed; choose which to keep"
+                    : "Raazi — using " + host + (hasCopy && lastSyncText.Length > 0 ? ", copy " + lastSyncText : "");
         // The notification area refuses a tooltip over 63 characters.
         tray.Text = text.Length > 63 ? text.Substring(0, 63) : text;
     }
@@ -483,7 +487,7 @@ static class Corpus
 
         string host = JsonString(json, "host") ?? "your other computer";
         bool skip = false;
-        var form = Prompt("Corpus",
+        var form = Prompt("Raazi",
             "Checking with " + host + " for anything done on it while this computer was off…",
             new[] { "Open now" }, c => skip = true);
 
@@ -505,7 +509,7 @@ static class Corpus
                 until = DateTime.Now.AddMinutes(20);
                 var label = form.Tag as Label;
                 if (label != null)
-                    label.Text = "Bringing back what was done on " + host + " while this computer was off. Corpus opens as soon as it has it.";
+                    label.Text = "Bringing back what was done on " + host + " while this computer was off. Raazi opens as soon as it has it.";
             }
             else if (json.IndexOf("\"checkedIn\":true", StringComparison.Ordinal) >= 0)
             {
@@ -589,14 +593,14 @@ static class Corpus
     /**
      * Works out what to do about whatever is already on the port.
      *
-     * Returns true if there is a healthy Corpus we should simply adopt, false if
+     * Returns true if there is a healthy Raazi we should simply adopt, false if
      * the port is now ours to start on. Three cases, and telling them apart is
      * what stops the launcher lying to you:
      *
      *   - nothing there            → start normally.
-     *   - a healthy Corpus         → adopt it, and say so.
+     *   - a healthy Raazi         → adopt it, and say so.
      *   - something else, or a
-     *     Corpus that has stopped
+     *     Raazi that has stopped
      *     answering                → almost always our own orphaned node, left
      *                                behind when the launcher was killed rather
      *                                than quit. Offer to end it.
@@ -628,15 +632,15 @@ static class Corpus
         catch { }
 
         var answer = MessageBox.Show(
-            "Port " + Port + " is taken by " + who + ", but it isn't answering as Corpus.\n\n" +
-            "This is usually a leftover Corpus server from a session that didn't close cleanly. " +
+            "Port " + Port + " is taken by " + who + ", but it isn't answering as Raazi.\n\n" +
+            "This is usually a leftover Raazi server from a session that didn't close cleanly. " +
             "Ending it and starting fresh is safe — ingestion resumes where it stopped.\n\n" +
-            "End it and start Corpus?",
-            "Corpus", MessageBoxButtons.YesNo, MessageBoxIcon.Question);
+            "End it and start Raazi?",
+            "Raazi", MessageBoxButtons.YesNo, MessageBoxIcon.Question);
 
         if (answer != DialogResult.Yes)
         {
-            Error("Left it alone. Corpus needs port " + Port + ", so it can't start.");
+            Error("Left it alone. Raazi needs port " + Port + ", so it can't start.");
             Environment.Exit(0);
         }
 
@@ -826,8 +830,8 @@ static class Corpus
             hasCopy = false;
             Ui(() =>
             {
-                Notify("This computer's copy of Corpus stopped (exit code " + code + "). The window on " +
-                       HostOf(settings.RemoteUrl) + " is unaffected; restart Corpus to keep a copy again.");
+                Notify("This computer's copy of Raazi stopped (exit code " + code + "). The window on " +
+                       HostOf(settings.RemoteUrl) + " is unaffected; restart Raazi to keep a copy again.");
                 UpdateTip();
             });
             return;
@@ -848,9 +852,9 @@ static class Corpus
         {
             if (quitting) return;
             quitting = true;
-            Error("The Corpus server stopped unexpectedly (exit code " + code + ").\n\n" +
+            Error("The Raazi server stopped unexpectedly (exit code " + code + ").\n\n" +
                   "The log has the details:\n" + LogPath + "\n\n" +
-                  "Nothing is lost — ingestion resumes where it stopped when you start Corpus again.");
+                  "Nothing is lost — ingestion resumes where it stopped when you start Raazi again.");
             CloseLog();
             if (tray != null) tray.Visible = false;
             Application.Exit();
@@ -871,7 +875,7 @@ static class Corpus
         {
             Directory.CreateDirectory(Path.Combine(Root, "data"));
             log = new StreamWriter(LogPath, false) { AutoFlush = true };
-            log.WriteLine("--- Corpus started " + DateTime.Now + (follower ? " (a copy following " + settings.RemoteUrl + ")" : "") + " ---");
+            log.WriteLine("--- Raazi started " + DateTime.Now + (follower ? " (a copy following " + settings.RemoteUrl + ")" : "") + " ---");
         }
         catch { log = null; }
     }
@@ -932,7 +936,7 @@ static class Corpus
         }
     }
 
-    // A *Corpus* is listening on this machine, and it is answering requests.
+    // A *Raazi* is listening on this machine, and it is answering requests.
     static bool Healthy()
     {
         return Hello(LocalBase(), 15000) != null;
@@ -943,7 +947,7 @@ static class Corpus
         return !string.IsNullOrEmpty(baseUrl) && Hello(baseUrl, 6000) != null;
     }
 
-    /** What /api/hello says at an address, or null when it is not Corpus answering. */
+    /** What /api/hello says at an address, or null when it is not Raazi answering. */
     static string Hello(string baseUrl, int timeoutMs)
     {
         try
@@ -962,7 +966,7 @@ static class Corpus
     }
 
     /**
-     * A request to this computer's own Corpus, with its LAN token when LAN mode
+     * A request to this computer's own Raazi, with its LAN token when LAN mode
      * is on. Answers the body, error bodies included; null when nothing answered.
      */
     static string Http(string method, string url, string body, int timeoutMs)
@@ -1130,13 +1134,13 @@ static class Corpus
 
     // -- the window ----------------------------------------------------------
 
-    /** Whether the window should be this computer's copy rather than the Corpus it follows. */
+    /** Whether the window should be this computer's copy rather than the Raazi it follows. */
     static bool UsingCopy()
     {
         return settings.Remote && hasCopy && (offline || conflict);
     }
 
-    /** The Corpus the window shows. 127.0.0.1 rather than localhost: the server binds IPv4 only. */
+    /** The Raazi the window shows. 127.0.0.1 rather than localhost: the server binds IPv4 only. */
     static string BaseUrl()
     {
         return settings.Remote && !UsingCopy() ? settings.RemoteUrl : LocalBase();
@@ -1144,7 +1148,7 @@ static class Corpus
 
     /**
      * Where a new window starts. In LAN mode that is the sign-in link, so the
-     * window arrives signed in: this machine's own token for its own Corpus,
+     * window arrives signed in: this machine's own token for its own Raazi,
      * the one saved with the address for the other.
      */
     static string EntryUrl()
@@ -1156,7 +1160,7 @@ static class Corpus
     }
 
     /**
-     * Brings Corpus up: the window already open, if there is one, else a new
+     * Brings Raazi up: the window already open, if there is one, else a new
      * app window, else — no Chromium browser found, or tabs asked for — a tab
      * in the default browser.
      */
@@ -1200,12 +1204,12 @@ static class Corpus
     static readonly string[] Chromium = { "brave", "chrome", "msedge" };
 
     /**
-     * Finds an app window already showing Corpus and brings it forward.
+     * Finds an app window already showing Raazi and brings it forward.
      *
      * An app window's title is the page's title and nothing else, while a
-     * browser window whose tab happens to be Corpus appends the browser's name.
-     * Every page is titled "Corpus", and a follower's copy titles itself as
-     * one, so the window wanted — the Corpus followed, or this computer's copy
+     * browser window whose tab happens to be Raazi appends the browser's name.
+     * Every page is titled "Raazi", and a follower's copy titles itself as
+     * one, so the window wanted — the Raazi followed, or this computer's copy
      * — is told apart by its title.
      */
     static bool FocusCorpusWindow(bool copy)
@@ -1217,7 +1221,7 @@ static class Corpus
             var text = new StringBuilder(256);
             GetWindowText(hWnd, text, text.Capacity);
             var title = text.ToString();
-            if (!title.StartsWith("Corpus", StringComparison.Ordinal)) return true;
+            if (!title.StartsWith("Raazi", StringComparison.Ordinal)) return true;
             if (title.Contains(" - Brave") || title.Contains(" - Google Chrome") || title.Contains(" - Microsoft")) return true;
             bool isCopy = title.StartsWith(CopyTitle, StringComparison.Ordinal);
             if (isCopy != copy) return true;
@@ -1316,7 +1320,7 @@ static class Corpus
 
     /**
      * An address as typed, made into what the launcher uses: a scheme, a host,
-     * and Corpus's port when none was given. Null when it is not an address.
+     * and Raazi's port when none was given. Null when it is not an address.
      */
     static string NormaliseUrl(string typed)
     {
@@ -1329,7 +1333,7 @@ static class Corpus
         if (!Uri.TryCreate(text, UriKind.Absolute, out uri)) return null;
         if (uri.Scheme != Uri.UriSchemeHttp && uri.Scheme != Uri.UriSchemeHttps) return null;
         if (string.IsNullOrEmpty(uri.Host)) return null;
-        // "192.168.1.20" means Corpus on that machine, not a web server on port 80.
+        // "192.168.1.20" means Raazi on that machine, not a web server on port 80.
         bool portTyped = text.IndexOf(':', text.IndexOf("//", StringComparison.Ordinal) + 2) >= 0;
         var port = portTyped ? uri.Port : Port;
         return uri.Scheme + "://" + uri.Host + ":" + port;
@@ -1340,7 +1344,7 @@ static class Corpus
     {
         var hello = Hello(baseUrl, 6000);
         if (hello == null)
-            return "Nothing answered as Corpus at " + baseUrl + ". Is it running there, with LAN mode on?";
+            return "Nothing answered as Raazi at " + baseUrl + ". Is it running there, with LAN mode on?";
 
         string host = JsonString(hello, "host") ?? HostOf(baseUrl);
 
@@ -1351,21 +1355,21 @@ static class Corpus
             req.ReadWriteTimeout = 6000;
             if (!string.IsNullOrEmpty(token)) req.Headers.Add("x-corpus-token", token);
             using (var res = (HttpWebResponse)req.GetResponse()) { }
-            return "Found Corpus on " + host + ", and it let this computer in.";
+            return "Found Raazi on " + host + ", and it let this computer in.";
         }
         catch (WebException ex)
         {
             var res = ex.Response as HttpWebResponse;
             if (res != null && (int)res.StatusCode == 401)
                 return string.IsNullOrEmpty(token)
-                    ? "Found Corpus on " + host + ". It needs its token — copy it from Settings → LAN mode there."
-                    : "Found Corpus on " + host + ", but that token isn't the one it uses.";
-            return "Found Corpus on " + host + ", but it didn't answer properly: " + ex.Message;
+                    ? "Found Raazi on " + host + ". It needs its token — copy it from Settings → LAN mode there."
+                    : "Found Raazi on " + host + ", but that token isn't the one it uses.";
+            return "Found Raazi on " + host + ", but it didn't answer properly: " + ex.Message;
         }
     }
 
     /**
-     * Chooses between this computer's Corpus and one on another machine.
+     * Chooses between this computer's Raazi and one on another machine.
      *
      * Switching restarts the launcher, and switching away from this computer
      * stops its server first — say so before doing it.
@@ -1374,7 +1378,7 @@ static class Corpus
     {
         using (var form = new Form())
         {
-            form.Text = "Corpus — where to connect";
+            form.Text = "Raazi — where to connect";
             form.FormBorderStyle = FormBorderStyle.FixedDialog;
             form.MaximizeBox = false;
             form.MinimizeBox = false;
@@ -1383,8 +1387,8 @@ static class Corpus
             form.Icon = LoadIcon();
             form.Font = SystemFonts.MessageBoxFont;
 
-            var local = new RadioButton { Text = "This computer — start Corpus here", Left = 16, Top = 16, Width = 420, Checked = !settings.Remote };
-            var remote = new RadioButton { Text = "A Corpus on another computer", Left = 16, Top = 44, Width = 420, Checked = settings.Remote };
+            var local = new RadioButton { Text = "This computer — start Raazi here", Left = 16, Top = 16, Width = 420, Checked = !settings.Remote };
+            var remote = new RadioButton { Text = "A Raazi on another computer", Left = 16, Top = 44, Width = 420, Checked = settings.Remote };
             var addressLabel = new Label { Text = "Its address, as Settings → LAN mode shows it there:", Left = 36, Top = 76, Width = 404 };
             var address = new TextBox { Left = 36, Top = 96, Width = 404, Text = settings.RemoteUrl.Length > 0 ? settings.RemoteUrl : "http://" };
             var tokenLabel = new Label { Text = "Its token, from the same place:", Left = 36, Top = 128, Width = 404 };
@@ -1448,9 +1452,9 @@ static class Corpus
             if (!wasRemote)
             {
                 var sure = MessageBox.Show(
-                    "Using another computer's Corpus stops this one's own server, and replaces this computer's library " +
+                    "Using another computer's Raazi stops this one's own server, and replaces this computer's library " +
                     "with a copy of that one's — the library here now is kept as a backup in data\\backups.\n\nSwitch?",
-                    "Corpus", MessageBoxButtons.YesNo, MessageBoxIcon.Question);
+                    "Raazi", MessageBoxButtons.YesNo, MessageBoxIcon.Question);
                 if (sure != DialogResult.Yes) return;
             }
             else if (connectTo == "local" && (offline || conflict))
@@ -1459,7 +1463,7 @@ static class Corpus
                     "This computer's copy has work that has not gone back to " + HostOf(settings.RemoteUrl) + " yet.\n\n" +
                     "Using this computer on its own from now on keeps that work here, and " + HostOf(settings.RemoteUrl) +
                     " will not have it.\n\nSwitch anyway?",
-                    "Corpus", MessageBoxButtons.YesNo, MessageBoxIcon.Warning);
+                    "Raazi", MessageBoxButtons.YesNo, MessageBoxIcon.Warning);
                 if (sure != DialogResult.Yes) return;
             }
 
@@ -1490,7 +1494,7 @@ static class Corpus
                 UseShellExecute = false,
             });
         }
-        catch (Exception ex) { Error("Couldn't restart Corpus:\n\n" + ex.Message); }
+        catch (Exception ex) { Error("Couldn't restart Raazi:\n\n" + ex.Message); }
         Application.Exit();
     }
 
@@ -1499,7 +1503,7 @@ static class Corpus
     static NotifyIcon BuildTray()
     {
         var menu = new ContextMenuStrip();
-        var open = menu.Items.Add("Open Corpus", null, (s, e) => Open(false));
+        var open = menu.Items.Add("Open Raazi", null, (s, e) => Open(false));
         open.Font = new Font(open.Font, FontStyle.Bold);
         menu.Items.Add("Open in a browser tab", null, (s, e) => Open(true));
         menu.Items.Add(new ToolStripSeparator());
@@ -1517,7 +1521,7 @@ static class Corpus
 
         menu.Items.Add(settings.Remote
             ? "Using " + HostOf(settings.RemoteUrl) + " — change…"
-            : "Connect to another Corpus…", null, (s, e) => ShowConnect());
+            : "Connect to another Raazi…", null, (s, e) => ShowConnect());
 
         var appWindow = new ToolStripMenuItem("Open in its own window") { Checked = settings.Window != "tab", CheckOnClick = true };
         appWindow.CheckedChanged += (s, e) =>
@@ -1533,11 +1537,11 @@ static class Corpus
             if (!SetStartsWithWindows(atStart.Checked))
             {
                 atStart.Checked = StartsWithWindows();
-                Error("Couldn't change whether Corpus starts with Windows.");
+                Error("Couldn't change whether Raazi starts with Windows.");
             }
             else if (atStart.Checked)
             {
-                Notify("Corpus will start in the background when you sign in to Windows.");
+                Notify("Raazi will start in the background when you sign in to Windows.");
             }
         };
         menu.Items.Add(atStart);
@@ -1554,7 +1558,7 @@ static class Corpus
             if (File.Exists(LogPath))
                 Process.Start(new ProcessStartInfo { FileName = "notepad.exe", Arguments = "\"" + LogPath + "\"" });
             else
-                Error("No log yet — the server was already running when Corpus started.");
+                Error("No log yet — the server was already running when Raazi started.");
         });
 
         menu.Items.Add(new ToolStripSeparator());
@@ -1599,12 +1603,30 @@ static class Corpus
         {
             using (var key = Registry.CurrentUser.OpenSubKey(RunKey))
             {
-                var value = key == null ? null : key.GetValue("Corpus") as string;
+                var value = key == null ? null : key.GetValue("Raazi") as string;
                 return value != null &&
                        value.IndexOf(Application.ExecutablePath, StringComparison.OrdinalIgnoreCase) >= 0;
             }
         }
         catch { return false; }
+    }
+
+    /* Raazi was called Corpus, and Windows started it from a Run value named
+       "Corpus" that points at Corpus.exe, which is gone now. The first
+       Raazi.exe to run takes the entry over under its own name, and only if
+       it was on. */
+    static void MoveRunKeyFromCorpus()
+    {
+        try
+        {
+            using (var key = Registry.CurrentUser.OpenSubKey(RunKey, true))
+            {
+                if (key == null || key.GetValue("Corpus") == null) return;
+                key.SetValue("Raazi", SignInCommand());
+                key.DeleteValue("Corpus", false);
+            }
+        }
+        catch { }
     }
 
     static bool SetStartsWithWindows(bool on)
@@ -1613,8 +1635,9 @@ static class Corpus
         {
             using (var key = Registry.CurrentUser.CreateSubKey(RunKey))
             {
-                if (on) key.SetValue("Corpus", SignInCommand());
-                else key.DeleteValue("Corpus", false);
+                if (on) key.SetValue("Raazi", SignInCommand());
+                else key.DeleteValue("Raazi", false);
+                key.DeleteValue("Corpus", false);
             }
             return true;
         }
@@ -1636,14 +1659,14 @@ static class Corpus
     static void Notify(string message)
     {
         if (tray == null) return;
-        tray.BalloonTipTitle = "Corpus";
+        tray.BalloonTipTitle = "Raazi";
         tray.BalloonTipText = message.Length > 250 ? message.Substring(0, 250) : message;
         tray.ShowBalloonTip(5000);
     }
 
     static void Error(string message)
     {
-        MessageBox.Show(message, "Corpus", MessageBoxButtons.OK, MessageBoxIcon.Warning);
+        MessageBox.Show(message, "Raazi", MessageBoxButtons.OK, MessageBoxIcon.Warning);
     }
 }
 
@@ -1691,8 +1714,8 @@ sealed class Settings
         Directory.CreateDirectory(Path.GetDirectoryName(path));
         File.WriteAllLines(path, new[]
         {
-            "# Corpus launcher: where this copy connects, and how it opens.",
-            "# Changed from the tray icon (right-click, Connect to another Corpus).",
+            "# Raazi launcher: where this copy connects, and how it opens.",
+            "# Changed from the tray icon (right-click, Connect to another Raazi).",
             "connect=" + Connect,
             "remote=" + RemoteUrl,
             "token=" + Token,

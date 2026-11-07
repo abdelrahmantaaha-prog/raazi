@@ -9,7 +9,7 @@
 // article's text to send instead, and only you know which. Enter does
 // whichever is on offer.
 const $ = (id) => document.getElementById(id);
-const ENOUGH = 1000; // matches ENOUGH_TO_READ in Corpus
+const ENOUGH = 1000; // matches ENOUGH_TO_READ in Raazi
 const ENOUGH_WORDS = 120; // and ENOUGH_WORDS: both floors, or it is a menu, not an article
 const CLOSE_AFTER_MS = 1800;
 
@@ -63,7 +63,7 @@ async function loadDrafts() {
     select.appendChild(option);
   }
   if (!answer.drafts.length) {
-    $("gatherNote").textContent = "No drafts yet — start one on Corpus's Write page.";
+    $("gatherNote").textContent = "No drafts yet — start one on Raazi's Write page.";
     return;
   }
   select.value = String(answer.chosen ?? answer.drafts[0].id);
@@ -78,7 +78,7 @@ async function init() {
 
   const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
   if (!tab || !tab.id || !/^https?:/.test(tab.url || "")) {
-    $("status").textContent = "This is not a web page Corpus can read.";
+    $("status").textContent = "This is not a web page Raazi can read.";
     return;
   }
   const answer = await chrome.runtime.sendMessage({ type: "read", tabId: tab.id });
@@ -91,7 +91,7 @@ async function init() {
   $("status").textContent = article.fromSelection
     ? "Your selection, as the article."
     : article.fromFrame
-      ? "The article open inside Corpus."
+      ? "The article open inside Raazi."
       : "The article, as Readability found it.";
   $("title").textContent = article.title;
   const bits = [article.outlet, article.author, article.publishedAt ? article.publishedAt.slice(0, 10) : ""].filter(Boolean);

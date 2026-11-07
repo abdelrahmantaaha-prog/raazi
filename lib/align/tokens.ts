@@ -2,7 +2,7 @@
  * Word normalisation and light stemming, for comparison only.
  *
  * Ported from Mutarjim's `lib/term-match.ts`, which is where this alignment
- * came from. Only the two functions the lexicon needs: Corpus has no glossary
+ * came from. Only the two functions the lexicon needs: Raazi has no glossary
  * or translation memory to carry the rest of that module over for.
  *
  * Exact word-boundary matching misses most real correspondences — English

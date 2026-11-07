@@ -89,7 +89,7 @@ declare global {
  * of it, about a second from a cold disk, and the Library asked for it every
  * 1.5 seconds while the worker ran. A memory-starved machine had it from disk
  * each time, on the thread that answers everything else, and the windows put
- * up "The Corpus server is down".
+ * up "The Raazi server is down".
  *
  * Chunk text is never edited in place — a source is re-chunked into new rows —
  * so a source's count stays true until its number of chunks or its newest

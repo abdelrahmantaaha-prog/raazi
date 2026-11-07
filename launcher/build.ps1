@@ -1,4 +1,4 @@
-# Builds Corpus.exe.
+# Builds Raazi.exe.
 #
 #   powershell -ExecutionPolicy Bypass -File launcher\build.ps1
 #
@@ -14,11 +14,11 @@ if (-not (Test-Path $csc)) {
   $csc = Join-Path $env:WINDIR "Microsoft.NET\Framework\v4.0.30319\csc.exe"
 }
 if (-not (Test-Path $csc)) {
-  throw "No C# compiler found. Install the .NET Framework 4 developer pack, or use Corpus.bat instead."
+  throw "No C# compiler found. Install the .NET Framework 4 developer pack, or use Raazi.bat instead."
 }
 
 # --- icon -------------------------------------------------------------------
-# A serif C on a warm ground, matching the app. Drawn rather than shipped as a
+# A serif R on a warm ground, matching the app. Drawn rather than shipped as a
 # binary so there is no opaque blob in the repo.
 Add-Type -AssemblyName System.Drawing
 
@@ -41,7 +41,7 @@ foreach ($size in $sizes) {
   $format.Alignment     = [System.Drawing.StringAlignment]::Center
   $format.LineAlignment = [System.Drawing.StringAlignment]::Center
   $rect = New-Object System.Drawing.RectangleF 0, ($size * 0.02), $size, $size
-  $g.DrawString("C", $font, $fg, $rect, $format)
+  $g.DrawString("R", $font, $fg, $rect, $format)
 
   $g.Dispose()
 
@@ -74,7 +74,7 @@ $w.Dispose(); $ico.Dispose()
 Write-Host "icon    -> $icoPath"
 
 # --- compile ----------------------------------------------------------------
-$exe = Join-Path $root "Corpus.exe"
+$exe = Join-Path $root "Raazi.exe"
 $src = Join-Path $PSScriptRoot "Launcher.cs"
 
 & $csc /nologo /target:winexe /optimize+ /out:"$exe" `
@@ -90,18 +90,22 @@ Write-Host "exe     -> $exe"
 # --- desktop shortcut -------------------------------------------------------
 try {
   $desktop  = [Environment]::GetFolderPath("Desktop")
-  $lnk      = Join-Path $desktop "Corpus.lnk"
+  $lnk      = Join-Path $desktop "Raazi.lnk"
   $shell    = New-Object -ComObject WScript.Shell
   $shortcut = $shell.CreateShortcut($lnk)
   $shortcut.TargetPath       = $exe
   $shortcut.WorkingDirectory = $root
   $shortcut.IconLocation     = $icoPath
-  $shortcut.Description      = "Corpus - your research pedia"
+  $shortcut.Description      = "Raazi - your research pedia"
   $shortcut.Save()
   Write-Host "shortcut-> $lnk"
+  # The shortcut from before the rename to Raazi points at a Corpus.exe that
+  # is no longer built.
+  $old = Join-Path $desktop "Corpus.lnk"
+  if (Test-Path $old) { Remove-Item $old -Force; Write-Host "removed -> $old" }
 } catch {
   Write-Host "shortcut-> skipped ($($_.Exception.Message))"
 }
 
 Write-Host ""
-Write-Host "Done. Double-click Corpus.exe (or the desktop shortcut) to start."
+Write-Host "Done. Double-click Raazi.exe (or the desktop shortcut) to start."

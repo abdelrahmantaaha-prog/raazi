@@ -15,10 +15,10 @@ import { followSettings, hostOf, isFollower, saveFollowSettings, type FollowReco
 export { followSettings, isFollower, saveFollowSettings } from "./follow-state";
 
 /**
- * Working from another computer's Corpus, with a copy here for when it is gone.
+ * Working from another computer's Raazi, with a copy here for when it is gone.
  *
  * The launcher on the laptop opens the window on the primary — the machine at
- * home — and runs a second, quiet Corpus beside it: the follower. The follower
+ * home — and runs a second, quiet Raazi beside it: the follower. The follower
  * never runs the worker (lib/worker.ts), so it reads nothing, polls nothing
  * and spends nothing; all it does is keep its library in step with the
  * primary's, a whole copy at a time, whenever the primary's has moved.
@@ -122,7 +122,7 @@ export async function followTick(opts: { resolve?: "keep-local" | "keep-primary"
     return lastTick;
   };
 
-  if (!s.primaryUrl) return report("not-following", "This copy is not following another Corpus.");
+  if (!s.primaryUrl) return report("not-following", "This copy is not following another Raazi.");
   const busy = syncInFlight();
   if (ticking || busy) return report("busy", busy ? `A sync is already running (${busy}).` : "Already checking.");
 

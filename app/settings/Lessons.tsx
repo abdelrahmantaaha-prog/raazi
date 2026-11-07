@@ -158,7 +158,7 @@ export function LessonsCard() {
                       </p>
                     )}
                     <div className="mt-1 flex items-center gap-2 text-xs text-[var(--color-muted)]">
-                      <span>{l.source === "seed" ? "shipped with Corpus" : l.source === "app" ? "added by Corpus" : "yours"}</span>
+                      <span>{l.source === "seed" ? "shipped with Raazi" : l.source === "app" ? "added by Raazi" : "yours"}</span>
                       <Button
                         variant="ghost"
                         disabled={busy}

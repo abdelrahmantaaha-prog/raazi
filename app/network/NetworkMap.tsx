@@ -20,7 +20,7 @@ const ease = (t: number) => 1 - Math.pow(1 - t, 3);
 /**
  * The library as a map you can move around in.
  *
- * Drawn on a dark field rather than on paper, which is the one place in Corpus
+ * Drawn on a dark field rather than on paper, which is the one place in Raazi
  * that departs from the rest: against white, two hundred faint edges in ten
  * muted colours turn to grey mush, and the coloured ties are the whole reason
  * the picture is worth drawing. The chrome around it stays paper, so this reads

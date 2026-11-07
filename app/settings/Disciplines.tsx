@@ -108,7 +108,7 @@ export function Disciplines() {
         <h2 className="font-serif text-lg font-semibold">Disciplines</h2>
         <p className="mt-0.5 text-sm text-[var(--color-muted)]">
           A separate library per subject, with its own sources, entries, feeds and briefs. Only the AI
-          settings are shared. Opening another one restarts Corpus for a moment.
+          settings are shared. Opening another one restarts Raazi for a moment.
         </p>
       </div>
 

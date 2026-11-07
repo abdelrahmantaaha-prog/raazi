@@ -79,7 +79,7 @@ export function BriefView({
   const [phrase, setPhrase] = useState("");
   const [watchBusy, setWatchBusy] = useState(false);
 
-  /** Stops following something. One Corpus added itself is not suggested again. */
+  /** Stops following something. One Raazi added itself is not suggested again. */
   async function unwatch(id: number) {
     setWatchBusy(true);
     setError(null);
@@ -358,7 +358,7 @@ export function BriefView({
       ) : null}
 
       {/* What the brief is built around — and the one place to change it. The
-          cross stops following something; one Corpus added on its own is not
+          cross stops following something; one Raazi added on its own is not
           suggested again. People and institutions are followed from their
           pedia page, topics arrive as the library files them, phrases here. */}
       <div className="flex flex-wrap items-center gap-2 text-sm">
@@ -377,7 +377,7 @@ export function BriefView({
           <span
             key={w.id}
             className="inline-flex items-center gap-1 rounded-full border border-[var(--color-rule)] py-0.5 pe-1 ps-2"
-            title={w.source === "auto" ? "Added by Corpus because it kept coming up" : undefined}
+            title={w.source === "auto" ? "Added by Raazi because it kept coming up" : undefined}
           >
             {w.entityId ? (
               <Link href={`/pedia/${w.entityId}`} className="hover:text-[var(--color-accent)]">
@@ -399,7 +399,7 @@ export function BriefView({
               onClick={() => void unwatch(w.id)}
               title={
                 w.source === "auto"
-                  ? `Stop following ${w.label}. Corpus added it, and will not suggest it again.`
+                  ? `Stop following ${w.label}. Raazi added it, and will not suggest it again.`
                   : `Stop following ${w.label}`
               }
               aria-label={`Stop following ${w.label}`}

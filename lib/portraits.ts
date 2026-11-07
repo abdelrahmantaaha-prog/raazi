@@ -21,7 +21,7 @@ import type { EntityType } from "./types";
  */
 
 export const PORTRAITS_DIR = path.join(DATA_DIR, "portraits");
-const UA = "Corpus/0.1 (personal research tool; single-user, local)";
+const UA = "Raazi/0.1 (personal research tool; single-user, local)";
 const API = "https://www.wikidata.org/w/api.php";
 
 /**

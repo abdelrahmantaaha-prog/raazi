@@ -176,7 +176,7 @@ export interface Attachment {
   data: Buffer;
 }
 
-/** Corpus's research tool server, and the keys it may use. */
+/** Raazi's research tool server, and the keys it may use. */
 export interface ResearchTools {
   server: string;
   keys: Record<string, string>;
@@ -219,7 +219,7 @@ async function run(
 
   // A web call gets search and page-reading and nothing else — no files, no
   // shell — and streams its turns so the addresses it was shown can be kept.
-  // With research tools, Corpus's own tool server is started beside it for the
+  // With research tools, Raazi's own tool server is started beside it for the
   // length of the call (research/mcp-server.mjs), and its tools are allowed too.
   const web = Boolean(opts.web || opts.research);
   const tools = [...(web ? ["WebSearch", "WebFetch"] : []), ...(attached.length ? ["Read"] : [])];

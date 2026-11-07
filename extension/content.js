@@ -31,9 +31,9 @@
   // Readability's textContent runs every paragraph into the next — a <p> holds
   // no newline, so "…the vote.The committee…" — and that wall is what used to
   // be sent. Its HTML keeps the structure, so the text is taken from that: a
-  // blank line between blocks, headings marked as Markdown so Corpus files the
+  // blank line between blocks, headings marked as Markdown so Raazi files the
   // passages under them, list items on lines of their own, and figure captions
-  // left out, as Corpus's own fetcher does.
+  // left out, as Raazi's own fetcher does.
   const BLOCK = /^(P|DIV|SECTION|ARTICLE|MAIN|HEADER|FOOTER|ASIDE|BLOCKQUOTE|PRE|UL|OL|LI|TABLE|THEAD|TBODY|TR|DL|DT|DD|HR|H[1-6])$/;
   const SKIP = /^(SCRIPT|STYLE|NOSCRIPT|TEMPLATE|FIGURE|FIGCAPTION|BUTTON|SVG)$/;
   const blocksOf = (html) => {

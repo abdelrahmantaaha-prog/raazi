@@ -35,7 +35,7 @@ export async function GET(_req: Request, ctx: { params: Promise<{ id: string }> 
     blocks,
     notes,
     rtl,
-    subtitle: `Drawn from Corpus · ${new Date().toLocaleDateString("en-GB", {
+    subtitle: `Drawn from Raazi · ${new Date().toLocaleDateString("en-GB", {
       day: "numeric",
       month: "long",
       year: "numeric",

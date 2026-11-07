@@ -422,7 +422,7 @@ function admit(
  * Replaces a held article's text with what you pasted.
  *
  * The reason this exists is the paywall. You have subscriptions — the Post,
- * the Times — and Corpus does not: the fetcher gets a metered-content page or
+ * the Times — and Raazi does not: the fetcher gets a metered-content page or
  * a consent wall, and what lands in the inbox is a headline and the feed's own
  * summary. Reading that is a citation to a summary, which is the one thing
  * this application is built not to do.

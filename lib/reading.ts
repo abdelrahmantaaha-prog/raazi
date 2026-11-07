@@ -262,7 +262,7 @@ function seqOf(sourceId: number, chunkId: number): number | null {
 export interface ReadAlongResult {
   /** Passages handed to the model by this call. */
   queued: number;
-  /** Passages of this source still unread by Corpus. */
+  /** Passages of this source still unread by Raazi. */
   remaining: number;
   runId: number | null;
 }
@@ -340,7 +340,7 @@ export function readAlong(sourceId: number): ReadAlongResult {
       .run(sourceId);
   });
 
-  // `remaining` counts passages Corpus has not *read*, which queueing does not
+  // `remaining` counts passages Raazi has not *read*, which queueing does not
   // change — the work is now in flight, not done. Adding the batch to it here
   // reported a book as further behind the more of it had been handed over.
   return { queued: due.length, remaining, runId };

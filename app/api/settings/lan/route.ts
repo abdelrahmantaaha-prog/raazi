@@ -27,9 +27,9 @@ export async function GET() {
     addresses: lanAddresses(),
     loginUrls: loginUrls(port, token),
     // The bind address follows the script that started the server, not the
-    // preference; a change takes effect when Corpus is next started.
+    // preference; a change takes effect when Raazi is next started.
     note: settings.enabled
-      ? "Sharing is on. Restart Corpus if it was started before you switched it on."
-      : "Sharing is off. Only this computer can open Corpus.",
+      ? "Sharing is on. Restart Raazi if it was started before you switched it on."
+      : "Sharing is off. Only this computer can open Raazi.",
   });
 }

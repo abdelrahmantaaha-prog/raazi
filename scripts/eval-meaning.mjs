@@ -1,7 +1,7 @@
 /**
  * Scores the By meaning search against questions whose right passage is known.
  *
- * Run it after any change to how the search ranks, with Corpus running:
+ * Run it after any change to how the search ranks, with Raazi running:
  *
  *   node scripts/eval-meaning.mjs
  *

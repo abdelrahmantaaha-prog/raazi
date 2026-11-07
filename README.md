@@ -1,4 +1,11 @@
-# Corpus
+# Raazi
+
+*Raazi (الرازي) was called Corpus until 0.10, November 2026. Only the
+name changed: `data/corpus.db`, the
+`corpus_token` cookie, the `x-corpus-token` header, the `CORPUS_*` variables,
+the `"app":"corpus"` answer on /api/hello and the Android package
+`com.corpus.helper` keep the old word on purpose, because libraries, signed-in
+devices, the extension and Jalees are keyed by them.*
 
 A research pedia that grows with your sources, and a newsroom that watches your beat.
 
@@ -18,28 +25,28 @@ opens it to your own devices behind a token.
 
 ## Running it
 
-Double-click **Corpus.exe** (or the desktop shortcut). It starts the server in the
-background, opens Corpus in **its own window**, and sits in the notification area —
+Double-click **Raazi.exe** (or the desktop shortcut). It starts the server in the
+background, opens Raazi in **its own window**, and sits in the notification area —
 right-click the tray icon to reopen it, open the data folder, or quit. Closing the
 window leaves it running, so a long ingest keeps going; quitting from the tray
 stops it.
 
 **One window.** The window is your browser in app mode — Brave first, then Chrome,
 then Edge — so it has no tabs and no address bar, but it keeps your sign-ins, the
-browser extension, and the inbox's Page view. Opening Corpus again, from the tray,
+browser extension, and the inbox's Page view. Opening Raazi again, from the tray,
 the shortcut or a second double-click, brings that window to the front rather than
 opening another. Links to articles open in the browser as usual. Untick *Open in its
 own window* in the tray menu to go back to a browser tab. The browser can also
-install it (Brave's menu → *Install Corpus*), which pins it to the taskbar.
+install it (Brave's menu → *Install Raazi*), which pins it to the taskbar.
 
-**With Windows.** Tick *Start when Windows starts* in the tray menu and Corpus comes
+**With Windows.** Tick *Start when Windows starts* in the tray menu and Raazi comes
 up when you sign in — the server, or the follower's copy, in the notification area,
 with no window until you double-click the icon. Feeds are polled and parked runs
 resume before you have asked for anything. It is an entry under your user's Run
 key, so Task Manager's *Startup* tab lists it and can switch it off too.
 
-**A Corpus on another computer.** Right-click the tray icon → *Connect to another
-Corpus…*, paste the other machine's address and token from its *Settings → LAN
+**A Raazi on another computer.** Right-click the tray icon → *Connect to another
+Raazi…*, paste the other machine's address and token from its *Settings → LAN
 mode*, test, and connect. This copy then runs no server of its own and opens that
 one — the laptop on the desk working from the library on the machine at home, over
 the LAN or Tailscale. *Connect to… → This computer* switches back. Point the
@@ -142,13 +149,13 @@ inbox open in another window shows it within a few seconds, without a reload —
 including new text for the article already in the pane. See `extension/README.md`.
 
 **The page itself.** The pane's **Page** view (V) shows the article's own page,
-live, inside Corpus, instead of the text the fetch got. Sites refuse to be shown
+live, inside Raazi, instead of the text the fetch got. Sites refuse to be shown
 inside another page, so it needs the browser extension, which lifts that refusal
-for frames Corpus opens and nowhere else; without it the view is blank, with a
-link to open the article in a tab. Clicking the extension on Corpus while an
+for frames Raazi opens and nowhere else; without it the view is blank, with a
+link to open the article in a tab. Clicking the extension on Raazi while an
 article is open there sends that article. Brave keeps logins away from pages
 shown inside another site, so a paywalled article appears signed out unless
-cross-site cookies are allowed for Corpus in Shields.
+cross-site cookies are allowed for Raazi in Shields.
 
 **It holds still.** Deciding an item moves the pane to the next one without
 the page jumping: stories keep their place in the list while the page is open,
@@ -233,18 +240,18 @@ like a citation and exports as characters. Opening a draft brings it up to
 these rules: duplicate references merged, markers renumbered, reference text
 re-read from its source.
 
-Text pasted into a draft from outside Corpus arrives as plain paragraphs: a blank line starts a new
+Text pasted into a draft from outside Raazi arrives as plain paragraphs: a blank line starts a new
 one, a wrapped line closes up. Nothing else comes with it — no fonts, no
 colours — because a document that changes appearance depending on where a
 paragraph came from is not a document.
 
 ## One window for the originals
 
-Every link out of Corpus — an article in the inbox, a source's original, a feed's
+Every link out of Raazi — an article in the inbox, a source's original, a feed's
 own address, a reference's link — opens in the same window, named for the
 purpose. Open forty articles over a morning's triage and there is one window to
 look at, showing the one you are reading, rather than forty unlabelled tabs with
-Corpus lost somewhere among them. Middle-click still opens a tab of its own when
+Raazi lost somewhere among them. Middle-click still opens a tab of its own when
 that is what you meant.
 
 The link goes by way of `/read`, which drops the opener before forwarding.
@@ -255,7 +262,7 @@ opener instead, and it stays severed across the navigation that follows. Only
 
 ## Two laptops, one library
 
-**Settings → The other laptop** syncs Corpus between two machines over the LAN
+**Settings → The other laptop** syncs Raazi between two machines over the LAN
 or Tailscale. It is a copy, not a merge — the point is continuity, not
 collaboration: work on either, and before you switch, sync towards the machine
 you are about to use.
@@ -282,19 +289,19 @@ Copying the token would lock out the machine that did the copying.
 
 If any library on the receiving side has changed since its last sync, the page
 names it and asks before replacing it. Both machines need the same version of
-Corpus; an older one is told so rather than half-copied.
+Raazi; an older one is told so rather than half-copied.
 
 ### Working from another computer, with a copy for when it is gone
 
-*Connect to another Corpus* (the tray icon) is the continuous version of the
+*Connect to another Raazi* (the tray icon) is the continuous version of the
 above. The window opens on the other computer — the primary — and this computer
-keeps a quiet copy of its library beside it, a *follower*: a second Corpus that
+keeps a quiet copy of its library beside it, a *follower*: a second Raazi that
 never runs the worker, so it reads nothing, polls nothing and spends nothing,
 and whose only job is to take a fresh copy of the primary whenever the primary
 has changed, at most every five minutes while both are up.
 
-**When the primary goes down**, every Corpus window served by it shows a red
-bar — *The Corpus server is down; nothing you change here can be saved* — and
+**When the primary goes down**, every Raazi window served by it shows a red
+bar — *The Raazi server is down; nothing you change here can be saved* — and
 the launcher puts up a warning of its own and offers *Work on this computer*:
 the window moves to the copy, which has everything up to its last copy and
 says so across the top in amber. Work there is ordinary work.
@@ -318,7 +325,7 @@ on the day before.
 
 What the copy does not do while the primary is away is the reading: articles
 kept offline wait in the queue and are read by the primary once they are back
-on it. Both machines need the same version of Corpus, and the primary needs LAN
+on it. Both machines need the same version of Raazi, and the primary needs LAN
 mode on. Receiving a library is the one thing that bypasses the middleware —
 Next would cut a large body off at 10 MB while buffering it for the middleware —
 so those two routes check the LAN token themselves.
@@ -352,7 +359,7 @@ Extra keys multiply your quota on Gemini, whose limits are per project. Anthropi
 bills the account, so a second key there is a second label on one bill, and Ollama
 has no quota at all — any text works as its key. Settings says so under each.
 
-**Claude (your plan)** is Claude on a Claude subscription instead of an API key. Corpus
+**Claude (your plan)** is Claude on a Claude subscription instead of an API key. Raazi
 runs Claude Code on this machine (`claude -p`, no tools, no settings, no session kept),
 so there is no per-token bill — but every call counts against the plan's five-hour and
 weekly limits, the same ones your own chats use. Claude Code has to be installed and
@@ -391,7 +398,7 @@ model reads about 70% for a passage picked at random.
 
 How it ranks was settled by measurement against 36 questions whose right passage
 is known, kept in `scripts/eval/`. Run `node scripts/eval-meaning.mjs` with
-Corpus running after any change to the ranking; on 22 September 2026 it put the
+Raazi running after any change to the ranking; on 22 September 2026 it put the
 right passage first for 18 of 24 vague questions and 10 of 12 name searches.
 
 Passages need a vector before they can be searched this way, and that is the
@@ -406,7 +413,7 @@ off.
 ## A book beside its translation
 
 Add the translation to the library the way you add any book, then pair it from
-the original's page: **Add a translation**, find it by title, and Corpus works
+the original's page: **Add a translation**, find it by title, and Raazi works
 out which passage answers to which. **Read bilingually** then gives you the two
 texts as matched rows — the passage on one side, its rendering on the other,
 however many paragraphs each side needed.
@@ -537,7 +544,7 @@ prevent. It also keeps the rule that makes topics work: inside a discipline an
 entity is never split, so someone who turns up in two of your subjects there
 stays one person with one entry.
 
-Opening another discipline restarts Corpus, which takes a second or two and is
+Opening another discipline restarts Raazi, which takes a second or two and is
 the guarantee rather than a cost: the process working in one library is gone
 before the next is opened, so nothing of it can carry over.
 
@@ -637,7 +644,7 @@ its archive is the failure worth guarding against and it costs tokens per item. 
 feed added today reads what comes next rather than what it already holds, unless
 you say otherwise.
 
-**A page with no feed** can be followed too: paste its address and Corpus reads
+**A page with no feed** can be followed too: paste its address and Raazi reads
 the page's links the way you would scan it — the ones that read as headlines, on
 the same site, outside the navigation — and every link that was not there last
 time arrives in the inbox like anything a feed brought in. If the page
@@ -687,7 +694,7 @@ pinned.
 institution, a topic, or a phrase. It is changed at the top of the brief, under
 *Watching*: the × on any of them stops following it, and *Follow a phrase…*
 adds one. People and institutions are also followed from their pedia page with
-**Watch**. Topics are added by Corpus itself once they come up across several
+**Watch**. Topics are added by Raazi itself once they come up across several
 outlets; removing one of those says no for good, so it is not suggested again.
 
 **The brief** is assembled from the database — which passages arrived, about whom,

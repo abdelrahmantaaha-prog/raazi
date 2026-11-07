@@ -53,11 +53,11 @@ export function Nav({ discipline }: { discipline?: string }) {
       <Link
         href="/"
         className="flex h-14 shrink-0 items-center justify-center font-serif text-lg font-semibold tracking-tight lg:justify-start lg:px-4"
-        title="Corpus"
+        title="Raazi"
       >
-        <span className="lg:hidden">C</span>
+        <span className="lg:hidden">R</span>
         <span className="hidden lg:flex lg:min-w-0 lg:flex-col">
-          <span>Corpus</span>
+          <span>Raazi</span>
           {/* Which library you are in, wherever you are in it: every page
               below shows one discipline and nothing of the others, so the
               answer has to be on screen rather than in Settings. */}

@@ -225,7 +225,7 @@ export function FeedsManager({
               className="min-w-[16rem] rounded border border-[var(--color-rule)] px-2 py-1 text-sm outline-none focus:border-[var(--color-accent)]"
             />
             <span className="text-xs text-[var(--color-muted)]">
-              Leave it empty and Corpus takes the links that read as headlines.
+              Leave it empty and Raazi takes the links that read as headlines.
             </span>
           </div>
         ) : null}

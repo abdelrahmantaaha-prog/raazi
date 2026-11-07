@@ -16,7 +16,7 @@ interface Correction {
 }
 
 /**
- * The corrections you told Corpus to apply everywhere.
+ * The corrections you told Raazi to apply everywhere.
  *
  * They need a home outside the entry they were raised on, for the obvious
  * reason: a rule that changes what happens across the whole library and can only

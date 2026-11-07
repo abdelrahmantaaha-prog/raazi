@@ -12,7 +12,7 @@ interface FollowView {
   state: string | null;
 }
 
-const COPY_TITLE = "Corpus · this computer's copy";
+const COPY_TITLE = "Raazi · this computer's copy";
 
 /**
  * Says so, plainly, when the server behind this window stops answering — and,
@@ -21,7 +21,7 @@ const COPY_TITLE = "Corpus · this computer's copy";
  * Every window asks the server it came from for its hello every ten seconds.
  * Two misses in a row put a red bar across the top: nothing you change can be
  * saved while it shows. On a copy kept by a follower (lib/follow.ts) an amber
- * bar says which Corpus it follows, whether that one is up, and when the copy
+ * bar says which Raazi it follows, whether that one is up, and when the copy
  * was last brought up to date — so working offline is never mistaken for
  * working on the real thing.
  */
@@ -91,11 +91,11 @@ export function ServerWatch() {
           role="alert"
           className="fixed inset-x-0 top-0 z-[60] flex flex-wrap items-center justify-center gap-x-3 gap-y-1 bg-red-700 px-4 py-2 text-sm text-white shadow-lg"
         >
-          <strong>The Corpus server is down.</strong>
+          <strong>The Raazi server is down.</strong>
           <span>Nothing you change in this window can be saved until it answers again.</span>
           {!copy ? (
             <span className="opacity-90">
-              If this computer keeps a copy, the Corpus icon in the notification area offers to switch to it.
+              If this computer keeps a copy, the Raazi icon in the notification area offers to switch to it.
             </span>
           ) : null}
           <button
@@ -118,7 +118,7 @@ export function ServerWatch() {
           <div className="mx-auto max-w-6xl">
             {conflict ? (
               <>
-                <strong>Both copies changed while apart.</strong> Choose which to keep from the Corpus icon in the
+                <strong>Both copies changed while apart.</strong> Choose which to keep from the Raazi icon in the
                 notification area; until then you are working on this computer&apos;s copy.
               </>
             ) : away ? (

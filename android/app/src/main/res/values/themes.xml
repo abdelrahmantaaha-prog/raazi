@@ -1,6 +1,6 @@
 <?xml version="1.0" encoding="utf-8"?>
 <resources>
-    <!-- Corpus's own paper-and-ink palette, so the wrapper does not announce
+    <!-- Raazi's own paper-and-ink palette, so the wrapper does not announce
          itself as a different program from the pages it shows. -->
     <style name="Theme.CorpusHelper" parent="Theme.Material3.DayNight.NoActionBar">
         <item name="colorPrimary">@color/accent</item>

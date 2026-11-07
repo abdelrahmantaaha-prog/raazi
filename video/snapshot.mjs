@@ -1,5 +1,5 @@
 // Copies the live library into out/library for filming: a consistent database
-// snapshot taken while Corpus keeps running, plus the files pages display.
+// snapshot taken while Raazi keeps running, plus the files pages display.
 // config.json is deliberately left behind, so the copy has no API keys (it can
 // never spend anything) and no LAN mode (it stays on loopback, no token).
 import { createRequire } from "node:module";

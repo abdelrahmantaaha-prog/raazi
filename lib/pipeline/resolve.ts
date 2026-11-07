@@ -589,7 +589,7 @@ function key(a: number, b: number) {
  * The worker runs in the server's own process, and a pass compares thousands
  * of names in plain loops. Without a pause the whole server stood still for
  * the length of the pass — a minute and more on a large library — and every
- * open window put up "The Corpus server is down". Awaiting the returned
+ * open window put up "The Raazi server is down". Awaiting the returned
  * function costs nothing until ~25 ms have gone by, then yields once.
  */
 function breather(sliceMs = 25): () => Promise<void> {

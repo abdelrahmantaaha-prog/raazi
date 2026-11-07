@@ -9,12 +9,12 @@ import { IMAGE_EXTENSIONS, OFFICE_EXTENSIONS } from "./ingest/office";
  * Folders: a zip or a folder of documents, brought in whole.
  *
  * A folder of two hundred files is not two hundred decisions made at the
- * moment of dropping it. So the files land first — copied into Corpus under a
+ * moment of dropping it. So the files land first — copied into Raazi under a
  * folder of their own, listed, nothing read — and reading is a second step you
  * take when you are ready: all of them, or the ones you pick. Reading is where
  * the cost is; landing is free.
  *
- * A file Corpus cannot read (an old .doc or .xls, a program, a picture in a
+ * A file Raazi cannot read (an old .doc or .xls, a program, a picture in a
  * format other than PNG or JPG) is still listed, marked as such, so the folder shows what was in it rather than
  * quietly shrinking. Once a file is read it becomes a source like any other,
  * remembers its folder, and its waiting copy is removed — the source keeps its
@@ -25,7 +25,7 @@ export const FOLDERS_DIR = path.join(DATA_DIR, "folders");
 
 export type FolderFileState = "waiting" | "queued" | "added" | "skipped" | "unsupported" | "failed";
 
-/** What Corpus can make a source from, by extension. Null: listed, not readable. */
+/** What Raazi can make a source from, by extension. Null: listed, not readable. */
 export function readableAs(file: string): "pdf" | "epub" | "media" | "text" | "html" | "office" | "image" | null {
   const ext = path.extname(file).toLowerCase();
   if (OFFICE_EXTENSIONS.includes(ext)) return "office";

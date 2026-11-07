@@ -28,7 +28,7 @@ $("instant").addEventListener("change", async () => {
 
 $("embed").addEventListener("change", async () => {
   await chrome.storage.sync.set({ embed: $("embed").checked });
-  note("ok", $("embed").checked ? "Corpus can show articles inside itself." : "Articles keep their refusal to be shown inside Corpus.");
+  note("ok", $("embed").checked ? "Raazi can show articles inside itself." : "Articles keep their refusal to be shown inside Raazi.");
 });
 
 $("test").addEventListener("click", async () => {
@@ -39,6 +39,6 @@ $("test").addEventListener("click", async () => {
   const h = answer.hello;
   note(
     "ok",
-    `Corpus ${h.version} on ${h.host}: ${h.library.sources} sources, ${h.library.entries} entries.${h.lan ? " LAN mode is on, so the token is needed." : ""}`
+    `Raazi ${h.version} on ${h.host}: ${h.library.sources} sources, ${h.library.entries} entries.${h.lan ? " LAN mode is on, so the token is needed." : ""}`
   );
 });

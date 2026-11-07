@@ -18,7 +18,7 @@ import { dirOf } from "./dir";
  * that gets Arabic shaping, right-to-left runs and page-margin boxes right,
  * which a PDF library drawing text itself does not.
  *
- * Nothing is fetched: the Arabic face is the Amiri subset Corpus already
+ * Nothing is fetched: the Arabic face is the Amiri subset Raazi already
  * ships, inlined, and the Latin face is one Windows has.
  */
 
@@ -186,7 +186,7 @@ export function entryDoc(entityId: number): PrintDoc | null {
     name: e.canonical_name,
     html: page({
       title: e.canonical_name,
-      kicker: rtl ? "مدخل · Corpus" : `Corpus · ${e.type}`,
+      kicker: rtl ? "مدخل · Raazi" : `Raazi · ${e.type}`,
       meta: [
         rtl ? `حُدِّث ${day(entry.updated_at, rtl)}` : `Updated ${day(entry.updated_at, rtl)}`,
         sources ? (rtl ? `${sources} مصدرًا` : `${sources} source${sources === 1 ? "" : "s"}`) : "",
@@ -216,7 +216,7 @@ export function briefDoc(dayKey: string): PrintDoc | null {
     name: `${weekly ? "Weekly brief" : "Brief"} ${b.day}`,
     html: page({
       title: `${title} — ${date}`,
-      kicker: "Corpus",
+      kicker: "Raazi",
       meta: [covering, notes.size ? (rtl ? `${notes.size} استشهادًا` : `${notes.size} citations`) : ""],
       bodyHtml,
       notesHtml: notesSection(notes, cites, rtl),

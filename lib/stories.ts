@@ -605,7 +605,7 @@ const COMMON_SHARE = 0.08;
  * by the time the third arrives there are two stories for it to choose
  * between. This pass looks at the recent stories together, with everything
  * their accounts have said since, and folds the ones that are the same
- * event by the same two-signal rule. Only stories Corpus named itself and
+ * event by the same two-signal rule. Only stories Raazi named itself and
  * nobody pinned: a story you named is a decision, and this does not overrule
  * one. Returns how many were folded in.
  */
@@ -698,7 +698,7 @@ export function mayFold(a: number, b: number): boolean {
  * Takes apart the stories that grew past one event and files their
  * accounts again, oldest first, under the rules as they are now.
  *
- * A story Corpus named itself whose accounts span more than MAX_STORY_DAYS
+ * A story Raazi named itself whose accounts span more than MAX_STORY_DAYS
  * cannot be one event under the current rules, so it was built by the old
  * ones. A story you named or pinned is left alone. Returns how many stories
  * were taken apart and how many accounts were filed again.
@@ -723,7 +723,7 @@ export function splitRunaways(): { stories: number; accounts: number } {
 }
 
 /**
- * Files every account of the stories Corpus opened since a date again, from
+ * Files every account of the stories Raazi opened since a date again, from
  * nothing, oldest first, then folds the duplicates — for when the rules that
  * built them have changed. Stories you named or pinned are left as they are.
  */

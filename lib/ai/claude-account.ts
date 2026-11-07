@@ -4,7 +4,7 @@ import { spawn, type ChildProcessWithoutNullStreams } from "node:child_process";
  * Which Claude account Claude Code is signed in to on this machine, and
  * signing in to another one without leaving the app.
  *
- * Every call Corpus sends to "Claude (your plan)" goes through Claude Code, and
+ * Every call Raazi sends to "Claude (your plan)" goes through Claude Code, and
  * Claude Code answers as whoever it is signed in as — so that account, and a
  * way to change it, belong on the settings page rather than in a terminal.
  *

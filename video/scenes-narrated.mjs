@@ -69,7 +69,7 @@ export const SCENES = [
     id: "intro",
     min: 7,
     ...rollCard,
-    card: card(`<div class="mark">Corpus</div><h1>كوربس</h1>
+    card: card(`<div class="mark">Raazi</div><h1>الرازي</h1>
       <p class="l1">موسوعة بحثية تنمو مع مصادرك</p><p class="l2">وغرفة أخبار تتابع ما يهمّك</p>
       <div class="chips"><span>كل جملة موثّقة</span><span>مداخل تتجدّد مع مصادرك</span><span>موجز كل صباح</span><span>مكتبتك على جهازك</span></div>`),
     say: "هَذَا كُورْبَسْ: مَوْسُوعَةٌ بَحْثِيَّةٌ تَنْمُو مَعَ مَصَادِرِك، وَغُرْفَةُ أَخْبَارٍ تُتَابِعُ مَا يَهُمُّك.",
@@ -301,7 +301,7 @@ export const SCENES = [
     id: "outro",
     min: 7,
     ...rollCard,
-    card: card(`<div class="mark">Corpus</div><h1>كوربس</h1>
+    card: card(`<div class="mark">Raazi</div><h1>الرازي</h1>
       <p class="l1">مكتبتك، وقد صارت موسوعة وغرفة أخبار</p><div class="rule"></div>
       <p class="small">مكتبتك على جهازك · كل جملة تستند إلى مصادرك</p>`),
     // Never opening on the brand: sentence-first, كُورْبَسْ was heard as قُرْبُص.

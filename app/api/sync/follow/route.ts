@@ -11,7 +11,7 @@ export async function GET() {
 }
 
 /**
- * The launcher's calls on a follower: `configure` names the Corpus to follow,
+ * The launcher's calls on a follower: `configure` names the Raazi to follow,
  * `tick` takes one step of following (and `resolve` settles a conflict).
  *
  * JSON only, so no web page can drive it from another origin: a cross-origin

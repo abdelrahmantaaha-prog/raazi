@@ -1,5 +1,5 @@
 // The service worker: reads the page through the content script and posts it
-// to Corpus. The popup, the keyboard shortcuts and the right-click menu all
+// to Raazi. The popup, the keyboard shortcuts and the right-click menu all
 // come through here, so there is one place that knows the address and the token.
 
 const DEFAULTS = { corpusUrl: "http://127.0.0.1:5400", token: "", embed: true };
@@ -13,10 +13,10 @@ async function settings() {
   };
 }
 
-/** One machine, two names: Corpus opened at localhost is the Corpus at 127.0.0.1. */
+/** One machine, two names: Raazi opened at localhost is the Raazi at 127.0.0.1. */
 const LOOPBACK = ["127.0.0.1", "localhost"];
 
-/** Whether an address is Corpus's own. */
+/** Whether an address is Raazi's own. */
 function isCorpus(url, corpusUrl) {
   try {
     const a = new URL(url);
@@ -31,9 +31,9 @@ function isCorpus(url, corpusUrl) {
 /**
  * Runs the extractor in the tab and returns what it saw, and which frame.
  *
- * On Corpus's own page the article is the one open inside it, in the inbox's
+ * On Raazi's own page the article is the one open inside it, in the inbox's
  * Page view, so every frame is read and the embedded article is what comes
- * back. Reading Corpus itself would have sent the inbox as an article.
+ * back. Reading Raazi itself would have sent the inbox as an article.
  */
 async function readTab(tabId) {
   const { corpusUrl } = await settings();
@@ -45,12 +45,12 @@ async function readTab(tabId) {
   });
 
   if (onCorpus) {
-    // The longest page that is not Corpus: the article, not an ad frame inside it.
+    // The longest page that is not Raazi: the article, not an ad frame inside it.
     const framed = (results || [])
       .filter((r) => r.frameId !== 0 && r.result && !isCorpus(r.result.url, corpusUrl))
       .sort((a, b) => (b.result.text || "").length - (a.result.text || "").length)[0];
     if (!framed) {
-      throw new Error("This is Corpus itself. Open an article's Page view in the inbox, then send it from here.");
+      throw new Error("This is Raazi itself. Open an article's Page view in the inbox, then send it from here.");
     }
     return { ...framed.result, fromFrame: true, frameId: framed.frameId };
   }
@@ -60,7 +60,7 @@ async function readTab(tabId) {
   return { ...result.result, frameId: 0 };
 }
 
-/** A request to Corpus, with the token when there is one, and its answer read. */
+/** A request to Raazi, with the token when there is one, and its answer read. */
 async function call(path, init = {}) {
   const { corpusUrl, token } = await settings();
   const headers = init.body ? { "content-type": "application/json" } : {};
@@ -69,10 +69,10 @@ async function call(path, init = {}) {
   try {
     res = await fetch(`${corpusUrl}${path}`, { ...init, headers });
   } catch (e) {
-    throw new Error(`Corpus did not answer at ${corpusUrl}. Is it running? Set the address in the extension's options.`);
+    throw new Error(`Raazi did not answer at ${corpusUrl}. Is it running? Set the address in the extension's options.`);
   }
   const data = await res.json().catch(() => ({}));
-  if (res.status === 401) throw new Error("Corpus is in LAN mode and wants its token — paste it into the extension's options.");
+  if (res.status === 401) throw new Error("Raazi is in LAN mode and wants its token — paste it into the extension's options.");
   return { res, data, corpusUrl };
 }
 
@@ -98,16 +98,16 @@ async function send(article, extra = {}) {
       ...extra,
     }),
   });
-  if (!res.ok) throw new Error(data.error || `Corpus answered ${res.status}.`);
+  if (!res.ok) throw new Error(data.error || `Raazi answered ${res.status}.`);
   return { ...data, corpusUrl };
 }
 
-/** "Is there a Corpus at this address?" — for the options page's test button. */
+/** "Is there a Raazi at this address?" — for the options page's test button. */
 async function hello(corpusUrl, token) {
   const headers = token ? { "x-corpus-token": token } : {};
   const res = await fetch(`${corpusUrl.replace(/\/+$/, "")}/api/hello`, { headers });
   const data = await res.json().catch(() => ({}));
-  if (data.app !== "corpus") throw new Error("Something answered, but it is not Corpus.");
+  if (data.app !== "corpus") throw new Error("Something answered, but it is not Raazi.");
   return data;
 }
 
@@ -121,10 +121,10 @@ function badge(text, color) {
 // Gathering quotes onto a draft.
 // ---------------------------------------------------------------------------
 
-/** The drafts in Corpus, most recently worked on first. */
+/** The drafts in Raazi, most recently worked on first. */
 async function drafts() {
   const { res, data } = await call("/api/drafts");
-  if (!res.ok) throw new Error(data.error || `Corpus answered ${res.status}.`);
+  if (!res.ok) throw new Error(data.error || `Raazi answered ${res.status}.`);
   return data.drafts || [];
 }
 
@@ -133,7 +133,7 @@ async function targetDraft(wanted) {
   const { draftId } = await chrome.storage.sync.get({ draftId: null });
   const list = await drafts();
   const chosen = list.find((d) => d.id === wanted) || list.find((d) => d.id === draftId) || list[0];
-  if (!chosen) throw new Error("There is no draft to gather into yet. Start one on Corpus's Write page.");
+  if (!chosen) throw new Error("There is no draft to gather into yet. Start one on Raazi's Write page.");
   return chosen;
 }
 
@@ -282,18 +282,18 @@ chrome.commands.onCommand.addListener(async (command) => {
 });
 
 // ---------------------------------------------------------------------------
-// Showing an article inside Corpus.
+// Showing an article inside Raazi.
 // ---------------------------------------------------------------------------
 
 const EMBED_RULE_ID = 1;
 
 /**
- * The rule that lets Corpus show an article's page inside itself.
+ * The rule that lets Raazi show an article's page inside itself.
  *
  * News sites refuse to be shown inside another page by sending X-Frame-Options,
- * or a Content-Security-Policy with frame-ancestors. For a frame that Corpus's
+ * or a Content-Security-Policy with frame-ancestors. For a frame that Raazi's
  * own page opens — and only that: the rule matches sub-frame requests whose
- * initiator is Corpus's host — both headers are removed from the response.
+ * initiator is Raazi's host — both headers are removed from the response.
  * A declarative rule cannot take one directive out of a policy, so the whole
  * policy goes for that frame; the same article opened in its own tab, or
  * framed by any other site, keeps all of it.

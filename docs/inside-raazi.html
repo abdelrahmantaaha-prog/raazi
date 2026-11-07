@@ -2,9 +2,9 @@
 <html lang="en">
 <head>
 <meta charset="utf-8">
-<title>Inside Corpus</title>
+<title>Inside Raazi</title>
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<meta name="description" content="A chapter-by-chapter tour of the Corpus codebase, built from its real source.">
+<meta name="description" content="A chapter-by-chapter tour of the Raazi codebase, built from its real source.">
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Newsreader:ital,opsz,wght@0,6..72,400;0,6..72,500;0,6..72,600;1,6..72,400&family=IBM+Plex+Mono:wght@400;500;600&family=IBM+Plex+Sans:wght@400;500;600&display=swap">
@@ -298,7 +298,7 @@ hr.rule { border: 0; border-top: 1px solid var(--line); margin: 44px 0 0; }
     <div class="brand">
       <div class="mark">📚</div>
       <div>
-        <b>Inside Corpus</b>
+        <b>Inside Raazi</b>
         <span>29,824 lines · TypeScript</span>
       </div>
     </div>
@@ -314,7 +314,7 @@ hr.rule { border: 0; border-top: 1px solid var(--line); margin: 44px 0 0; }
 
       <header class="hero">
         <div class="eyebrow">A tour of your own codebase</div>
-        <h1>Inside Corpus</h1>
+        <h1>Inside Raazi</h1>
         <p class="sub">Every line of code on this page is real code from <code>Downloads/Claude/corpus</code> — not simplified examples. We start from “what is a durable queue” and end at “I understand why an entry that cites its sources can still be lying.”</p>
         <div class="facts">
           <div class="fact"><b>29824</b> lines</div>
@@ -335,7 +335,7 @@ hr.rule { border: 0; border-top: 1px solid var(--line); margin: 44px 0 0; }
           <h2>Start here</h2>
           <p class="lede">Read this page in order, at a screen, with the repo open beside it. It is built to be used, not skimmed.</p>
           <p>Three things worth knowing before we begin.</p>
-          <p><strong>Corpus is the most sophisticated thing you have built.</strong> Not the biggest — Knight Run is a third bigger — but the one with the most genuinely hard problems solved properly: a durable job queue, a taxonomy of API failures, entity resolution, and a verification pass that catches a class of error nothing structural can see. This page walks <strong>the spine</strong>: the queue, the error taxonomy, the key ring, the entry pipeline, and the ledger.</p>
+          <p><strong>Raazi is the most sophisticated thing you have built.</strong> Not the biggest — Knight Run is a third bigger — but the one with the most genuinely hard problems solved properly: a durable job queue, a taxonomy of API failures, entity resolution, and a verification pass that catches a class of error nothing structural can see. This page walks <strong>the spine</strong>: the queue, the error taxonomy, the key ring, the entry pipeline, and the ledger.</p>
           <p><strong>Its comments are the best in your folder.</strong> Several of them are worth reading as essays — <code>lib/pipeline/verify.ts</code> opens with a real bug found in a real library, quoted verbatim, and explains why no amount of structural checking would have caught it. Where a comment says something better than I could, this page quotes it and gets out of the way.</p>
           <p><strong>The dotted lines are the lesson.</strong> In every code panel, lines with an ochre dot in the gutter carry a note. Click one, or use the Prev / Next buttons and the arrow keys, and the note appears beside the code.</p>
           <div class="note-box">
@@ -360,7 +360,7 @@ hr.rule { border: 0; border-top: 1px solid var(--line); margin: 44px 0 0; }
           <div class="card">
             <div class="tagline">part 1</div>
             <h4>A Next.js app on :5400</h4>
-            <p>Pages and API routes, served from your own machine. Started by <code>Corpus.exe</code> — a 15 KB C# launcher that sits in the tray, so the clinic-style “never see a terminal” rule applies here too.</p>
+            <p>Pages and API routes, served from your own machine. Started by <code>Raazi.exe</code> — a 15 KB C# launcher that sits in the tray, so the clinic-style “never see a terminal” rule applies here too.</p>
           </div>
           <div class="card" style="border-color: var(--teal);">
             <div class="tagline">the source of truth</div>
@@ -381,8 +381,8 @@ hr.rule { border: 0; border-top: 1px solid var(--line); margin: 44px 0 0; }
 
         <div class="prose" style="margin-top: 22px;">
           <h3>The sentence that explains the whole design</h3>
-          <p>Corpus is <strong>a long-running job on free-tier quotas</strong>. A book is hundreds of calls across hours or days, on keys that will run out, on a machine that will be closed. Nearly every unusual thing in this codebase — the durable queue, the error taxonomy, the key ring, the hourly backoff, the parked-run timer — exists because that sentence is true.</p>
-          <p>Compare it with the other AI apps in your folder. Loqma makes one call and shows you the answer. Corpus makes eight hundred and has to survive all of them.</p>
+          <p>Raazi is <strong>a long-running job on free-tier quotas</strong>. A book is hundreds of calls across hours or days, on keys that will run out, on a machine that will be closed. Nearly every unusual thing in this codebase — the durable queue, the error taxonomy, the key ring, the hourly backoff, the parked-run timer — exists because that sentence is true.</p>
+          <p>Compare it with the other AI apps in your folder. Loqma makes one call and shows you the answer. Raazi makes eight hundred and has to survive all of them.</p>
         </div>
 
         <div class="check" data-answer="At most one task. The worker claims a task with an atomic UPDATE, and the handler writes its results AND marks the task done in a single transaction — so a kill either lands both or neither. On restart, anything left 'running' goes back in the queue. That is the entire durability story, and it is two design rules rather than any machinery.">
@@ -617,8 +617,8 @@ hr.rule { border: 0; border-top: 1px solid var(--line); margin: 44px 0 0; }
         <div class="prose">
           <div class="eyebrow">Chapter 8</div>
           <h2>The one place you overrule the model</h2>
-          <p class="lede">And the most carefully-worded claim in the codebase, because “Corpus learns from your corrections” is the kind of sentence that quietly means nothing.</p>
-          <p>Everything else in Corpus decides what counts as evidence by asking a model. Discarding a quote is where you say no — and the design follows from what makes that worth doing at all: <em>“a rejection you have to repeat is not a judgement, it is a chore.”</em></p>
+          <p class="lede">And the most carefully-worded claim in the codebase, because “Raazi learns from your corrections” is the kind of sentence that quietly means nothing.</p>
+          <p>Everything else in Raazi decides what counts as evidence by asking a model. Discarding a quote is where you say no — and the design follows from what makes that worth doing at all: <em>“a rejection you have to repeat is not a judgement, it is a chore.”</em></p>
         </div>
         <div class="specimen" data-spec="ledger"></div>
 
@@ -688,7 +688,7 @@ hr.rule { border: 0; border-top: 1px solid var(--line); margin: 44px 0 0; }
         <div class="prose">
           <div class="eyebrow">Chapter 10</div>
           <h2>The half you actually live in</h2>
-          <p class="lede">Corpus is a reading app first — the user said so — and the reader is the largest file in the repo.</p>
+          <p class="lede">Raazi is a reading app first — the user said so — and the reader is the largest file in the repo.</p>
           <p>Two pieces of it are worth pulling out, because both are the kind of problem that costs an afternoon and is invisible once solved.</p>
         </div>
         <div class="specimen" data-spec="portal"></div>
@@ -734,7 +734,7 @@ hr.rule { border: 0; border-top: 1px solid var(--line); margin: 44px 0 0; }
 
           <h3>Running it</h3>
           <div class="cmd"><code>npm run dev</code><button class="copy" type="button" data-copy="npm run dev">copy</button></div>
-          <p>Port 5400. Or double-click <code>Corpus.exe</code>, which starts the server in the background and sits in the tray — closing the browser leaves it running, so a long ingest keeps going.</p>
+          <p>Port 5400. Or double-click <code>Raazi.exe</code>, which starts the server in the background and sits in the tray — closing the browser leaves it running, so a long ingest keeps going.</p>
           <div class="cmd"><code>npm test</code><button class="copy" type="button" data-copy="npm test">copy</button></div>
           <p>150 assertions, no API key needed. <code>test-resume.mjs</code> drives the real worker against a scratch database with injected handlers, <strong>including a simulated kill mid-run and a real Gemini quota-error payload</strong> — which is how you test a durability guarantee rather than assert it.</p>
 
@@ -1429,7 +1429,7 @@ const SPECS = {
       ],
       [
         13,
-        " * Everything else in Corpus decides what counts as evidence by asking a model.",
+        " * Everything else in Raazi decides what counts as evidence by asking a model.",
         "Which is what makes this file structurally different from every other one."
       ],
       [
@@ -1464,7 +1464,7 @@ const SPECS = {
       ],
       [
         33,
-        " * Stating that split plainly matters more than it might seem. \"Corpus learns",
+        " * Stating that split plainly matters more than it might seem. \"Raazi learns",
         "Why the file bothers to distinguish them at all."
       ],
       [

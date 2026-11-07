@@ -12,7 +12,7 @@ export const maxDuration = 1800;
  */
 export async function PUT(req: Request) {
   if (!requestAllowed(req)) {
-    return NextResponse.json({ error: "This Corpus is in LAN mode. Send its token as x-corpus-token." }, { status: 401 });
+    return NextResponse.json({ error: "This Raazi is in LAN mode. Send its token as x-corpus-token." }, { status: 401 });
   }
   if (!/^application\/octet-stream/i.test(req.headers.get("content-type") ?? "")) {
     return NextResponse.json({ error: "Send the file as application/octet-stream." }, { status: 415 });

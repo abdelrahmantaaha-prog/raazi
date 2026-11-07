@@ -89,7 +89,7 @@ export function ClaudePlanCard({
     <Card>
       <h2 className="font-serif text-lg font-semibold">Claude (your plan)</h2>
       <p className="mt-1 text-sm text-[var(--color-muted)]">
-        Corpus uses Claude through your plan on this computer. When the plan&apos;s limits run out, the work waits or
+        Raazi uses Claude through your plan on this computer. When the plan&apos;s limits run out, the work waits or
         moves to another service until they reset.
       </p>
 
@@ -113,7 +113,7 @@ export function ClaudePlanCard({
       </div>
       {account?.error && <p className="mt-1 text-sm text-[var(--color-muted)]">{account.error}</p>}
       {!local && (
-        <p className="mt-1 text-sm text-[var(--color-muted)]">Open Corpus on this computer to change the Claude account.</p>
+        <p className="mt-1 text-sm text-[var(--color-muted)]">Open Raazi on this computer to change the Claude account.</p>
       )}
 
       {login.state === "waiting" && (
@@ -147,7 +147,7 @@ export function ClaudePlanCard({
         </div>
       )}
       {login.state === "done" && (
-        <p className="mt-2 text-sm text-[var(--color-muted)]">Signed in. Corpus uses this account from now on.</p>
+        <p className="mt-2 text-sm text-[var(--color-muted)]">Signed in. Raazi uses this account from now on.</p>
       )}
       {login.state === "failed" && login.error && (
         <p className="mt-2 text-sm text-red-700">Sign-in did not finish: {login.error}</p>

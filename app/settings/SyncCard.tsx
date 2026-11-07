@@ -57,7 +57,7 @@ export function LanCard() {
     <Card>
       <h2 className="font-serif text-lg font-semibold">Sharing</h2>
       <p className="mt-1 text-sm text-[var(--color-muted)]">
-        Off, only this computer can open Corpus. On, your phone, the browser extension and the
+        Off, only this computer can open Raazi. On, your phone, the browser extension and the
         other laptop can reach it over Wi-Fi or Tailscale, with a sign-in link.
       </p>
       {lan ? (

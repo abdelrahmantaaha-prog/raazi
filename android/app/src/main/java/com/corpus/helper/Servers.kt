@@ -10,7 +10,7 @@ import android.content.Context
  * — is asked for fresh, because it changes and a stale answer on the connect
  * screen is worse than no answer.
  *
- * The token is what a Corpus in LAN mode requires on every request: it is
+ * The token is what a Raazi in LAN mode requires on every request: it is
  * generated on the computer and shown in Settings there, as a link to open or
  * a code to type here. Kept in the app's own private preferences, which is
  * where the WebView's cookies live too — the same trust boundary, not a

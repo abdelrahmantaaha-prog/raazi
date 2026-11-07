@@ -7,7 +7,7 @@ import { MAX_ZOOM } from "@/lib/geo";
 export const dynamic = "force-dynamic";
 
 const TILES_DIR = path.join(DATA_DIR, "tiles");
-const UA = "Corpus/0.1 (personal research tool; single-user, local)";
+const UA = "Raazi/0.1 (personal research tool; single-user, local)";
 
 /**
  * How deep the map may be stored, and how much of it.

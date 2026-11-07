@@ -43,13 +43,13 @@ export const SCENES = [
     id: "intro",
     min: 6,
     ...rollCard,
-    card: card(`<div class="mark">Corpus</div><h1>كوربس</h1><p>موسوعة بحثية تنمو مع مصادرك</p><div class="rule"></div>`),
-    say: "هذا كوربس: موسوعةٌ بحثيّة تنمو مع مصادرك، وغرفةُ أخبارٍ تراقب ما يهمُّك.",
+    card: card(`<div class="mark">Raazi</div><h1>الرازي</h1><p>موسوعة بحثية تنمو مع مصادرك</p><div class="rule"></div>`),
+    say: "هذا الرازي: موسوعةٌ بحثيّة تنمو مع مصادرك، وغرفةُ أخبارٍ تراقب ما يهمُّك.",
   },
   {
     id: "library",
     url: "/",
-    say: "أضِف الكتبَ والأبحاثَ والمقالاتِ والتسجيلات. يقرأ كوربس كلَّ مصدرٍ مرةً واحدة، ويستخرج منه الأشخاصَ والمؤسساتِ والأحداثَ والأماكن.",
+    say: "أضِف الكتبَ والأبحاثَ والمقالاتِ والتسجيلات. يقرأ الرازي كلَّ مصدرٍ مرةً واحدة، ويستخرج منه الأشخاصَ والمؤسساتِ والأحداثَ والأماكن.",
     async run(cam, page, s) {
       await cam.wait(0.6);
       await cam.moveTo(page.getByText("Entities", { exact: true }), { ms: 900 });
@@ -224,7 +224,7 @@ export const SCENES = [
     id: "outro",
     min: 6,
     ...rollCard,
-    card: card(`<div class="mark">Corpus</div><h1>كوربس</h1><p>مكتبتك، وقد صارت موسوعةً وغرفةَ أخبار</p><div class="rule"></div>`),
-    say: "كوربس: مكتبتُك، وقد صارت موسوعةً وغرفةَ أخبار.",
+    card: card(`<div class="mark">Raazi</div><h1>الرازي</h1><p>مكتبتك، وقد صارت موسوعةً وغرفةَ أخبار</p><div class="rule"></div>`),
+    say: "الرازي: مكتبتُك، وقد صارت موسوعةً وغرفةَ أخبار.",
   },
 ];

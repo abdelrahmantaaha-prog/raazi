@@ -390,7 +390,7 @@ export function sanitizeHtml(html: string): string {
       const hasCite = !!cite && /^\d{1,12}$/.test(cite);
       const hasNote = !!note && /^\d{1,6}$/.test(note);
       // A span exists here for one reason: to carry a citation marker. The id
-      // is what it points at; the index is only for older copies of Corpus.
+      // is what it points at; the index is only for older copies of Raazi.
       if (!hasCite && !hasNote) continue;
       if (hasCite) rebuilt = ` data-cite="${cite}"`;
       if (hasNote) rebuilt += ` data-note="${note}"`;

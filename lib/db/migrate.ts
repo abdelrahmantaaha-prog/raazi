@@ -180,7 +180,7 @@ export function migrate(db: Database.Database) {
     );
     CREATE INDEX IF NOT EXISTS idx_bookmarks_source ON bookmarks(source_id, chunk_id);
 
-    -- Your own writing. The one part of Corpus nothing is generated into.
+    -- Your own writing. The one part of Raazi nothing is generated into.
     CREATE TABLE IF NOT EXISTS drafts (
       id         INTEGER PRIMARY KEY AUTOINCREMENT,
       title      TEXT    NOT NULL DEFAULT 'Untitled',
@@ -359,7 +359,7 @@ export function migrate(db: Database.Database) {
     CREATE INDEX IF NOT EXISTS idx_entry_flags_entity ON entry_flags(entity_id);
 
     -- An entry, or its connections, checked against the open web on request.
-    -- The one place Corpus looks outside your sources; it reports and never
+    -- The one place Raazi looks outside your sources; it reports and never
     -- edits. The latest check of each kind is kept. See lib/pipeline/webcheck.ts.
     CREATE TABLE IF NOT EXISTS web_checks (
       id          INTEGER PRIMARY KEY,
@@ -411,7 +411,7 @@ export function migrate(db: Database.Database) {
       created_at  TEXT    NOT NULL DEFAULT (datetime('now'))
     );
     -- 'waiting', 'queued', 'added' (source_id says which source it became),
-    -- 'skipped' by you, 'unsupported' (a kind of file Corpus cannot read), 'failed'.
+    -- 'skipped' by you, 'unsupported' (a kind of file Raazi cannot read), 'failed'.
     CREATE TABLE IF NOT EXISTS folder_files (
       id          INTEGER PRIMARY KEY,
       folder_id   INTEGER NOT NULL REFERENCES folders(id) ON DELETE CASCADE,

@@ -16,7 +16,7 @@ interface Edition {
 }
 
 /**
- * Fixing the two things Corpus can only guess at: what kind of thing a source
+ * Fixing the two things Raazi can only guess at: what kind of thing a source
  * is, and which published edition it is.
  *
  * Both guesses are deliberately cautious — a wrong cover on a research source
@@ -104,7 +104,7 @@ export function MatchCover({
           <div>
             <p className="text-sm font-medium">Where it belongs in the Library</p>
             <p className="mt-0.5 text-xs text-[var(--color-muted)]">
-              Corpus guessed <strong>{SHELVES.find((s) => s.id === guessed)?.label}</strong> from the
+              Raazi guessed <strong>{SHELVES.find((s) => s.id === guessed)?.label}</strong> from the
               file type and length. Your choice sticks.
             </p>
             <select
@@ -113,7 +113,7 @@ export function MatchCover({
               onChange={(e) => setShelf(e.target.value)}
             >
               <option value="">
-                Let Corpus decide (currently {SHELVES.find((s) => s.id === guessed)?.label})
+                Let Raazi decide (currently {SHELVES.find((s) => s.id === guessed)?.label})
               </option>
               {SHELVES.map((s) => (
                 <option key={s.id} value={s.id}>

@@ -1,5 +1,5 @@
 /**
- * The lessons Corpus starts with.
+ * The lessons Raazi starts with.
  *
  * Every one of these was learned the hard way on 16 September 2026, reading
  * the 15 September brief and the ten most-cited entries against their own

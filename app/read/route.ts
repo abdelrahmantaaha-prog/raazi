@@ -5,7 +5,7 @@ export const dynamic = "force-dynamic";
 /**
  * The doorway to the one article window.
  *
- * Every outside link in Corpus points here rather than straight at the
+ * Every outside link in Raazi points here rather than straight at the
  * article, and every one of them carries `target="corpus-article"`. The
  * browser reuses a window by name, so the second link you open replaces the
  * first instead of adding to a row of tabs that reaches the end of the bar by
@@ -14,7 +14,7 @@ export const dynamic = "force-dynamic";
  *
  * The bounce exists because a named window and a severed `window.opener`
  * cannot be had together any other way. `rel="noopener"` would stop the
- * article reaching back into Corpus, but it also makes the browser ignore the
+ * article reaching back into Raazi, but it also makes the browser ignore the
  * name and open a new window every time; `window.open(url, name, "noopener")`
  * has the same problem. A page can, however, null *its own* opener — and once
  * it is null it stays null across the navigation that follows. So this page

@@ -5,7 +5,7 @@ const nextConfig: NextConfig = {
    * A dev server must not build on top of the running app.
    *
    * `next dev` and `next build` both write to `.next` by default, so starting a
-   * dev server while Corpus is running replaces the build underneath it: the
+   * dev server while Raazi is running replaces the build underneath it: the
    * hashed chunks and stylesheets its pages ask for stop existing, and every
    * page it serves afterwards arrives unstyled until it is restarted. The build
    * guard in `scripts/guard-build.mjs` catches a build doing this and cannot
@@ -25,7 +25,7 @@ const nextConfig: NextConfig = {
   // `next start` is the entrypoint the launcher uses from a checkout, and Next
   // 15 treats `next start` with `output: "standalone"` as unsupported: it prints
   // a warning and the server process exits on its own a moment after "Ready",
-  // before it has served anything. That is the "Corpus stopped unexpectedly"
+  // before it has served anything. That is the "Raazi stopped unexpectedly"
   // crash. A plain build has no standalone output, so `next start` is supported
   // and stays up; `npm run dist` sets CORPUS_DIST=1 to get the standalone bundle
   // it needs, and its copies run through server.js, not `next start`.

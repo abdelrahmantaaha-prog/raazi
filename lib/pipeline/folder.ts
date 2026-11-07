@@ -18,7 +18,7 @@ export async function handleFolderFile(task: Task): Promise<void> {
   const where = path.join(FOLDERS_DIR, String(file.folder_id), ...file.rel_path.split("/"));
   const as = readableAs(file.rel_path);
   try {
-    if (!as) throw new Error("Corpus cannot read this kind of file.");
+    if (!as) throw new Error("Raazi cannot read this kind of file.");
     let bytes = await fs.promises.readFile(where);
     let filename = path.basename(file.rel_path);
     const title = path.basename(filename, path.extname(filename));

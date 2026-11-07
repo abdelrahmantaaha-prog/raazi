@@ -1,13 +1,13 @@
 #!/usr/bin/env node
 /**
- * Corpus's research tools, offered to Claude during a web check.
+ * Raazi's research tools, offered to Claude during a web check.
  *
  * Claude Code starts this program for the length of one check and talks to it
  * over stdin and stdout (the Model Context Protocol, newline-delimited
  * JSON-RPC). Claude reads each claim, picks whichever of these tools fits it —
  * Wikidata for a role and its dates, court records for a lawsuit, a ship
  * register for a vessel named in a sanctions story — and calls it. Every
- * answer carries the addresses it came from, and Corpus only shows a source
+ * answer carries the addresses it came from, and Raazi only shows a source
  * whose address one of these tools or a web search actually returned.
  *
  * Plain JavaScript with no dependencies, so it runs from a checkout and from
@@ -30,7 +30,7 @@ const KEYS = (() => {
   }
 })();
 
-const UA = "Corpus research tool (a personal research library)";
+const UA = "Raazi research tool (a personal research library)";
 /** For the few public sites that turn away anything that does not look like a browser. */
 const BROWSER = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/130.0 Safari/537.36";
 const TIMEOUT_MS = 25_000;
@@ -473,7 +473,7 @@ function trackShipment({ code }) {
       kind: "container",
       code: raw,
       valid: containerValid(raw),
-      carrier: carrier ?? "a leasing company or a line not on Corpus's list — the owner code alone does not say who is moving it",
+      carrier: carrier ?? "a leasing company or a line not on Raazi's list — the owner code alone does not say who is moving it",
       tracking: line === "Maersk" ? `${CARRIER_TRACKING.Maersk}${raw}` : CARRIER_TRACKING[line],
       note: "Shipping lines' tracking pages need a browser; this cannot read them for you. The link is for the researcher.",
     };

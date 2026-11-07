@@ -163,7 +163,7 @@ export default function ActivityPage() {
       <div>
         <h1 className="font-serif text-2xl font-semibold">Activity</h1>
         <p className="mt-1 text-sm text-[var(--color-muted)]">
-          What Corpus is working on in the background. It does one step at a time: the brief and
+          What Raazi is working on in the background. It does one step at a time: the brief and
           the news first, then reading what you add, and writing entries last, since an entry takes
           a few minutes and can wait. “Do this first” moves a batch’s reading ahead of the rest.
           {active.length > 0 && (

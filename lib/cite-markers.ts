@@ -12,7 +12,7 @@
  *   so a draft could read "[2] … [1]" on screen and "1 … 2" in the export.
  * - `data-note` is the reference's index in the stored list (by `seq`). Newer
  *   code never reads it when `data-cite` is there; it is written so a copy of
- *   Corpus from before ids existed — the other laptop, a backup — still finds
+ *   Raazi from before ids existed — the other laptop, a backup — still finds
  *   its footnote rather than discarding the span.
  * - `contenteditable="false"` makes it one character as far as the caret is
  *   concerned. The sanitiser used to strip it, so every reopened draft had

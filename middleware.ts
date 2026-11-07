@@ -13,7 +13,7 @@ import {
 /**
  * The door, when there is one.
  *
- * With LAN mode off — the default — Corpus is bound to 127.0.0.1 and this
+ * With LAN mode off — the default — Raazi is bound to 127.0.0.1 and this
  * passes everything through: the only client that can reach it is you. With
  * LAN mode on, every request has to carry the token (see lib/lan.ts), because
  * the server is now reachable by whatever else is on the network, and "the
@@ -41,7 +41,7 @@ const YEAR = 60 * 60 * 24 * 365;
 
 /**
  * The app's manifest and its icons: what lets a browser offer to install
- * Corpus as its own window, which it asks for before anyone has signed in.
+ * Raazi as its own window, which it asks for before anyone has signed in.
  * Fixed names, read-only, and none of them says anything about the library.
  */
 const APP_FILES = new Set(["/manifest.webmanifest", "/icon-192.png", "/icon-512.png", "/icon-maskable-512.png"]);
@@ -94,8 +94,8 @@ export async function middleware(req: NextRequest) {
     }
     return html(
       offered
-        ? "That token is not the one this Corpus is using."
-        : "This Corpus is in LAN mode, so it needs its token before it will open.",
+        ? "That token is not the one this Raazi is using."
+        : "This Raazi is in LAN mode, so it needs its token before it will open.",
       offered ? 401 : 200
     );
   }
@@ -104,11 +104,11 @@ export async function middleware(req: NextRequest) {
 
   if (pathname.startsWith("/api/")) {
     return NextResponse.json(
-      { error: "This Corpus is in LAN mode. Send its token as x-corpus-token, or sign in at /login." },
+      { error: "This Raazi is in LAN mode. Send its token as x-corpus-token, or sign in at /login." },
       { status: 401 }
     );
   }
-  return html("This Corpus is in LAN mode, so it needs its token before it will open.", 401);
+  return html("This Raazi is in LAN mode, so it needs its token before it will open.", 401);
 }
 
 function html(reason: string, status: number) {

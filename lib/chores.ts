@@ -20,7 +20,7 @@ import { autoWatch } from "./watchlist";
  *    lookups — and entities that earned an entry since yesterday deserve their
  *    photograph without anyone remembering to press the button.
  *
- * Scheduling is deliberately humble. There is no cron here: Corpus is a tray
+ * Scheduling is deliberately humble. There is no cron here: Raazi is a tray
  * app on a laptop that sleeps, so "every morning at seven" really means "the
  * first opportunity after seven, once per day" — checked from the worker's idle
  * loop and from a daily timer, with the day claimed in config *before* any work

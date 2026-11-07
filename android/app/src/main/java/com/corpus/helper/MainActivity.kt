@@ -25,9 +25,9 @@ import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
 
 /**
- * A window onto whichever Corpus is running on this network.
+ * A window onto whichever Raazi is running on this network.
  *
- * Deliberately a wrapper rather than a native client: Corpus is a web app, and
+ * Deliberately a wrapper rather than a native client: Raazi is a web app, and
  * everything in it — the reader, the entries, the graph, study — already works
  * on a phone screen. Rewriting any of that natively would mean two versions of
  * the same thing drifting apart, and the second one always losing.
@@ -105,7 +105,7 @@ class MainActivity : AppCompatActivity() {
             return
         }
 
-        showConnecting("Looking for Corpus on this network…")
+        showConnecting("Looking for Raazi on this network…")
         scan = lifecycleScope.launch {
             Discovery.sweep(this@MainActivity) { server ->
                 lifecycleScope.launch { record(server) }
@@ -113,7 +113,7 @@ class MainActivity : AppCompatActivity() {
 
             when {
                 found.isEmpty() -> {
-                    showIdle("No Corpus found on this network.")
+                    showIdle("No Raazi found on this network.")
                     ui.help.text = HELP
                     ui.help.visibility = View.VISIBLE
                 }
@@ -215,7 +215,7 @@ class MainActivity : AppCompatActivity() {
      * the moment it decides to open the one server it found.
      */
     private fun open(server: Server) {
-        // A Corpus in LAN mode wants its token before it will show anything.
+        // A Raazi in LAN mode wants its token before it will show anything.
         // The WebView cannot be told to add a header to every request it makes
         // — only to the first — so the token is handed over once through
         // /login, which sets a cookie the WebView then carries by itself.
@@ -245,7 +245,7 @@ class MainActivity : AppCompatActivity() {
      *
      * It is shown on the computer, in Settings, as a link to scan or a code to
      * type. A wrong one is rejected here rather than by a page the WebView
-     * would render as a bare 401, which reads as "Corpus is broken".
+     * would render as a bare 401, which reads as "Raazi is broken".
      */
     private fun askForToken(server: Server) {
         val input = EditText(this).apply {
@@ -256,7 +256,7 @@ class MainActivity : AppCompatActivity() {
         AlertDialog.Builder(this)
             .setTitle(server.name)
             .setMessage(
-                "This Corpus is open to the network, so it needs its token. " +
+                "This Raazi is open to the network, so it needs its token. " +
                     "Open Settings on the computer running it — the token is there, " +
                     "with a link you can scan."
             )
@@ -283,7 +283,7 @@ class MainActivity : AppCompatActivity() {
         ui.web.settings.apply {
             javaScriptEnabled = true
             domStorageEnabled = true
-            // Corpus lays out for a phone already; letting the WebView invent a
+            // Raazi lays out for a phone already; letting the WebView invent a
             // desktop viewport would undo that.
             useWideViewPort = false
             loadWithOverviewMode = false
@@ -304,7 +304,7 @@ class MainActivity : AppCompatActivity() {
                 // sub-resource should not throw you out of what you are reading.
                 if (request?.isForMainFrame != true) return
                 connected = null
-                showIdle("Lost the connection. Is Corpus still running?")
+                showIdle("Lost the connection. Is Raazi still running?")
                 ui.connectPanel.visibility = View.VISIBLE
                 ui.web.visibility = View.GONE
                 ui.help.text = HELP
@@ -341,15 +341,15 @@ class MainActivity : AppCompatActivity() {
         /**
          * The two things that are actually ever wrong, in the order they are
          * usually wrong in. Windows blocks incoming connections by default, and
-         * that is invisible from the phone — it looks exactly like Corpus not
+         * that is invisible from the phone — it looks exactly like Raazi not
          * running at all.
          */
         const val HELP =
             "Two things to check:\n\n" +
-                "1. Corpus is running on the computer — its icon is in the system tray.\n\n" +
+                "1. Raazi is running on the computer — its icon is in the system tray.\n\n" +
                 "2. Windows Firewall is letting it through. It blocks incoming connections " +
-                "by default, which from here looks the same as Corpus being switched off. " +
-                "The Corpus README has the one command that fixes it.\n\n" +
+                "by default, which from here looks the same as Raazi being switched off. " +
+                "The Raazi README has the one command that fixes it.\n\n" +
                 "Both devices also have to be on the same Wi-Fi — a guest network will not " +
                 "reach your computer."
     }

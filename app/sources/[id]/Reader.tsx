@@ -135,7 +135,7 @@ export function Reader({
     partly: Record<number, number>;
   };
   marks: Mark[];
-  /** Whether Corpus reads this source as you go, and how far behind it is. */
+  /** Whether Raazi reads this source as you go, and how far behind it is. */
   readAlong: { on: boolean; remaining: number };
   /**
    * A passage to open at, from a search hit or a citation's "Read in". Wins
@@ -252,7 +252,7 @@ export function Reader({
   /** Reading aloud: whether it is running, and whether it is on hold. */
   const [listening, setListening] = useState(false);
   const [paused, setPaused] = useState(false);
-  /** The browser's own voices, and Microsoft's Natural ones through Corpus. */
+  /** The browser's own voices, and Microsoft's Natural ones through Raazi. */
   const [machineVoices, setMachineVoices] = useState<Voice[]>([]);
   const [naturalVoices, setNaturalVoices] = useState<Voice[]>([]);
   const voices = useMemo(() => [...naturalVoices, ...machineVoices], [naturalVoices, machineVoices]);
@@ -1080,8 +1080,8 @@ export function Reader({
               style={{ color: theme.muted }}
               title={
                 pending > 0
-                  ? `Corpus is ${pending} passage(s) behind you. It reads what you have read, not the whole book.`
-                  : "Corpus has read everything you have."
+                  ? `Raazi is ${pending} passage(s) behind you. It reads what you have read, not the whole book.`
+                  : "Raazi has read everything you have."
               }
             >
               {pending > 0 ? `${pending} behind` : "caught up"}

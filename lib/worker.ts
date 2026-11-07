@@ -666,7 +666,7 @@ function sweepBrief(): boolean {
 }
 
 /**
- * Whether this server is a follower's copy of another Corpus (lib/follow.ts).
+ * Whether this server is a follower's copy of another Raazi (lib/follow.ts).
  *
  * A copy never runs the worker. Reading, polling and writing entries are the
  * primary's job; a copy that did them too would spend the same tokens twice

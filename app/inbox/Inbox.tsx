@@ -957,7 +957,7 @@ export default function Inbox({
         <div className="rounded-xl border border-dashed border-[var(--color-rule)] px-6 py-16 text-center">
           <p className="font-serif text-xl">Nothing waiting</p>
           <p className="mx-auto mt-2 max-w-[46ch] text-sm text-[var(--color-muted)]">
-            The feeds check themselves on their own schedule while Corpus is open. What they bring in
+            The feeds check themselves on their own schedule while Raazi is open. What they bring in
             lands here first, and waits.
           </p>
         </div>
@@ -1339,12 +1339,12 @@ function pictureOf(item: Item): string | null {
  * The article's own page, live, inside the pane.
  *
  * Nearly every news site refuses to be shown inside another page, and says so
- * in a header the browser obeys; the Corpus Inbox extension (0.3.0 and later)
- * removes that header for frames Corpus opens, and for nothing else. Without
+ * in a header the browser obeys; the Raazi Inbox extension (0.3.0 and later)
+ * removes that header for frames Raazi opens, and for nothing else. Without
  * it the frame stays blank, which is why the way out is always under it.
  *
  * The sandbox leaves out top navigation, so a page that tries to break out of
- * its frame cannot carry Corpus away with it.
+ * its frame cannot carry Raazi away with it.
  *
  * On the desk the frame fills whatever the pane has below its heading; in the
  * phone's sheet, which has no height of its own, it takes most of the screen.
@@ -1361,13 +1361,13 @@ function PageView({ url }: { url: string }) {
         className="min-h-[60vh] w-full flex-1 rounded-lg border border-[var(--color-rule)] bg-white lg:min-h-[16rem]"
       />
       <p className="shrink-0 text-[11px] leading-snug text-[var(--color-muted)]">
-        Blank? The site refuses to be shown inside another page — the Corpus Inbox extension lifts that from
+        Blank? The site refuses to be shown inside another page — the Raazi Inbox extension lifts that from
         version 0.3.0 — or{" "}
         <ArticleLink href={url} className="underline hover:text-[var(--color-accent)]">
           open it in the article window
         </ArticleLink>
         . Signed out? Brave keeps your logins from pages inside another site; allow cross-site cookies for
-        Corpus in Shields. The extension&apos;s icon sends the article shown here.
+        Raazi in Shields. The extension&apos;s icon sends the article shown here.
       </p>
     </div>
   );
@@ -1479,7 +1479,7 @@ function Preview({
                     role="tab"
                     aria-selected={view === v}
                     onClick={() => onView(v)}
-                    title={v === "text" ? "The text Corpus fetched (V)" : "The article's own page, live, inside Corpus (V)"}
+                    title={v === "text" ? "The text Raazi fetched (V)" : "The article's own page, live, inside Raazi (V)"}
                     className={`rounded-full px-2.5 py-0.5 transition ${
                       view === v ? "bg-[var(--color-ink)] text-white" : "text-[var(--color-muted)] hover:text-[var(--color-ink)]"
                     }`}

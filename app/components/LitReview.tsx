@@ -118,7 +118,7 @@ export function LitReviewWindow({ target, id, focus, context, onClose }: LitRevi
           setError("A literature review needs Claude (your plan), which searches the web. Add it in Settings → AI first.");
         else await start();
       } catch {
-        if (!stopped) setError("Corpus did not answer. Is it still running?");
+        if (!stopped) setError("Raazi did not answer. Is it still running?");
       } finally {
         if (!stopped) setLoading(false);
       }

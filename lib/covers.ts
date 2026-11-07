@@ -149,7 +149,7 @@ export async function fetchCover(sourceId: number): Promise<string | null> {
     // The image address may be one the fetched page declared, so it is held
     // to the same rule as the page itself: no internal addresses, whatever
     // og:image says.
-    const res = await safeFetch(url, { headers: { "user-agent": "Corpus/0.1 (personal research)" } });
+    const res = await safeFetch(url, { headers: { "user-agent": "Raazi/0.1 (personal research)" } });
     if (!res.ok) throw new Error(`cover fetch ${res.status}`);
     const buf = Buffer.from(await res.arrayBuffer());
 
@@ -216,7 +216,7 @@ async function openLibraryCover(title: string, author: string | null): Promise<s
     if (a) params.set("author", a);
 
     const res = await fetch(`https://openlibrary.org/search.json?${params}`, {
-      headers: { "user-agent": "Corpus/0.1 (personal research)" },
+      headers: { "user-agent": "Raazi/0.1 (personal research)" },
     });
     if (!res.ok) continue;
 

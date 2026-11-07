@@ -51,7 +51,7 @@ const UNREADABLE: Record<string, string> = Object.fromEntries([
   ]),
   ...[".webp", ".gif", ".bmp", ".tif", ".tiff", ".heic", ".heif"].map((e) => [
     e,
-    "Corpus reads pictures saved as PNG or JPG. Save it as one of those, then add it.",
+    "Raazi reads pictures saved as PNG or JPG. Save it as one of those, then add it.",
   ]),
   ...[".zip", ".rar", ".7z"].map((e) => [e, "An archive is added as a folder: Add source → Folder or zip."]),
   ...[".exe", ".dll", ".msi", ".iso", ".bin"].map((e) => [e, "That is a program or disk image, not a document."]),
@@ -66,7 +66,7 @@ async function imageToPdf(bytes: Buffer, ext: string): Promise<Buffer> {
   const data = new Uint8Array(bytes);
   const isPng = data[0] === 0x89 && data[1] === 0x50 && data[2] === 0x4e && data[3] === 0x47;
   const isJpg = data[0] === 0xff && data[1] === 0xd8;
-  if (!isPng && !isJpg) throw new Error(`That ${ext} file is not a picture Corpus can read. Save it as PNG or JPG.`);
+  if (!isPng && !isJpg) throw new Error(`That ${ext} file is not a picture Raazi can read. Save it as PNG or JPG.`);
   const pdf = await PDFDocument.create();
   const image = isPng ? await pdf.embedPng(data) : await pdf.embedJpg(data);
   // Scaled to fit an A4-ish page at most, never enlarged.
@@ -537,7 +537,7 @@ function finish(
       extra.note,
       saving,
       result.mode === "along"
-        ? "Long enough to read along with: Corpus reads each passage as you get to it, rather than the whole thing up front."
+        ? "Long enough to read along with: Raazi reads each passage as you get to it, rather than the whole thing up front."
         : "",
     ]
       .filter(Boolean)

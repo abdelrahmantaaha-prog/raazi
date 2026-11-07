@@ -22,7 +22,7 @@ export interface ApiKey {
   id: string;
   label: string;
   key: string;
-  /** Which service this key opens. Absent on keys written before Corpus could
+  /** Which service this key opens. Absent on keys written before Raazi could
    *  talk to more than one, which is why every read defaults it to gemini. */
   provider?: ProviderId;
   /** Overrides the provider's default model for this key. */
@@ -161,7 +161,7 @@ export function lastCallAt(keyId: string): number {
  * application. The pacer waits a per-key interval between calls — six seconds
  * at the default ten a minute — and every call asked for the same first key,
  * so thirty-five keys ran at the speed of one. The morning's backlog was not
- * Gemini being slow; it was Corpus queueing behind itself.
+ * Gemini being slow; it was Raazi queueing behind itself.
  *
  * Least-recently-used rather than round-robin because it needs no cursor to
  * keep, survives a key going out of quota and coming back, and lands on a

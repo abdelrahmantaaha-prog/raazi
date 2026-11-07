@@ -12,7 +12,7 @@ import { LIT_KINDS, RESEARCH_KINDS, renumberCitations, reviewInput, saveReport, 
  *
  * The text is an article (a source — an inbox item's fetched article is one),
  * a draft, or a passage highlighted in a source. Claude on your plan searches
- * the web, and Corpus's own tools for academic papers and the news archive,
+ * the web, and Raazi's own tools for academic papers and the news archive,
  * and comes back with research and news on it and a short review of the
  * field. Asked for by hand; it spends the plan's allowance.
  *

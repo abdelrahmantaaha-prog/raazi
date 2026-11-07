@@ -248,14 +248,14 @@ section("The extension sends an article with its paragraphs apart");
 
   check("paragraphs are separated by a blank line", /explained to members\.\n\nParagraph 2 opens/.test(sent.text), JSON.stringify(sent.text.slice(0, 220)));
   check("no two paragraphs are run together", !/members\.Paragraph/.test(sent.text));
-  check("a subheading is marked so Corpus can label what follows", /\n\n## What comes next\n\n/.test(sent.text));
+  check("a subheading is marked so Raazi can label what follows", /\n\n## What comes next\n\n/.test(sent.text));
   check("list items stay on lines of their own", /- First step\n\n- Second step/.test(sent.text), JSON.stringify(sent.text.match(/- First[\s\S]{0,30}/)?.[0]));
   check("a line break inside a paragraph survives", /A line\nbroken by hand\./.test(sent.text));
   check("the figure caption is left out", !sent.text.includes("A caption"));
 
   const clipped = clip.clipArticle({ url: sent.url, title: sent.title, text: sent.text, outlet: sent.outlet });
   const passages = triage.heldText(clipped.itemId)?.passages.map((p) => p.text).join("\n\n") ?? "";
-  check("and Corpus keeps them apart in what the pane shows", /members\.\n\nParagraph 2 opens/.test(passages), JSON.stringify(passages.slice(0, 160)));
+  check("and Raazi keeps them apart in what the pane shows", /members\.\n\nParagraph 2 opens/.test(passages), JSON.stringify(passages.slice(0, 160)));
 }
 
 section("The inbox can be searched, headline, outlet and text");

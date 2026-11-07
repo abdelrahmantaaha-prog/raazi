@@ -19,7 +19,7 @@ function findFfmpeg() {
 }
 
 const card = `<body style="margin:0;height:100vh;display:grid;place-items:center;background:#faf7f2;font-family:Georgia,serif">
-  <h1 style="font-size:72px;color:#3b2a1a;opacity:0;animation:in 1.2s ease-out .3s forwards">Corpus</h1>
+  <h1 style="font-size:72px;color:#3b2a1a;opacity:0;animation:in 1.2s ease-out .3s forwards">Raazi</h1>
   <style>@keyframes in{from{opacity:0;transform:translateY(24px)}to{opacity:1;transform:none}}</style></body>`;
 
 const size = { width: 1920, height: 1080 };

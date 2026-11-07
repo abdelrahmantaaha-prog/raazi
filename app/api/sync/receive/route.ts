@@ -15,7 +15,7 @@ export const maxDuration = 3600;
  */
 export async function POST(req: Request) {
   if (!requestAllowed(req)) {
-    return NextResponse.json({ error: "This Corpus is in LAN mode. Send its token as x-corpus-token." }, { status: 401 });
+    return NextResponse.json({ error: "This Raazi is in LAN mode. Send its token as x-corpus-token." }, { status: 401 });
   }
   if (!/^application\/(vnd\.sqlite3|octet-stream)/i.test(req.headers.get("content-type") ?? "")) {
     return NextResponse.json({ error: "Send the library as application/vnd.sqlite3." }, { status: 415 });

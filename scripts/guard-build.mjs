@@ -1,5 +1,5 @@
 /**
- * Refuses to build while Corpus is serving.
+ * Refuses to build while Raazi is serving.
  *
  * `next build` replaces `.next` in place, and the filenames inside it are
  * content-hashed. A server that is already running keeps sending HTML that
@@ -46,9 +46,9 @@ console.error(
     "  afterwards would lose its stylesheets — the app renders as unstyled HTML",
     "  until the server is restarted.",
     "",
-    "  Quit Corpus (tray icon → Quit) and make sure its node process is gone:",
+    "  Quit Raazi (tray icon → Quit) and make sure its node process is gone:",
     "",
-    "    powershell -Command \"Get-Process node,Corpus -EA SilentlyContinue | Stop-Process -Force\"",
+    "    powershell -Command \"Get-Process node,Raazi -EA SilentlyContinue | Stop-Process -Force\"",
     "",
     "  Then build again. To override deliberately:  CORPUS_ALLOW_HOT_BUILD=1 npm run build",
     "",

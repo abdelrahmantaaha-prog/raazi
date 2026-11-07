@@ -212,8 +212,8 @@ export async function POST(req: Request) {
     lan = { enabled: settings.enabled };
     token = settings.token;
     note = body.lan.enabled
-      ? "Sharing is on. Restart Corpus to open it to the network; sign a phone in from the link below."
-      : "Sharing is off. Restart Corpus to close it to the network.";
+      ? "Sharing is on. Restart Raazi to open it to the network; sign a phone in from the link below."
+      : "Sharing is off. Restart Raazi to close it to the network.";
   }
 
   const res = NextResponse.json({ ...publicConfig(), lan, note });

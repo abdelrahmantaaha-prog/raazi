@@ -57,7 +57,7 @@ export function unzip(buf: Buffer, opts: { maxTotalBytes?: number; maxFiles?: nu
   const cdSize = buf.readUInt32LE(eocd + 12);
   const cdOffset = buf.readUInt32LE(eocd + 16);
   if (count === 0xffff || cdOffset === 0xffffffff || cdSize === 0xffffffff) {
-    throw new Error("This zip is too large for Corpus to open (over 4 GB or 65,535 files). Unzip it and add the folder instead.");
+    throw new Error("This zip is too large for Raazi to open (over 4 GB or 65,535 files). Unzip it and add the folder instead.");
   }
 
   const files: UnzippedFile[] = [];
@@ -99,7 +99,7 @@ export function unzip(buf: Buffer, opts: { maxTotalBytes?: number; maxFiles?: nu
       continue;
     }
     if (method !== 0 && method !== 8) {
-      skipped.push({ path: name, reason: "it is compressed in a way Corpus cannot unpack" });
+      skipped.push({ path: name, reason: "it is compressed in a way Raazi cannot unpack" });
       continue;
     }
     if (files.length >= maxFiles) {
@@ -107,7 +107,7 @@ export function unzip(buf: Buffer, opts: { maxTotalBytes?: number; maxFiles?: nu
       continue;
     }
     if (total + size > maxTotal) {
-      skipped.push({ path: name, reason: "the zip unpacks to more than Corpus will take at once" });
+      skipped.push({ path: name, reason: "the zip unpacks to more than Raazi will take at once" });
       continue;
     }
 

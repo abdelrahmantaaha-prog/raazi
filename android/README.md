@@ -1,9 +1,9 @@
-# Corpus on your phone
+# Raazi on your phone
 
-A small Android app that finds whichever computer is running Corpus on your
+A small Android app that finds whichever computer is running Raazi on your
 network and opens its library.
 
-It is a wrapper around the web app, not a second implementation of it. Corpus
+It is a wrapper around the web app, not a second implementation of it. Raazi
 already reads well on a phone — the reader, entries, the connections graph, Ask
 and Study all work as they are — and a native rewrite would only be a second
 version to keep in step with the first.
@@ -14,7 +14,7 @@ On launch it tries the machine you used last. That is one request and it
 normally succeeds, so you go straight into the library.
 
 If that fails, it asks all 254 addresses of your phone's own subnet whether
-they are a Corpus, in batches of 48, with a 400 ms patience each. That takes
+they are a Raazi, in batches of 48, with a 400 ms patience each. That takes
 about a second. Anything that answers `/api/hello` with `{"app":"corpus"}` is
 listed with its machine name and how much it holds; if exactly one answers, it
 opens automatically.
@@ -23,7 +23,7 @@ Failing all that, you can type the address by hand.
 
 ## Before it can work: LAN mode and the token
 
-Corpus listens on `127.0.0.1` by default, which means your phone cannot reach
+Raazi listens on `127.0.0.1` by default, which means your phone cannot reach
 it at all — deliberately, because the alternative is a library that anyone on
 the same Wi-Fi can delete sources from and spend your quota on.
 
@@ -31,7 +31,7 @@ To use it from a phone, on the computer:
 
 1. Settings → turn on **LAN mode**. That records the choice and generates a
    token (32 random bytes, kept in `data/config.json` beside the API keys).
-2. Restart Corpus, so it binds every interface instead of just this machine.
+2. Restart Raazi, so it binds every interface instead of just this machine.
    The launcher reads the setting and starts `npm run start:lan` for you; from
    a terminal it is `npm run dev:lan` or `npm run start:lan`.
 3. Settings shows the sign-in link — `http://<address>:5400/login?token=…` —
@@ -45,14 +45,14 @@ cookie afterwards. Anything without it gets a 401.
 ## Before it can work: the firewall
 
 **Windows blocks incoming connections by default**, so a freshly installed
-Corpus is invisible to your phone even while it is running perfectly. From the
-phone this looks identical to Corpus being switched off, which makes it worth
+Raazi is invisible to your phone even while it is running perfectly. From the
+phone this looks identical to Raazi being switched off, which makes it worth
 ruling out first.
 
 Open PowerShell **as Administrator** and run:
 
 ```powershell
-New-NetFirewallRule -DisplayName "Corpus (local network)" -Direction Inbound -Action Allow -Protocol TCP -LocalPort 5400 -Profile Private
+New-NetFirewallRule -DisplayName "Raazi (local network)" -Direction Inbound -Action Allow -Protocol TCP -LocalPort 5400 -Profile Private
 ```
 
 `-Profile Private` matters: it opens the port on networks you have marked as
@@ -62,18 +62,18 @@ network is classified private with `Get-NetConnectionProfile`.
 To undo it later:
 
 ```powershell
-Remove-NetFirewallRule -DisplayName "Corpus (local network)"
+Remove-NetFirewallRule -DisplayName "Raazi (local network)"
 ```
 
 ## Building the APK
 
-There is no Android toolchain on the machine Corpus is developed on, so the APK
+There is no Android toolchain on the machine Raazi is developed on, so the APK
 comes out of GitHub Actions.
 
 1. Make this a git repository and push it somewhere on GitHub:
 
    ```bash
-   git init && git add . && git commit -m "Corpus" && git branch -M main
+   git init && git add . && git commit -m "Raazi" && git branch -M main
    ```
 
    Add `data/` and `node_modules/` to `.gitignore` first — `data/` holds your
@@ -91,7 +91,7 @@ comes out of GitHub Actions.
 
 - Both devices must be on the same Wi-Fi. A guest network is deliberately
   walled off from the rest of the house and will not reach your computer.
-- The app permits cleartext HTTP, because Corpus has no certificate. It is only
+- The app permits cleartext HTTP, because Raazi has no certificate. It is only
   ever pointed at an address found on your own network or typed in by hand.
 - Exports download through Android's own download manager and land in
   Downloads.
@@ -100,7 +100,7 @@ comes out of GitHub Actions.
 
 ## What was tried and dropped
 
-An mDNS announcement from the Corpus server, so the phone would find it
+An mDNS announcement from the Raazi server, so the phone would find it
 instantly instead of sweeping. Every pure-JS responder needs node's `dgram`,
 which Next's bundler will not resolve inside the instrumentation hook — the
 attempt took the entire site down twice before it was abandoned. Multicast is

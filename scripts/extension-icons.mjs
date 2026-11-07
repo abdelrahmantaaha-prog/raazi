@@ -1,8 +1,8 @@
 /**
  * Draws the extension's icons: a rounded square in the accent brown with a
- * white "C" — the rail's own mark — at 16, 48 and 128 pixels. And the app's:
+ * white "R" — the rail's own mark — at 16, 48 and 128 pixels. And the app's:
  * the same mark at 192 and 512 for public/, which is what lets a browser
- * install Corpus as an app window, plus a full-bleed 512 for systems that cut
+ * install Raazi as an app window, plus a full-bleed 512 for systems that cut
  * their own shape. A tiny PNG encoder rather than a dependency, since a handful
  * of images do not justify one.
  *
@@ -73,16 +73,27 @@ function draw(size, { bleed = false } = {}) {
     return Math.hypot(dx, dy) <= r;
   };
   const glyph = (x, y) => {
-    // A "C": a ring with a gap on the right.
-    const cx = size / 2;
-    const cy = size / 2;
-    const d = Math.hypot(x - cx, y - cy);
+    // An "R" drawn as strokes, in the weight the old "C" ring had: a stem, a
+    // bowl on the top half, and a leg. Units are the letter's height.
     // Full bleed keeps the mark inside the circle a mask is guaranteed to show.
-    const R = size * (bleed ? 0.27 : 0.34);
-    const w = size * (bleed ? 0.1 : 0.13);
-    if (d < R - w / 2 || d > R + w / 2) return false;
-    const angle = Math.atan2(y - cy, x - cx);
-    return Math.abs(angle) > 0.7;
+    const h = size * (bleed ? 0.44 : 0.56);
+    const hw = (size * (bleed ? 0.1 : 0.13)) / 2 / h;
+    const u = (x - (size / 2 - 0.31 * h)) / h;
+    const v = (y - (size / 2 - 0.5 * h)) / h;
+    const seg = (ax, ay, bx, by) => {
+      const dx = bx - ax, dy = by - ay;
+      const t = Math.max(0, Math.min(1, ((u - ax) * dx + (v - ay) * dy) / (dx * dx + dy * dy)));
+      return Math.hypot(u - ax - t * dx, v - ay - t * dy);
+    };
+    const bowl = u >= 0.3 ? Math.abs(Math.hypot(u - 0.3, v - 0.25) - 0.25) : Infinity;
+    const d = Math.min(
+      seg(0, 0, 0, 1),          // stem
+      seg(0, 0, 0.3, 0),        // top of the bowl
+      seg(0, 0.5, 0.3, 0.5),    // bottom of the bowl
+      bowl,
+      seg(0.26, 0.5, 0.62, 1),  // leg
+    );
+    return d <= hw;
   };
   return (x, y) => {
     let cover = 0;

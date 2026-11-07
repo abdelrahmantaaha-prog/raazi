@@ -141,7 +141,7 @@ export function Portrait({
               <div>
                 <h2 className="font-serif text-lg font-semibold">Picture for {name}</h2>
                 <p className="mt-0.5 text-xs text-[var(--color-muted)]">
-                  From Wikidata and Wikimedia Commons. Corpus only accepts a match on its own when
+                  From Wikidata and Wikimedia Commons. Raazi only accepts a match on its own when
                   the name and the kind of thing both agree — everything else is left for you.
                 </p>
               </div>

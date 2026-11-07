@@ -1,7 +1,7 @@
 import type { ReactNode } from "react";
 
 /**
- * A link to something outside Corpus — an article, a paper, a press release.
+ * A link to something outside Raazi — an article, a paper, a press release.
  *
  * Every one of them opens in the same window. Reading a wire feed means
  * opening a great many originals in a morning, and with `target="_blank"` each

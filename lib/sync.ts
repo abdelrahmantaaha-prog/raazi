@@ -254,7 +254,7 @@ let copyFailed: { at: number; message: string } | null = null;
  * back between steps. It used to be one VACUUM INTO statement, and
  * better-sqlite3 runs statements synchronously: the whole server stood still
  * for as long as copying 200-odd MB took — no page, no answer to a window's
- * check-in — so every open window put up "The Corpus server is down" while a
+ * check-in — so every open window put up "The Raazi server is down" while a
  * follower took its copy. The worker writes through the same connection, so
  * its writes reach the copy as it is made rather than restarting it.
  *
@@ -410,7 +410,7 @@ export async function peerStatus(peer: Peer): Promise<LocalStatus> {
   const res = await peerFetch(peer, "/api/sync/status", {}, 8_000);
   if (!res.ok) throw new Error(`The peer answered ${res.status} to a status request.`);
   const data = (await res.json()) as LocalStatus;
-  if (data.app !== "corpus") throw new Error("Something answered, but it is not Corpus.");
+  if (data.app !== "corpus") throw new Error("Something answered, but it is not Raazi.");
   return data;
 }
 
@@ -452,7 +452,7 @@ export async function installSnapshot(
   file: string,
   opts: { backup?: boolean; quiesceMs?: number } = {}
 ): Promise<{ backup: string | null; fingerprint: Fingerprint }> {
-  // 1. The candidate must be a Corpus library that SQLite is happy with.
+  // 1. The candidate must be a Raazi library that SQLite is happy with.
   checkCopy(file);
 
   // 2. Nothing may be writing.
@@ -501,14 +501,14 @@ export async function installSnapshot(
   return { backup, fingerprint: fingerprint() };
 }
 
-/** Throws unless the file is a Corpus library that SQLite is happy with. */
+/** Throws unless the file is a Raazi library that SQLite is happy with. */
 function checkCopy(file: string): void {
   const probe = new Database(file, { readonly: true });
   try {
     const check = probe.pragma("quick_check", { simple: true }) as string;
     if (check !== "ok") throw new Error(`The copy failed SQLite's check: ${String(check).slice(0, 200)}`);
     const has = probe.prepare("SELECT 1 FROM sqlite_master WHERE type='table' AND name='sources'").get();
-    if (!has) throw new Error("The copy has no sources table; it is not a Corpus library.");
+    if (!has) throw new Error("The copy has no sources table; it is not a Raazi library.");
   } finally {
     probe.close();
   }
@@ -786,7 +786,7 @@ export async function pullEverything(peer: Peer, opts: { force?: boolean } = {})
     const res = await peerFetch(peer, "/api/sync/everything");
     if (res.status === 404) {
       throw new Error(
-        `${theirs.host} runs an older Corpus that cannot send every discipline and its settings. Update it to this version first.`
+        `${theirs.host} runs an older Raazi that cannot send every discipline and its settings. Update it to this version first.`
       );
     }
     if (!res.ok) throw new Error(`The peer answered ${res.status} when asked for its disciplines.`);
@@ -904,7 +904,7 @@ export async function pullEverything(peer: Peer, opts: { force?: boolean } = {})
  */
 export async function pushTo(peer: Peer, opts: { force?: boolean } = {}): Promise<PullEverythingResult> {
   if (!lanEnabled()) {
-    throw new Error("Pushing needs LAN mode on here, so the other laptop can fetch from this one. Switch it on and restart Corpus.");
+    throw new Error("Pushing needs LAN mode on here, so the other laptop can fetch from this one. Switch it on and restart Raazi.");
   }
   if (syncing) throw new Error(`A sync is already running (${syncing}).`);
   syncing = `pushing to ${peer.url}`;
@@ -956,7 +956,7 @@ function capped(limit: number, what: string): Transform {
   return new Transform({
     transform(chunk: Buffer, _encoding, done) {
       seen += chunk.length;
-      if (seen > limit) done(new Error(`${what} is larger than any Corpus should send.`));
+      if (seen > limit) done(new Error(`${what} is larger than any Raazi should send.`));
       else done(null, chunk);
     },
   });
@@ -1019,7 +1019,7 @@ export async function receiveFile(rel: string, body: ReadableStream<Uint8Array>)
   const abs = resolveFile(rel);
   if (!abs) {
     await body.cancel().catch(() => undefined);
-    throw new Error("Not a file a Corpus library keeps.");
+    throw new Error("Not a file a Raazi library keeps.");
   }
   fs.mkdirSync(path.dirname(abs), { recursive: true });
   const tmp = `${abs}.${process.pid}.part`;
@@ -1109,7 +1109,7 @@ export async function uploadTo(
 }
 
 /**
- * The first of several addresses that answers as a Corpus, for a push that
+ * The first of several addresses that answers as a Raazi, for a push that
  * arrives with a list. Tried in parallel; the first hello wins.
  */
 export async function reachable(addresses: string[], token: string): Promise<Peer> {
@@ -1122,6 +1122,6 @@ export async function reachable(addresses: string[], token: string): Promise<Pee
   try {
     return await Promise.any(attempts);
   } catch {
-    throw new Error(`None of the addresses offered (${addresses.join(", ")}) answered as a Corpus.`);
+    throw new Error(`None of the addresses offered (${addresses.join(", ")}) answered as a Raazi.`);
   }
 }
