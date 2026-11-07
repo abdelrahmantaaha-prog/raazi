@@ -31,6 +31,16 @@ const nextConfig: NextConfig = {
   // it needs, and its copies run through server.js, not `next start`.
   output: process.env.CORPUS_DIST === "1" ? "standalone" : undefined,
 
+  // pdfjs runs its worker in-process in Node (the "fake worker"), and it finds
+  // it with a computed `import()` of pdf.worker.mjs beside pdf.mjs. File tracing
+  // cannot follow an import it cannot read, so the standalone copy carried
+  // pdf.mjs alone and every PDF failed with "Setting up fake worker failed:
+  // Cannot find module …pdf.worker.mjs" (7 Nov 2026). A checkout never saw it:
+  // its node_modules has the whole package.
+  outputFileTracingIncludes: {
+    "**": ["./node_modules/pdfjs-dist/legacy/build/pdf.worker.mjs"],
+  },
+
   // Native module + libraries that must not be bundled by webpack/turbopack.
   serverExternalPackages: ["better-sqlite3", "jsdom", "pdfjs-dist"],
   experimental: {

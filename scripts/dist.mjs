@@ -112,6 +112,16 @@ function assemble(flavour) {
     filter: (src) => !PRIVATE.test(path.relative(root, src).replace(/\\/g, "/")),
   });
   fs.rmSync(path.join(server, "data"), { recursive: true, force: true });
+  // Files the server loads by a path it computes, so tracing cannot see them.
+  // Each is listed in next.config.ts's outputFileTracingIncludes; a copy that
+  // lacks one starts fine and fails the first time it is needed (every PDF,
+  // for the pdfjs worker), so the package is refused instead.
+  for (const rel of ["node_modules/pdfjs-dist/legacy/build/pdf.worker.mjs"]) {
+    if (!fs.existsSync(path.join(server, rel))) {
+      console.error(`[dist] REFUSING to ship ${flavour}: server/${rel} is missing`);
+      process.exit(1);
+    }
+  }
   // Static assets and public files are deliberately NOT traced into the
   // standalone output — Next expects them to be copied alongside it.
   fs.cpSync(path.join(root, ".next", "static"), path.join(server, ".next", "static"), {
