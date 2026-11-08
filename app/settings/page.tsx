@@ -9,6 +9,7 @@ import { LessonsCard } from "./Lessons";
 import { ResearchToolsCard } from "./ResearchTools";
 import { Disciplines } from "./Disciplines";
 import { LanCard, SyncCard } from "./SyncCard";
+import { UpdatesCard } from "./UpdatesCard";
 import { ClaudePlanCard } from "./ClaudePlan";
 import { PLAN_MODELS, STAGE_PLAN_ADVICE, planModelName } from "@/lib/claude-models";
 
@@ -207,6 +208,7 @@ export default function SettingsPage() {
         <>
           <LanCard />
           <SyncCard />
+          <UpdatesCard />
         </>
       )}
     </div>

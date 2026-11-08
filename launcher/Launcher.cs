@@ -34,17 +34,25 @@ using System.Collections.Generic;
 using System.Diagnostics;
 using System.Drawing;
 using System.IO;
+using System.IO.Compression;
 using System.Net;
 using System.Net.Sockets;
 using System.Runtime.InteropServices;
+using System.Security.Cryptography;
 using System.Text;
+using System.Text.RegularExpressions;
 using System.Threading;
 using System.Windows.Forms;
 using Microsoft.Win32;
 
 static class Raazi
 {
+#if UPDATE_TESTS
+    // scripts/check-auto-update.mjs runs a scratch install beside the real one.
+    static readonly int Port = int.Parse(Environment.GetEnvironmentVariable("RAAZI_TEST_PORT") ?? "5400");
+#else
     const int Port = 5400;
+#endif
     const string CopyTitle = "Raazi · this computer's copy";
     const string SignInArg = "--at-sign-in";
     const string RunKey = @"Software\Microsoft\Windows\CurrentVersion\Run";
@@ -59,6 +67,23 @@ static class Raazi
     [STAThread]
     static void Main(string[] args)
     {
+        // A newer starter, before it replaces this one (ReplaceStarter): it
+        // writes the release it belongs to and does nothing else.
+        if (args.Length >= 2 && args[0] == "--selftest")
+        {
+            try { File.WriteAllText(args[1], Build.Release); } catch { }
+            return;
+        }
+
+        // TLS 1.2 for every connection this starter makes. .NET 4 on an older
+        // Windows otherwise offers only TLS 1.0, and GitHub refuses that.
+        try { ServicePointManager.SecurityProtocol |= (SecurityProtocolType)3072; } catch { }
+
+        // The starter an update replaced, left beside the new one (ReplaceStarter).
+        try { string old = Application.ExecutablePath + ".old"; if (File.Exists(old)) File.Delete(old); } catch { }
+
+        if (RunUpdateCommand(args)) return;
+
         // A restart after changing where to connect waits for the old launcher
         // to let go; anything else that finds one running hands over to it.
         bool restarted = Array.IndexOf(args, "--restarted") >= 0;
@@ -95,6 +120,7 @@ static class Raazi
                 Application.EnableVisualStyles();
                 ui = new Control();
                 var handle = ui.Handle; // created now, on this thread, so others can marshal onto it
+                RecoverInterruptedUpdate();
                 if (settings.Remote) RunRemote();
                 else RunLocal();
             }
@@ -134,7 +160,23 @@ static class Raazi
 
         tray = BuildTray();
 
-        if (!WaitForServer(60))
+        bool up = WaitForServer(60);
+
+        // An update finished swapping but the launcher went before it saw the
+        // new server answer (a restart, a crash). Answering now confirms it;
+        // not answering puts the previous version and its database back.
+        if (UpdateSwap.Pending(Root) && UpdateSwap.Complete(Root))
+        {
+            if (up) UpdateSwap.Finish(Root);
+            else
+            {
+                UndoUpdate(InstalledVersion());
+                up = RestartAfterUpdate(InstalledVersion());
+                if (up) Notify("The new version didn't start, so the previous one was put back. Nothing was lost.");
+            }
+        }
+
+        if (!up)
         {
             tray.Visible = false;
             Error("The server didn't come up in time.\n\nRun  npm run dev  in\n" + Root +
@@ -150,6 +192,8 @@ static class Raazi
         // Resuming pending work on a headless start is this call, once, from
         // the one client that is entitled to make it.
         KickWorker();
+
+        if (Updatable()) StartUpdateChecks();
 
         // At sign-in the point is the server — feeds polled and parked runs
         // resumed before you sit down — not a window you did not ask for.
@@ -820,6 +864,9 @@ static class Raazi
     static void OnServerExit()
     {
         if (quitting) return;
+        // An update stops and starts the server itself, and a new release that
+        // will not start is its to undo, not a crash to report.
+        if (installing || (UpdateSwap.Pending(Root) && !UpdateSwap.RecoveryFailed(Root))) return;
         int code = -1;
         try { code = server.ExitCode; } catch { }
 
@@ -865,6 +912,7 @@ static class Raazi
     // -- logging -----------------------------------------------------------
 
     static StreamWriter log;
+    static bool continuingLog;
     static readonly object logLock = new object();
 
     static string LogPath { get { return Path.Combine(Root, "data", "server.log"); } }
@@ -874,7 +922,9 @@ static class Raazi
         try
         {
             Directory.CreateDirectory(Path.Combine(Root, "data"));
-            log = new StreamWriter(LogPath, false) { AutoFlush = true };
+            // Restarting for an update keeps what led up to it.
+            log = new StreamWriter(LogPath, continuingLog) { AutoFlush = true };
+            continuingLog = false;
             log.WriteLine("--- Raazi started " + DateTime.Now + (follower ? " (a copy following " + settings.RemoteUrl + ")" : "") + " ---");
         }
         catch { log = null; }
@@ -1129,6 +1179,737 @@ static class Raazi
             if (server != null && server.HasExited) return false;
             Thread.Sleep(500);
         }
+        return false;
+    }
+
+    // -- updates ---------------------------------------------------------------
+    //
+    // The same system as Mutarjim's. A packaged copy looks for a newer version
+    // by itself, so nobody has to carry a folder to it. The feed is a small
+    // JSON file on the public raazi-updates repository, naming the newest
+    // package per ring:
+    //
+    //   { "stable": { "version": "0.11.0", "zip": "https://…/raazi-update-0.11.0.zip" },
+    //     "early":  { "version": "0.11.1", "zip": "https://…/raazi-update-0.11.1.zip" } }
+    //
+    // with each zip's signature at <zip>.sig. The feed is NOT trusted: a
+    // package is offered only if it verifies against a key compiled into this
+    // exe (UpdateKeys.cs), is newer than this install, and calls itself the
+    // version the feed promised. The worst a hostile feed can do is withhold
+    // updates.
+    //
+    // Nothing installs by itself. A verified package is offered at most once a
+    // day, and the tray carries "Install the new version" until it is
+    // installed. Nothing about the library is sent: the check is two plain
+    // downloads.
+    //
+    // Installing stops the server, copies the open library's database into
+    // update-backup\, and swaps in ONLY the entries the package carries — never
+    // data\ or this exe. The new server must then answer /api/hello as the
+    // promised release, or the old files AND the database copy go back, and
+    // that version is never offered here again.
+    //
+    // Only a packaged install updates itself: a checkout is updated by git, and
+    // swapping its folders would wreck it. A copy following another computer
+    // does not either — it follows that computer.
+    //
+    // data\update-ring.txt holding "early" makes this a test install;
+    // data\update-feed.txt overrides the feed; data\updates-off.txt (Settings)
+    // stops the checks.
+
+    const string DefaultFeed =
+        "https://github.com/abdelrahmantaaha-prog/raazi-updates/releases/download/feed/manifest.json";
+
+    static string[] Moduli { get { return new[] { UpdateKeys.Modulus1, UpdateKeys.Modulus2 }; } }
+
+    /** Keys a signed manifest retired here, one number per line. */
+    static string RetiredPath { get { return Path.Combine(Root, "data", "update-retired.txt"); } }
+
+    static List<int> Retired()
+    {
+        var list = new List<int>();
+        try
+        {
+            if (File.Exists(RetiredPath))
+                foreach (var line in File.ReadAllLines(RetiredPath))
+                {
+                    int n;
+                    if (int.TryParse(line.Trim(), out n)) list.Add(n);
+                }
+        }
+        catch { }
+        return list;
+    }
+
+    /** Settings → Updates: the owner switched the checks off (app/api/settings/updates). */
+    static bool UpdatesOff()
+    {
+        return File.Exists(Path.Combine(Root, "data", "updates-off.txt"));
+    }
+
+    /** Versions the last signed manifest withdrew; refused even if a feed offers them. */
+    static List<string> withdrawn = new List<string>();
+
+    /** The largest package a feed may make this computer download. */
+    const long MaxPackageBytes = 1024L * 1024 * 1024;
+
+    static string DownloadDir { get { return Path.Combine(Root, "update-download"); } }
+    static string BackupDir { get { return UpdateSwap.BackupDir(Root); } }
+    static string FeedOverridePath { get { return Path.Combine(Root, "data", "update-feed.txt"); } }
+
+    static volatile bool installing;
+    static readonly object installLock = new object();
+    static int checking;
+    static DateTime lastAsked = DateTime.MinValue;
+    static ToolStripMenuItem installItem;
+    static string readyPackage, readyVersion;
+    static System.Threading.Timer updateTimer;
+
+    static bool Updatable()
+    {
+        return File.Exists(Path.Combine(Root, "server", "server.js")) &&
+               !Directory.Exists(Path.Combine(Root, ".git"));
+    }
+
+    /** The release the packaged server is, from the package.json Next copies beside it. */
+    static string InstalledVersion()
+    {
+        try { return JsonString(File.ReadAllText(Path.Combine(Root, "server", "package.json")).Replace("\": \"", "\":\""), "version"); }
+        catch { return null; }
+    }
+
+    /** The module ABI and version of a Node ("137 v24.19.0"), or null when it will not say. */
+    static string NodeAbi(string node)
+    {
+        if (node == null) return null;
+        try
+        {
+            using (var p = Process.Start(new ProcessStartInfo
+            {
+                FileName = node,
+                Arguments = "-p \"process.versions.modules + ' ' + process.version\"",
+                UseShellExecute = false,
+                RedirectStandardOutput = true,
+                CreateNoWindow = true,
+            }))
+            {
+                string said = p.StandardOutput.ReadToEnd().Trim();
+                p.WaitForExit(15000);
+                return said.Length > 0 ? said : null;
+            }
+        }
+        catch { return null; }
+    }
+
+    static string FeedUrl()
+    {
+        try
+        {
+            if (File.Exists(FeedOverridePath))
+            {
+                string u = File.ReadAllText(FeedOverridePath).Trim();
+                if (UpdateFeed.AcceptableUrl(u)) return u;
+            }
+        }
+        catch { }
+        return DefaultFeed;
+    }
+
+    static bool IsEarlyInstall()
+    {
+        try
+        {
+            string p = Path.Combine(Root, "data", "update-ring.txt");
+            return File.Exists(p) && File.ReadAllText(p).Trim().ToLowerInvariant() == "early";
+        }
+        catch { return false; }
+    }
+
+    static bool RingEntry(string feed, string ring, out string version, out string zipUrl)
+    {
+        version = zipUrl = null;
+        var block = Regex.Match(feed, "\"" + ring + "\"\\s*:\\s*\\{([^}]*)\\}");
+        if (!block.Success) return false;
+        string fields = Regex.Replace(block.Groups[1].Value, "\"\\s*:\\s*\"", "\":\"");
+        version = JsonString(fields, "version");
+        zipUrl = JsonString(fields, "zip");
+        return !string.IsNullOrEmpty(version) && !string.IsNullOrEmpty(zipUrl);
+    }
+
+    static string LeadingDigits(string s)
+    {
+        int i = 0;
+        while (i < s.Length && char.IsDigit(s[i])) i++;
+        return i == 0 ? "0" : s.Substring(0, i);
+    }
+
+    /** Dotted numeric compare: -1, 0 or 1. Anything unreadable counts as 0. */
+    static int CompareVersions(string a, string b)
+    {
+        if (a == null || b == null) return 0;
+        string[] x = a.Split('.'), y = b.Split('.');
+        for (int i = 0; i < Math.Max(x.Length, y.Length); i++)
+        {
+            int xi = 0, yi = 0;
+            if (i < x.Length) int.TryParse(LeadingDigits(x[i]), out xi);
+            if (i < y.Length) int.TryParse(LeadingDigits(y[i]), out yi);
+            if (xi != yi) return xi < yi ? -1 : 1;
+        }
+        return 0;
+    }
+
+    static bool SignatureValid(string zipPath)
+    {
+        try
+        {
+            return UpdateFeed.SignedBy(File.ReadAllBytes(zipPath), File.ReadAllText(zipPath + ".sig"), Moduli, Retired()) > 0;
+        }
+        catch { return false; }
+    }
+
+    /** The version a package says it is, from the update.json at its top. */
+    static string PackageVersion(string zipPath)
+    {
+        try
+        {
+            string text = UpdateFeed.ZipText(zipPath, "update.json");
+            if (text == null) return null;
+            string v = JsonString(Regex.Replace(text, "\"\\s*:\\s*\"", "\":\""), "version");
+            return string.IsNullOrEmpty(v) ? null : v;
+        }
+        catch { return null; }
+    }
+
+    /** Why this package must not be installed here, or null. */
+    static string PackageRefusal(string zipPath, string promised)
+    {
+        if (!SignatureValid(zipPath)) return "bad signature";
+        string inside = PackageVersion(zipPath);
+        if (inside == null) return "package has no version";
+        if (promised != null && CompareVersions(inside, promised) != 0) return "package says " + inside;
+        if (CompareVersions(inside, InstalledVersion()) <= 0) return "not newer";
+        if (withdrawn.Contains(inside)) return "version " + inside + " was withdrawn";
+        // The Node it needs, checked before anything is moved: a package built
+        // on another Node would swap in, fail to start and roll back.
+        string abi = NodeAbi(FindNode());
+        string nodeProblem = UpdateFeed.NodeRefusal(zipPath, abi == null ? null : abi.Split(' ')[0]);
+        if (nodeProblem != null) return nodeProblem;
+        return null;
+    }
+
+    static string FailedMarker(string version)
+    {
+        return Path.Combine(DownloadDir, "failed-" + Regex.Replace(version ?? "", "[^0-9A-Za-z.-]", "") + ".txt");
+    }
+
+    static void MarkFailed(string version)
+    {
+        try
+        {
+            Directory.CreateDirectory(DownloadDir);
+            File.WriteAllText(FailedMarker(version), DateTime.Now.ToString("s"));
+        }
+        catch { }
+    }
+
+    /**
+     * One look at the feed. Fetches and verifies a newer package if there is
+     * one; returns a line saying what happened (logged, or written by
+     * --check-update). Runs off the UI thread — no dialogs in here.
+     */
+    static string CheckForUpdate(out string zipPath, out string version)
+    {
+        zipPath = version = null;
+        if (!Updatable()) return "skip: not a packaged install";
+        if (UpdatesOff()) return "skip: switched off in Settings";
+        string installed = InstalledVersion();
+        if (installed == null) return "skip: server\\package.json has no version";
+
+        string feedUrl = FeedUrl(), feed;
+        byte[] feedBytes;
+        try { feedBytes = UpdateFeed.ReadBytes(feedUrl, 256 * 1024, 30000); }
+        catch (Exception ex) { return "feed unreachable: " + ex.Message; }
+        feed = new UTF8Encoding(false).GetString(feedBytes);
+
+        // What only a signed manifest may ask: moving the feed, withdrawing
+        // versions, retiring a key. Unsigned, a feed can still name a package
+        // — whose own signature decides — and nothing more.
+        int signer = 0;
+        try { signer = UpdateFeed.SignedBy(feedBytes, UpdateFeed.ReadText(feedUrl + ".sig", 8 * 1024, 30000), Moduli, Retired()); }
+        catch { }
+        withdrawn = signer > 0 ? UpdateFeed.StringArray(feed, "revoked") : new List<string>();
+        if (signer > 0)
+        {
+            var retire = UpdateFeed.KeysToRetire(feed, signer, Moduli.Length, Retired());
+            if (retire.Count > 0)
+            {
+                try
+                {
+                    Directory.CreateDirectory(Path.GetDirectoryName(RetiredPath));
+                    File.AppendAllLines(RetiredPath, retire.ConvertAll(k => k.ToString()));
+                    Log("[updates] key " + string.Join(",", retire.ConvertAll(k => k.ToString()).ToArray()) + " retired by a manifest signed with key " + signer);
+                }
+                catch { }
+            }
+            string moved = JsonString(Regex.Replace(feed, "\"\\s*:\\s*\"", "\":\""), "feed");
+            if (!string.IsNullOrEmpty(moved) && moved != feedUrl && UpdateFeed.AcceptableUrl(moved))
+            {
+                try { File.WriteAllText(FeedOverridePath, moved); } catch { }
+            }
+        }
+
+        string v, url, ev, eurl;
+        bool found = RingEntry(feed, "stable", out v, out url);
+        if (IsEarlyInstall() && RingEntry(feed, "early", out ev, out eurl) &&
+            (!found || CompareVersions(ev, v) > 0))
+        {
+            v = ev; url = eurl; found = true;
+        }
+        if (!found) return "feed names no package for this install";
+        if (CompareVersions(v, installed) <= 0) return "up to date (" + installed + ")";
+        if (withdrawn.Contains(v)) return "skipping " + v + ": withdrawn by the signed feed";
+        if (File.Exists(FailedMarker(v))) return "skipping " + v + ": it failed to start here before";
+        if (!UpdateFeed.AcceptableUrl(url)) return "refused package address: " + url;
+
+        Directory.CreateDirectory(DownloadDir);
+        string zip = Path.Combine(DownloadDir, "raazi-update-" + Regex.Replace(v, "[^0-9A-Za-z.-]", "") + ".zip");
+        string sig = zip + ".sig";
+        if (!(File.Exists(zip) && File.Exists(sig)))
+        {
+            try
+            {
+                UpdateFeed.Download(url + ".sig", sig + ".part", 8 * 1024, 60000, 120000);
+                UpdateFeed.Download(url, zip + ".part", MaxPackageBytes, 60000, 45 * 60 * 1000);
+                File.Move(sig + ".part", sig);
+                File.Move(zip + ".part", zip);
+            }
+            catch (Exception ex)
+            {
+                foreach (var f in new[] { zip, sig, zip + ".part", sig + ".part" })
+                    try { if (File.Exists(f)) File.Delete(f); } catch { }
+                return "download of " + v + " failed: " + ex.Message;
+            }
+        }
+
+        string refusal = PackageRefusal(zip, v);
+        if (refusal != null)
+        {
+            try { File.Delete(zip); File.Delete(sig); } catch { }
+            return "refused " + v + ": " + refusal;
+        }
+
+        // Packages from earlier checks are superseded; the failure marks stay.
+        foreach (var f in Directory.GetFiles(DownloadDir))
+        {
+            if (f == zip || f == sig || Path.GetFileName(f).StartsWith("failed-")) continue;
+            try { File.Delete(f); } catch { }
+        }
+
+        zipPath = zip;
+        version = v;
+        return "ready: " + v;
+    }
+
+    /** First look two minutes after start, then every six hours. */
+    static void StartUpdateChecks()
+    {
+        updateTimer = new System.Threading.Timer(_ =>
+        {
+            if (installing || quitting || Interlocked.Exchange(ref checking, 1) == 1) return;
+            string zip = null, version = null, outcome;
+            try { outcome = CheckForUpdate(out zip, out version); }
+            catch (Exception ex) { outcome = "check failed: " + ex.Message; }
+            Interlocked.Exchange(ref checking, 0);
+            Log("[updates] " + outcome);
+            if (zip != null) Ui(() => UpdateReady(zip, version));
+        }, null, 2 * 60 * 1000, 6 * 60 * 60 * 1000);
+    }
+
+    static void UpdateReady(string zip, string version)
+    {
+        if (installing) return;
+        readyPackage = zip;
+        readyVersion = version;
+        if (installItem != null)
+        {
+            installItem.Text = "Install the new version (" + version + ")";
+            installItem.Visible = true;
+        }
+        if (lastAsked.Date == DateTime.Today) return;
+        lastAsked = DateTime.Now;
+        AskToInstall();
+    }
+
+    /** "Later" comes first, so Enter or a stray click leaves Raazi working. */
+    static void AskToInstall()
+    {
+        string zip = readyPackage, version = readyVersion;
+        if (zip == null || installing) return;
+        Prompt("Raazi — update",
+            "A new version of Raazi is ready (" + version + ").\n\n" + InstallWarning,
+            new[] { "Later", "Install now" },
+            choice => { if (choice == 1) ThreadPool.QueueUserWorkItem(_ => Install(zip, version)); });
+    }
+
+    const string InstallWarning =
+        "Installing stops Raazi for a minute or two and brings it back by itself. Ingestion pauses and resumes where it stopped.\n\n" +
+        "Your library is not touched, and a copy of its database and of the current version is kept first.";
+
+    static string FromFileDir { get { return Path.Combine(DownloadDir, "from-file"); } }
+
+    /**
+     * A package carried in by hand installs from the tray instead of a command
+     * line. Same checks as the feed's — its .sig beside it, a trusted
+     * signature, newer than this install — and the same way back. Copied in
+     * before it is checked, so the file that was checked is the file that is
+     * swapped in.
+     */
+    static void UpdateFromFile()
+    {
+        if (installing) return;
+        string picked;
+        using (var dialog = new OpenFileDialog
+        {
+            Title = "Choose a Raazi update",
+            Filter = "Raazi update (raazi-update-*.zip)|raazi-update-*.zip|ZIP|*.zip",
+            CheckFileExists = true,
+        })
+        {
+            if (dialog.ShowDialog() != DialogResult.OK) return;
+            picked = dialog.FileName;
+        }
+        if (!File.Exists(picked + ".sig"))
+        {
+            Error("The signature isn't beside the update:\n" + Path.GetFileName(picked) + ".sig\n\n" +
+                  "Put the two files in one folder and choose the update again.");
+            return;
+        }
+        ThreadPool.QueueUserWorkItem(_ =>
+        {
+            string zip = Path.Combine(FromFileDir, Path.GetFileName(picked)), refusal;
+            try
+            {
+                if (Directory.Exists(FromFileDir)) Directory.Delete(FromFileDir, true);
+                Directory.CreateDirectory(FromFileDir);
+                File.Copy(picked, zip);
+                File.Copy(picked + ".sig", zip + ".sig");
+                refusal = PackageRefusal(zip, null);
+            }
+            catch (Exception ex) { refusal = ex.Message; }
+            string version = PackageVersion(zip);
+            if (refusal != null)
+            {
+                ForgetFromFile();
+                string why = refusal == "not newer"
+                    ? "This version (" + version + ") isn't newer than the one installed here."
+                    : refusal == "bad signature"
+                        ? "The signature doesn't match: the file is damaged, or isn't an update from Raazi."
+                        : refusal;
+                Ui(() => Error("The update was not installed.\n\n" + why));
+                return;
+            }
+            Ui(() => Prompt("Raazi — update from a file",
+                "Install version " + version + " from this file?\n\n" + InstallWarning,
+                new[] { "Later", "Install now" },
+                choice =>
+                {
+                    if (choice != 1) { ForgetFromFile(); return; }
+                    ThreadPool.QueueUserWorkItem(__ =>
+                    {
+                        Install(zip, version);
+                        ForgetFromFile();
+                    });
+                }));
+        });
+    }
+
+    static void ForgetFromFile()
+    {
+        try { if (Directory.Exists(FromFileDir)) Directory.Delete(FromFileDir, true); } catch { }
+    }
+
+    static void ClearReadyUpdate()
+    {
+        readyPackage = readyVersion = null;
+        Ui(() => { if (installItem != null) installItem.Visible = false; });
+        try
+        {
+            if (Directory.Exists(DownloadDir))
+                foreach (var f in Directory.GetFiles(DownloadDir))
+                    if (!Path.GetFileName(f).StartsWith("failed-")) File.Delete(f);
+        }
+        catch { }
+    }
+
+    /** Off the UI thread: it stops, swaps, and waits for the new server. */
+    static void Install(string zip, string version)
+    {
+        lock (installLock)
+        {
+            if (installing) return;
+            installing = true;
+        }
+        try
+        {
+            string refusal = PackageRefusal(zip, version);
+            if (refusal != null)
+            {
+                Ui(() => Error("The update was not installed: " + refusal + "."));
+                return;
+            }
+            string from = InstalledVersion();
+            Ui(() => Notify("Installing version " + version + "… Raazi will be back in a minute or two."));
+            Log("[updates] installing " + version + " over " + from);
+
+            if (!StopForUpdate())
+            {
+                // Something still holds the port: whatever it is keeps running.
+                quitting = false;
+                Ui(() => Error("Raazi didn't stop for the update, so nothing was installed. Try again later."));
+                return;
+            }
+
+            try
+            {
+                UpdateSwap.PrepareBackup(Root, from);
+            }
+            catch (Exception ex)
+            {
+                // Nothing was moved: the release that was running runs again.
+                RestartAfterUpdate(from);
+                Ui(() => Error("The update was not installed:\n\n" + ex.Message));
+                return;
+            }
+
+            try
+            {
+                UpdateSwap.SwapIn(Root, zip);
+            }
+            catch (Exception ex)
+            {
+                // The new files never ran, so the library is left exactly as it is.
+                bool clean = UpdateSwap.Rollback(Root, UpdateSwap.DbRule.Keep);
+                RestartAfterUpdate(from);
+                Ui(() => Error(clean
+                    ? "The update failed and nothing changed:\n\n" + ex.Message
+                    : UndoFailedMessage + "\n\n" + ex.Message));
+                return;
+            }
+
+            if (RestartAfterUpdate(version))
+            {
+                UpdateSwap.Finish(Root);
+                ReplaceStarter(version);
+                ClearReadyUpdate();
+                KickWorker();
+                Ui(() => Notify("Updated to version " + version + "."));
+                return;
+            }
+
+            bool undone = UndoUpdate(version);
+            RestartAfterUpdate(from);
+            KickWorker();
+            Ui(() => Error(undone
+                ? "The new version (" + version + ") didn't start, so the previous one was put back. Your work is safe.\n\nThe log has the details:\n" + LogPath
+                : UndoFailedMessage));
+        }
+        finally
+        {
+            installing = false;
+        }
+    }
+
+    /**
+     * A package may carry the starter it was built with (starter\Raazi.exe,
+     * inside the signed zip): it replaces this one for the next start, so the
+     * starter and its keys can change after all. Windows lets a running exe be
+     * renamed but not overwritten, so this one becomes Raazi.exe.old (deleted
+     * at the next start). The new one must first answer --selftest with the
+     * release it belongs to, or nothing changes; if the copy fails, this one
+     * is put back.
+     */
+    static void ReplaceStarter(string version)
+    {
+        string fresh = Path.Combine(Root, "starter", "Raazi.exe");
+        string current = Application.ExecutablePath;
+        if (!File.Exists(fresh)) return;
+        try
+        {
+            if (new FileInfo(fresh).Length == new FileInfo(current).Length &&
+                Convert.ToBase64String(SHA256.Create().ComputeHash(File.ReadAllBytes(fresh))) ==
+                Convert.ToBase64String(SHA256.Create().ComputeHash(File.ReadAllBytes(current)))) return;
+            string answer = Path.Combine(Path.GetTempPath(), "raazi-selftest-" + Guid.NewGuid().ToString("N") + ".txt");
+            using (var p = Process.Start(new ProcessStartInfo
+            {
+                FileName = fresh,
+                Arguments = "--selftest \"" + answer + "\"",
+                UseShellExecute = false,
+                CreateNoWindow = true,
+            }))
+            {
+                if (!p.WaitForExit(15000)) { try { p.Kill(); } catch { } }
+            }
+            string said = File.Exists(answer) ? File.ReadAllText(answer).Trim() : "";
+            try { File.Delete(answer); } catch { }
+            if (said != version)
+            {
+                Log("[updates] kept this starter: the new one answered \"" + said + "\", not " + version);
+                return;
+            }
+            string old = current + ".old";
+            if (File.Exists(old)) File.Delete(old);
+            File.Move(current, old);
+            try { File.Copy(fresh, current); }
+            catch { File.Move(old, current); throw; }
+            Log("[updates] the starter is now " + version + "'s; it runs from the next start");
+        }
+        catch (Exception ex) { Log("[updates] kept this starter: " + ex.Message); }
+    }
+
+    /** Stops this install's server, keeping the tray. Ingestion resumes where it stopped. */
+    static bool StopForUpdate()
+    {
+        quitting = true;
+        try
+        {
+            var s = server;
+            if (s != null && !s.HasExited) KillTree(s.Id);
+            else if (Healthy()) KillTree(PortOwner());
+        }
+        catch { }
+        for (int i = 0; i < 60 && PortBusy(); i++) Thread.Sleep(250);
+        CloseLog();
+        return !PortBusy();
+    }
+
+    /** Starts the server again and waits for it to answer as the expected release. */
+    static bool RestartAfterUpdate(string expect)
+    {
+        quitting = false;
+        continuingLog = true;
+        string node = FindNode();
+        if (node == null || !StartStandalone(node, Path.Combine(Root, "server", "server.js"))) return false;
+        if (!WaitForServer(120)) return false;
+        return JsonString(Hello(LocalBase(), 15000), "version") == expect;
+    }
+
+    const string UndoFailedMessage =
+        "The update didn't finish, and not every file of the previous version could be put back. Nothing of your work was deleted: " +
+        "your library is in the data folder as it was, and the previous version is in the update-backup folder. " +
+        "Don't try another update until this is sorted out.";
+
+    /** The new release did not come up: everything back, and never offer it here again. */
+    static bool UndoUpdate(string version)
+    {
+        StopForUpdate();
+        // The new release may have opened the library and changed it in its
+        // first minutes; work done after that is never thrown away (UpdateSwap.DbRule).
+        bool clean = UpdateSwap.Rollback(Root, UpdateSwap.DbRule.IfUnused);
+        MarkFailed(version);
+        ClearReadyUpdate();
+        return clean;
+    }
+
+    /** Before anything starts: a swap cut off half-way is undone once (UpdateSwap.RecoverInterrupted). */
+    static void RecoverInterruptedUpdate()
+    {
+        try
+        {
+            var outcome = UpdateSwap.RecoverInterrupted(Root);
+            if (outcome == UpdateSwap.Recovery.Nothing) return;
+            MessageBox.Show(
+                outcome == UpdateSwap.Recovery.Undone
+                    ? "The last update didn't finish, so the version that was running has been put back. Your work wasn't touched."
+                    : UndoFailedMessage,
+                "Raazi", MessageBoxButtons.OK,
+                outcome == UpdateSwap.Recovery.Undone ? MessageBoxIcon.Information : MessageBoxIcon.Warning);
+        }
+        catch { /* recovery must never be what stops Raazi opening */ }
+    }
+
+    /**
+     * The update commands, with Raazi closed. Each answers in a file beside the
+     * exe, because a winexe has no console:
+     *
+     *   Raazi.exe --check-update         one look at the feed; installs nothing (update-check.txt)
+     *   Raazi.exe --apply-update <zip>   verify and swap; the next start confirms or undoes it (update-result.txt)
+     *   Raazi.exe --undo-update          put back the version and database from before the swap (update-result.txt)
+     */
+    static bool RunUpdateCommand(string[] args)
+    {
+        if (Array.IndexOf(args, "--check-update") >= 0)
+        {
+            string zip, version, outcome;
+            try { outcome = CheckForUpdate(out zip, out version); }
+            catch (Exception ex) { outcome = "check failed: " + ex.Message; }
+            try { File.WriteAllText(Path.Combine(Root, "update-check.txt"), outcome); } catch { }
+            return true;
+        }
+
+        if (args.Length >= 2 && args[0] == "--apply-update")
+        {
+            string result;
+            try
+            {
+                string refusal = !Updatable() ? "not a packaged install"
+                    : File.Exists(args[1] + ".sig") ? PackageRefusal(args[1], null) : "signature missing";
+                if (refusal != null) result = "FAIL " + refusal;
+                else if (PortBusy() && Healthy()) result = "FAIL Raazi is running - quit it from the tray first";
+                else
+                {
+                    UpdateSwap.PrepareBackup(Root, InstalledVersion());
+                    try { UpdateSwap.SwapIn(Root, args[1]); }
+                    catch { UpdateSwap.Rollback(Root, UpdateSwap.DbRule.Keep); throw; }
+                    result = "OK version=" + InstalledVersion();
+                }
+            }
+            catch (Exception ex) { result = "FAIL " + ex.Message; }
+            try { File.WriteAllText(Path.Combine(Root, "update-result.txt"), result); } catch { }
+            return true;
+        }
+
+        if (args.Length >= 1 && args[0] == "--undo-update")
+        {
+            string result;
+            if (!Directory.Exists(BackupDir)) result = "FAIL nothing to undo";
+            else if (PortBusy() && Healthy()) result = "FAIL Raazi is running - quit it from the tray first";
+            else
+            {
+                // Asked for in so many words: the pre-update library goes back
+                // even if it was worked in since (the live one is kept aside as
+                // rollback-kept-*.db).
+                bool clean = UpdateSwap.Rollback(Root, UpdateSwap.DbRule.Always);
+                result = clean ? "OK version=" + InstalledVersion() : "FAIL some files could not be put back";
+            }
+            try { File.WriteAllText(Path.Combine(Root, "update-result.txt"), result); } catch { }
+            return true;
+        }
+
+#if UPDATE_TESTS
+        // The whole of Install against a scratch install on its own port: server
+        // up, stopped, swapped, restarted, judged. scripts/check-auto-update.mjs.
+        if (args.Length >= 2 && args[0] == "--install-update")
+        {
+            settings = Settings.Load(Path.Combine(Root, "data", "launcher.ini"));
+            string result;
+            try
+            {
+                string node = FindNode();
+                string js = Path.Combine(Root, "server", "server.js");
+                if (node == null || !StartStandalone(node, js) || !WaitForServer(60)) result = "FAIL the old release did not start";
+                else
+                {
+                    Install(args[1], PackageVersion(args[1]));
+                    result = "installed=" + InstalledVersion() + " answering=" + JsonString(Hello(LocalBase(), 15000), "version") +
+                             " pending=" + UpdateSwap.Pending(Root);
+                    StopForUpdate();
+                }
+            }
+            catch (Exception ex) { result = "FAIL " + ex.Message; }
+            try { File.WriteAllText(Path.Combine(Root, "update-result.txt"), result); } catch { }
+            return true;
+        }
+#endif
         return false;
     }
 
@@ -1507,6 +2288,15 @@ static class Raazi
         open.Font = new Font(open.Font, FontStyle.Bold);
         menu.Items.Add("Open in a browser tab", null, (s, e) => Open(true));
         menu.Items.Add(new ToolStripSeparator());
+
+        if (!settings.Remote && Updatable())
+        {
+            installItem = new ToolStripMenuItem("Install the new version") { Visible = false };
+            installItem.Font = new Font(installItem.Font, FontStyle.Bold);
+            installItem.Click += (s, e) => AskToInstall();
+            menu.Items.Add(installItem);
+            menu.Items.Add("Update from a file…", null, (s, e) => UpdateFromFile());
+        }
 
         if (settings.Remote)
         {
