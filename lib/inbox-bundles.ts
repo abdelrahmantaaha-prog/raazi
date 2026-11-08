@@ -4,7 +4,7 @@ import { generateJson } from "./ai/client";
 import { getConfig } from "./config";
 import { isLiteModel } from "./keys";
 import { modelsFor } from "./providers";
-import { applyGroups, heldAccounts, headlineLines, pairsFromModel, type HeldAccount } from "./inbox-groups";
+import { applyGroups, heldAccounts, headlineLines, pairsFromModel } from "./inbox-groups";
 import { IMPORTANCE, type Importance } from "./importance";
 
 /**
@@ -305,20 +305,6 @@ export async function bundleInbox(opts: { timeoutMs?: number; chunk?: number } =
 }
 
 
-/** The held accounts of one bundle, for the event pass. */
-function accountsInBundle(bundleId: number): HeldAccount[] {
-  const ids = new Set(
-    (db().prepare("SELECT item_id FROM inbox_bundle_items WHERE bundle_id = ?").all(bundleId) as { item_id: number }[]).map((r) => r.item_id)
-  );
-  const sourceOf = new Map(
-    (db().prepare("SELECT id, source_id FROM feed_items WHERE id IN (" + [...ids].map(() => "?").join(",") + ")").all(...ids) as {
-      id: number;
-      source_id: number | null;
-    }[]).map((r) => [r.source_id, r.id])
-  );
-  return heldAccounts().filter((a) => sourceOf.has(a.sourceId));
-}
-
 export interface BundleEventResult {
   bundles: number;
   asked: number;
@@ -343,7 +329,7 @@ export async function groupEventsInBundles(opts: { timeoutMs?: number } = {}): P
   const result: BundleEventResult = { bundles: bundles.length, asked: 0, grouped: 0, stories: 0, folded: 0, errors: 0, model: null };
 
   const one = async (b: { id: number; label: string }) => {
-    const accounts = accountsInBundle(b.id);
+    const accounts = heldAccounts(b.id);
     const { lines, storyRep } = headlineLines(accounts);
     if (lines.length < 3) return;
     result.asked++;
