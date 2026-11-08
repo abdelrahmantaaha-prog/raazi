@@ -58,7 +58,8 @@ const signingKey = await loadPrivateKey(path.join(keysDir(), signWith)).catch((e
 
 if (gh("repo", "view", repo).status !== 0) {
   must(
-    gh("repo", "create", repo, "--public", "--description", "Signed update packages read by Raazi launchers. No source, no data."),
+    // --add-readme: GitHub cannot publish a release in a repository with no commits.
+    gh("repo", "create", repo, "--public", "--add-readme", "--description", "Signed update packages read by Raazi launchers. No source, no data."),
     "creating the public updates repository",
   );
   console.log(`[publish] created ${repo} (public)`);
