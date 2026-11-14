@@ -16,10 +16,15 @@ data/
 .env
 
 .next-dev/
+.next-dist/
 *.log
 
 # Launcher build output.
 dist/
+launcher/Version.cs
+
+# Signed update packages — rebuilt by scripts/make-update.mjs, kept on GitHub.
+updates/
 
 # Rendered videos and captured frames — rebuild from video/.
 video/out/

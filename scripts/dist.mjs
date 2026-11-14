@@ -22,6 +22,34 @@ const say = (m) => console.log(`[dist] ${m}`);
  *  your library, the stored source files. */
 const PRIVATE = /(^|\/)(\.next\/standalone\/)?(data|\.env[^/]*)(\/|$)/;
 
+/**
+ * Every key this machine holds. Since disciplines, the ring (keys[].key), the
+ * research keys and the LAN token live in data/shared.json; an install that
+ * predates them keeps the ring, or a single apiKey, in data/config.json. Reading
+ * only that one found nothing on a current install, and a check with nothing to
+ * look for passes everything.
+ */
+export function secretsOf() {
+  return ["shared.json", "config.json"]
+    .map((f) => path.join(root, "data", f))
+    .filter((f) => fs.existsSync(f))
+    .map((f) => JSON.parse(fs.readFileSync(f, "utf8")))
+    .flatMap((stored) => [
+      ...(stored.keys ?? []).map((k) => k.key),
+      stored.apiKey,
+      ...Object.values(stored.researchKeys ?? {}),
+      stored.lan?.token,
+    ])
+    .filter((k) => typeof k === "string" && k.length >= 16);
+}
+
+/** Whether a file that could hold a key does. Text-like and small; the same bounds for the folder and the update. */
+export function fileContainsAny(file, keys) {
+  if (!/\.(json|js|txt|db)$/.test(file) || fs.statSync(file).size >= 8_000_000) return false;
+  const body = fs.readFileSync(file, "utf8");
+  return keys.some((k) => body.includes(k));
+}
+
 /** Nothing leaves without this passing. A key or a source inside a folder meant
  *  to be handed to someone else is not a bug you get to find later. */
 function assertClean(out, flavour) {
@@ -40,33 +68,15 @@ function assertClean(out, flavour) {
   };
   walk(out);
 
-  // And the keys themselves, wherever they hid. Since disciplines, the ring
-  // (keys[].key), the research keys and the LAN token live in data/shared.json;
-  // an install that predates them keeps the ring, or a single apiKey, in
-  // data/config.json. Reading only that one found nothing on a current install,
-  // and a check with nothing to look for passes everything.
-  const stores = ["shared.json", "config.json"]
-    .map((f) => path.join(root, "data", f))
-    .filter((f) => fs.existsSync(f))
-    .map((f) => JSON.parse(fs.readFileSync(f, "utf8")));
+  // And the keys themselves, wherever they hid.
   {
-    const keys = stores
-      .flatMap((stored) => [
-        ...(stored.keys ?? []).map((k) => k.key),
-        stored.apiKey,
-        ...Object.values(stored.researchKeys ?? {}),
-        stored.lan?.token,
-      ])
-      .filter((k) => typeof k === "string" && k.length >= 16);
+    const keys = secretsOf();
     const scan = (dir) => {
       for (const e of fs.readdirSync(dir, { withFileTypes: true })) {
         const full = path.join(dir, e.name);
         if (e.isDirectory()) scan(full);
-        else if (/\.(json|js|txt|db)$/.test(e.name) && fs.statSync(full).size < 8_000_000) {
-          const body = fs.readFileSync(full, "utf8");
-          if (keys.some((k) => body.includes(k))) {
-            offenders.push(path.relative(out, full).replace(/\\/g, "/") + " (contains a key)");
-          }
+        else if (fileContainsAny(full, keys)) {
+          offenders.push(path.relative(out, full).replace(/\\/g, "/") + " (contains a key)");
         }
       }
     };
@@ -85,7 +95,8 @@ function assertClean(out, flavour) {
  * when CORPUS_DIST=1 — see next.config.ts. The everyday build deliberately
  * omits it, because `next start` (which the launcher uses) exits on its own
  * when standalone output is present. Dist runs through server.js instead, so
- * it is the one build that asks for it.
+ * it is the one build that asks for it. It builds into .next-dist, so a release
+ * can be cut while Raazi is running from this checkout.
  */
 function build() {
   say("building…");
@@ -107,7 +118,7 @@ function assemble(flavour) {
   // lib/db reads data/config.json, so nft follows — and that file holds every
   // API key on the ring, beside your whole library in data/. It is excluded on
   // the way in and checked for again on the way out.
-  fs.cpSync(path.join(root, ".next", "standalone"), server, {
+  fs.cpSync(path.join(root, ".next-dist", "standalone"), server, {
     recursive: true,
     filter: (src) => !PRIVATE.test(path.relative(root, src).replace(/\\/g, "/")),
   });
@@ -124,7 +135,7 @@ function assemble(flavour) {
   }
   // Static assets and public files are deliberately NOT traced into the
   // standalone output — Next expects them to be copied alongside it.
-  fs.cpSync(path.join(root, ".next", "static"), path.join(server, ".next", "static"), {
+  fs.cpSync(path.join(root, ".next-dist", "static"), path.join(server, ".next-dist", "static"), {
     recursive: true,
   });
   // The research tool server a web check starts beside Claude Code. It runs as
@@ -143,11 +154,38 @@ function assemble(flavour) {
     }
   }
 
-  const exe = path.join(root, "Raazi.exe");
-  if (fs.existsSync(exe)) fs.copyFileSync(exe, path.join(out, "Raazi.exe"));
-  else say("WARNING: Raazi.exe is missing — run npm run build:exe first");
+  // Built fresh into the package, so it carries this release's number and the
+  // current signing keys. The Raazi.exe at the root may be running, and stale.
+  execFileSync(
+    "powershell",
+    ["-NoProfile", "-ExecutionPolicy", "Bypass", "-File", path.join(root, "launcher", "build.ps1"), "-NoShortcut", "-Out", path.join(out, "Raazi.exe")],
+    { stdio: ["ignore", "ignore", "inherit"] },
+  );
 
+  stampNodeAbi(server);
   return out;
+}
+
+/**
+ * The Node this package's native module was built for: better-sqlite3 is loaded
+ * from inside the package and the answer goes in server/node-abi.txt, for the
+ * launcher to compare against the Node it finds (UpdateFeed.NodeRefusal). A
+ * package whose native module does not load here is not shipped at all.
+ */
+function stampNodeAbi(server) {
+  let answer;
+  try {
+    answer = execFileSync(
+      process.execPath,
+      ["-e", "const D = require('better-sqlite3'); new D(':memory:').close(); process.stdout.write(process.versions.modules + ' ' + process.version)"],
+      { cwd: server, encoding: "utf8", stdio: ["ignore", "pipe", "pipe"] },
+    ).trim();
+  } catch (err) {
+    console.error("[dist] REFUSING to ship: the packaged better-sqlite3 does not load in this Node");
+    console.error(String(err.stderr ?? err.message));
+    process.exit(1);
+  }
+  fs.writeFileSync(path.join(server, "node-abi.txt"), `${answer}\n`);
 }
 
 function readme(out) {
@@ -189,24 +227,27 @@ function readme(out) {
 
 // ---------------------------------------------------------------------------
 
-build();
+// Only when run: make-update.mjs imports the scan above without building anything.
+if (process.argv[1] && path.resolve(process.argv[1]) === fileURLToPath(import.meta.url)) {
+  build();
 
-const flavour = "client";
-const out = assemble(flavour);
-const data = path.join(out, "data");
-// Empty, but present: the first run then has somewhere to write without asking
-// anything of whoever unzipped it.
-fs.mkdirSync(data, { recursive: true });
-fs.writeFileSync(path.join(data, ".keep"), "");
-readme(out);
-assertClean(out, flavour);
+  const flavour = "client";
+  const out = assemble(flavour);
+  const data = path.join(out, "data");
+  // Empty, but present: the first run then has somewhere to write without asking
+  // anything of whoever unzipped it.
+  fs.mkdirSync(data, { recursive: true });
+  fs.writeFileSync(path.join(data, ".keep"), "");
+  readme(out);
+  assertClean(out, flavour);
 
-const size = (dir) => {
-  let n = 0;
-  for (const e of fs.readdirSync(dir, { withFileTypes: true, recursive: true })) {
-    if (e.isFile()) n += fs.statSync(path.join(e.parentPath ?? e.path, e.name)).size;
-  }
-  return n;
-};
-say(`${flavour}: ${(size(out) / 1024 / 1024).toFixed(0)} MB at dist/${flavour}`);
-say("done — zip dist/client and hand it over");
+  const size = (dir) => {
+    let n = 0;
+    for (const e of fs.readdirSync(dir, { withFileTypes: true, recursive: true })) {
+      if (e.isFile()) n += fs.statSync(path.join(e.parentPath ?? e.path, e.name)).size;
+    }
+    return n;
+  };
+  say(`${flavour}: ${(size(out) / 1024 / 1024).toFixed(0)} MB at dist/${flavour}`);
+  say("done — zip dist/client and hand it over, or node scripts/make-update.mjs for a signed update");
+}

@@ -834,7 +834,7 @@ export default function Inbox({
                 {count}
               </span>
             ) : null}
-            <p className="hidden min-w-0 truncate text-sm text-[var(--color-muted)] md:block">
+            <p className="hidden min-w-0 truncate text-sm text-[var(--color-muted)] md:block lg:hidden">
               {count === 0
                 ? "Nothing waiting. Everything the feeds brought in has been through you."
                 : "Pulled in and unread — nothing here has cost a token yet. Keeping one is what starts the reading."}
@@ -962,12 +962,12 @@ export default function Inbox({
           </p>
         </div>
       ) : (
-        // The list takes the smaller share now that its rows are compact; the
-        // pane is where an item is actually read.
+        // On a wide screen the list and the heading are a column down the left
+        // and the pane is everything else: see .inbox-desk in globals.css.
         <div
           ref={desk.ref}
           style={desk.style}
-          className="lg:grid lg:grid-cols-[minmax(20rem,5fr)_minmax(0,7fr)] lg:grid-rows-[minmax(0,1fr)] lg:gap-4"
+          className="inbox-desk lg:grid lg:grid-cols-[minmax(0,1fr)] lg:grid-rows-[minmax(0,1fr)]"
         >
           <div className="lg:flex lg:min-h-0 lg:flex-col lg:overflow-hidden lg:rounded-xl lg:border lg:border-[var(--color-rule)] lg:bg-white">
             {/* One bar, two states: search while nothing is selected, and what
@@ -1266,8 +1266,9 @@ export default function Inbox({
             </p>
           </div>
 
-          {/* The pane. Its heading and buttons hold still; only the article scrolls. */}
-          <aside className="hidden min-h-0 overflow-hidden rounded-xl border border-[var(--color-rule)] bg-white lg:block">
+          {/* The pane: the whole right of the window, top to bottom. Its heading
+              and buttons hold still; only the article scrolls. */}
+          <aside className="inbox-pane hidden overflow-hidden border-[var(--color-rule)] bg-white lg:block lg:border-s">
             {pane(paneBody)}
           </aside>
         </div>
@@ -1346,28 +1347,29 @@ function pictureOf(item: Item): string | null {
  * The sandbox leaves out top navigation, so a page that tries to break out of
  * its frame cannot carry Raazi away with it.
  *
- * On the desk the frame fills whatever the pane has below its heading; in the
- * phone's sheet, which has no height of its own, it takes most of the screen.
+ * On the desk the frame runs to the pane's edges and fills whatever is below
+ * the heading, with the way out kept to one line under it; in the phone's
+ * sheet, which has no height of its own, it takes most of the screen.
  */
 function PageView({ url }: { url: string }) {
   return (
-    <div className="flex min-h-0 flex-1 flex-col gap-1.5">
+    <div className="flex min-h-0 flex-1 flex-col">
       <iframe
         key={url}
         src={url}
         title="The article's own page"
         sandbox="allow-scripts allow-same-origin allow-forms allow-popups allow-popups-to-escape-sandbox allow-storage-access-by-user-activation"
         referrerPolicy="no-referrer"
-        className="min-h-[60vh] w-full flex-1 rounded-lg border border-[var(--color-rule)] bg-white lg:min-h-[16rem]"
+        className="min-h-[60vh] w-full flex-1 bg-white lg:min-h-[16rem]"
       />
-      <p className="shrink-0 text-[11px] leading-snug text-[var(--color-muted)]">
-        Blank? The site refuses to be shown inside another page — the Raazi Inbox extension lifts that from
-        version 0.3.0 — or{" "}
+      <p
+        className="shrink-0 truncate border-t border-[var(--color-rule)] px-3 py-1 text-[11px] leading-snug text-[var(--color-muted)]"
+        title="The site may refuse to be shown inside another page: the Raazi Inbox extension lifts that from version 0.3.0. Signed out? Brave keeps your logins from pages inside another site; allow cross-site cookies for Raazi in Shields. The extension's icon sends the article shown here."
+      >
+        Blank or signed out?{" "}
         <ArticleLink href={url} className="underline hover:text-[var(--color-accent)]">
-          open it in the article window
+          Open it in the article window
         </ArticleLink>
-        . Signed out? Brave keeps your logins from pages inside another site; allow cross-site cookies for
-        Raazi in Shields. The extension&apos;s icon sends the article shown here.
       </p>
     </div>
   );
@@ -1551,46 +1553,50 @@ function Preview({
               className={`${button} border border-[var(--color-rule)] hover:border-[var(--color-accent)] hover:text-[var(--color-accent)]`}
             />
           ) : null}
-        </div>
 
-        {verdict === "enough" ? (
-          <p className="flex items-center gap-1.5 text-xs text-emerald-800">
-            <IconCheck size={14} />
-            <span>
-              Enough to read
-              {text
-                ? ` — ${text.words.toLocaleString()} words in ${text.passages.length} passage${text.passages.length === 1 ? "" : "s"}`
-                : ""}
-              . Keeping it reads all of this.
-            </span>
-          </p>
-        ) : (
-          <p className="flex items-center gap-1.5 rounded-md bg-amber-50 px-2 py-1 text-xs text-amber-900">
-            <IconText size={14} className="shrink-0" />
-            <span>
-              {verdict === "summary"
-                ? "Only the feed's summary is here — the page would not open."
-                : `Too little to be an article${text ? ` — ${text.words.toLocaleString()} words` : ""}.`}{" "}
-              Paste the article to keep it.
-            </span>
-          </p>
-        )}
+          {/* On the buttons' own row when there is room: every line up here
+              is a line the article does not get. */}
+          {verdict === "enough" ? (
+            <p className="flex items-center gap-1.5 text-xs text-emerald-800 lg:ms-auto">
+              <IconCheck size={14} />
+              <span>
+                Enough to read
+                {text
+                  ? ` — ${text.words.toLocaleString()} words in ${text.passages.length} passage${text.passages.length === 1 ? "" : "s"}`
+                  : ""}
+                . Keeping it reads all of this.
+              </span>
+            </p>
+          ) : (
+            <p className="flex items-center gap-1.5 rounded-md bg-amber-50 px-2 py-1 text-xs text-amber-900 lg:ms-auto">
+              <IconText size={14} className="shrink-0" />
+              <span>
+                {verdict === "summary"
+                  ? "Only the feed's summary is here — the page would not open."
+                  : `Too little to be an article${text ? ` — ${text.words.toLocaleString()} words` : ""}.`}{" "}
+                Paste the article to keep it.
+              </span>
+            </p>
+          )}
+        </div>
       </div>
 
       <div
         ref={bodyRef}
-        className={`min-h-0 flex-1 space-y-3 overflow-y-auto p-4 ${showPage ? "flex flex-col space-y-0 gap-3" : ""}`}
+        className={`min-h-0 flex-1 overflow-y-auto ${showPage ? "flex flex-col" : "space-y-3 p-4"}`}
       >
-        {pasteBox}
+        {showPage && pasteBox ? <div className="shrink-0 p-3">{pasteBox}</div> : pasteBox}
 
-        {text?.source_note ? <p className="text-xs italic text-[var(--color-muted)]">{text.source_note}</p> : null}
+        {text?.source_note && !showPage ? <p className="text-xs italic text-[var(--color-muted)]">{text.source_note}</p> : null}
 
         {showPage ? (
           <PageView url={item.url!} />
         ) : loading && !text ? (
           <p className="text-sm text-[var(--color-muted)]">Opening…</p>
         ) : body ? (
-          <div>
+          // A full window of serif is a hard line to follow back; the column
+          // stays a reading width and sits in the middle of the pane.
+          <div className="mx-auto max-w-[72ch]">
             {pictureOf(item) ? <Thumb src={pictureOf(item)!} large /> : null}
             <div dir={dirOf(body)} className="whitespace-pre-wrap font-serif text-[0.95rem] leading-relaxed">
               {body}

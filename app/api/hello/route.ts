@@ -40,7 +40,10 @@ export async function GET() {
   return NextResponse.json(
     {
       app: "corpus",
-      version: process.env.npm_package_version ?? "0.1.0",
+      // Baked in at build (next.config.ts): a launcher starts this server with
+      // node directly, so npm's variable is not there, and an update is judged
+      // by this answer naming the release it promised.
+      version: process.env.RAAZI_RELEASE ?? "0.1.0",
       host: os.hostname(),
       port: Number(process.env.PORT ?? 5400),
       lan: lanEnabled(),

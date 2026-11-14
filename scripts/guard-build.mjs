@@ -19,7 +19,9 @@ import net from "node:net";
 
 const PORT = Number(process.env.PORT ?? 5400);
 
-if (process.env.CORPUS_ALLOW_HOT_BUILD === "1") {
+// A dist build goes to .next-dist (next.config.ts), so nothing is replaced
+// under a running server.
+if (process.env.CORPUS_ALLOW_HOT_BUILD === "1" || process.env.CORPUS_DIST === "1") {
   process.exit(0);
 }
 

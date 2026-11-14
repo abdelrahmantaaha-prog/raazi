@@ -54,7 +54,7 @@ export default function RootLayout({ children }: { children: React.ReactNode }) 
           {/* The width wrapper sits outside the transition so that the
               transition's own children are the page's sections — which is what
               the stagger in globals.css reaches for. */}
-          <div className="mx-auto max-w-6xl">
+          <div className="page-width mx-auto max-w-6xl">
             {/* Above the transition, and outside it: the strip belongs to the
                 section rather than to the page, so it should hold still while
                 the page under it changes. */}

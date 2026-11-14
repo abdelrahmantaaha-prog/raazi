@@ -529,6 +529,50 @@ with an **Update now** button, and Settings can switch the automatic part off.
 Where sources disagree, both claims are kept with their evidence and shown on the
 entry. Silently picking a winner would be a bug, not a feature.
 
+## Updates
+
+A packaged copy looks for a newer version by itself, the same system as Mutarjim's.
+The source stays private; only signed packages are public, as releases of
+`abdelrahmantaaha-prog/raazi-updates`. The launcher reads `manifest.json` on that
+repository's `feed` release two minutes after it starts and every six hours after,
+downloads a newer package, and asks before installing. The check sends nothing from
+the library; Settings → Access switches it off.
+
+A package installs only if it verifies against a key compiled into `Raazi.exe`
+(`launcher/UpdateKeys.cs`), is newer than this install, and calls itself what the
+feed promised, so a wrong feed can only withhold an update. Installing stops the
+server, copies the open discipline's database into `update-backup\`, and swaps in
+only what the package carries, never `data\`. The new server must answer
+`/api/hello` as the promised release, or the old files and the database copy go
+back and that version is not offered here again.
+
+A checkout never updates itself (git does that), and neither does a copy following
+another computer. `data\update-ring.txt` holding `early` makes an install a test
+install.
+
+Once, to make the signing key (it asks for a passphrase and writes the public half
+into `launcher/UpdateKeys.cs`; keep `%USERPROFILE%\.raazi-keys` backed up offline):
+
+```
+node scripts/gen-update-keys.mjs
+```
+
+Each release, after raising the version in `package.json`:
+
+```
+npm run dist
+node scripts/make-update.mjs                     # updates/raazi-update-<v>.zip + .sig
+node scripts/publish-update.mjs                  # test install(s); makes the repository the first time
+node scripts/publish-update.mjs --promote        # everyone, days later
+node scripts/publish-update.mjs --withdraw 0.11.1           # never offer 0.11.1 again
+node scripts/publish-update.mjs --sign-with 2 --retire 1    # the first key leaked
+```
+
+`node scripts/check-auto-update.mjs` runs the feed rules, the swap and a real install
+with rollback against a scratch copy, a throwaway key and a loopback feed. With Raazi
+closed, `Raazi.exe --check-update`, `--apply-update <zip>` and `--undo-update` do it by
+hand and answer in `update-check.txt` / `update-result.txt` beside the exe.
+
 ## More than one discipline
 
 Topics organise one library; a **discipline** is a separate one. Settings →

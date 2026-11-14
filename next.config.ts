@@ -1,6 +1,13 @@
+import fs from "node:fs";
+import path from "node:path";
 import type { NextConfig } from "next";
 
+const release = JSON.parse(fs.readFileSync(path.join(process.cwd(), "package.json"), "utf8")).version as string;
+
 const nextConfig: NextConfig = {
+  // The release this build is, for /api/hello and Settings.
+  env: { RAAZI_RELEASE: release },
+
   /**
    * A dev server must not build on top of the running app.
    *
@@ -12,9 +19,12 @@ const nextConfig: NextConfig = {
    * catch a dev server doing the same thing.
    *
    * Next sets NODE_ENV itself — `development` for `dev`, `production` for
-   * `build` and `start` — so the two can simply never share a directory.
+   * `build` and `start` — so the two can simply never share a directory. A
+   * dist build has its own for the same reason: cutting a release must not
+   * replace the build the running app is serving.
    */
-  distDir: process.env.NODE_ENV === "development" ? ".next-dev" : ".next",
+  distDir:
+    process.env.NODE_ENV === "development" ? ".next-dev" : process.env.CORPUS_DIST === "1" ? ".next-dist" : ".next",
 
   // A self-contained server under .next/standalone, carrying the node_modules it
   // actually needs, is what `npm run dist` packages so a copy can be handed over

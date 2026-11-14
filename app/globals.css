@@ -381,3 +381,34 @@ body {
 .textLayer.selecting .endOfContent {
   top: 0;
 }
+
+/* ---------------------------------------------------------------------------
+   The inbox on a wide screen: a column down the left, and the pane everything
+   else, from the top of the window to its bottom and right edges.
+
+   The page's own width wrapper becomes that column, so the section tabs, the
+   heading and the list all stay in it with nothing else knowing. The pane is
+   pinned to the window and starts where the column and main's padding end:
+   the rail (12rem), main's padding either side of the column (1.5rem each),
+   and the column. The desk does not rise in with the other sections, because
+   a transform on it would pin the pane to the desk instead of the window.
+   --------------------------------------------------------------------------- */
+@media (min-width: 1024px) {
+  :root {
+    --inbox-list: clamp(20rem, 30vw, 28rem);
+  }
+  .page-width:has(.inbox-desk) {
+    max-width: var(--inbox-list);
+    margin-inline: 0;
+  }
+  .page-enter .inbox-desk {
+    animation: none;
+  }
+  .inbox-pane {
+    position: fixed;
+    inset-block: 0;
+    inset-inline-end: 0;
+    inset-inline-start: calc(15rem + var(--inbox-list));
+    z-index: 10;
+  }
+}
