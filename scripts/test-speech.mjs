@@ -747,10 +747,28 @@ section("When the voice service cannot be reached");
 section("Proving to the voice service it is talking to Edge");
 {
   const { secMsGec } = await import("../lib/edge-voice.ts");
+  const { sha256Compress } = await import("../lib/edge-gec.ts");
+  const { createHash } = await import("node:crypto");
   const start = 1_790_000_000 - (1_790_000_000 % 300);
-  check("a SHA-256, in capitals", /^[0-9A-F]{64}$/.test(secMsGec(start)));
+  check("the v2 form: a checksum and a SHA-256, in capitals", /^[0-9A-F]{16}-[0-9A-F]{64}$/.test(secMsGec(start)));
   check("the same within a five-minute window", secMsGec(start) === secMsGec(start + 299));
   check("and different in the next", secMsGec(start) !== secMsGec(start + 300));
+  // Pinned from a build the live service accepted (14 Nov 2026). If this
+  // changes, the token changed, and the speech connection will be refused.
+  check(
+    "the token for a known window is unchanged",
+    secMsGec(start) ===
+      "D4216A7D3DE0C94F-91D741832FD084A110FDAD52BE2FFA569C6EA5F7D06A9429380A398738F4559A"
+  );
+  // The secret first block cannot be checked offline, but the rounds after it
+  // are plain SHA-256, and those can.
+  const iv = [0x6a09e667n, 0xbb67ae85n, 0x3c6ef372n, 0xa54ff53an, 0x510e527fn, 0x9b05688cn, 0x1f83d9abn, 0x5be0cd19n];
+  const block = Buffer.alloc(64);
+  block.write("abc");
+  block[3] = 0x80;
+  block[63] = 24;
+  const ours = sha256Compress(iv, block).map((x) => x.toString(16).padStart(8, "0")).join("");
+  check("its SHA-256 rounds agree with node:crypto", ours === createHash("sha256").update("abc").digest("hex"));
 }
 
 console.log(`\n${passed} passed, ${failed} failed`);

@@ -1,4 +1,5 @@
-import { createHash, randomBytes, randomUUID } from "node:crypto";
+import { randomBytes, randomUUID } from "node:crypto";
+import { gecV2 } from "./edge-gec";
 
 /**
  * Microsoft's "Natural" voices, fetched by the server rather than the browser.
@@ -43,6 +44,10 @@ let skew = 0;
  * The rolling token the service expects alongside the fixed one: a hash of the
  * current five-minute window in Windows ticks. It is how Edge proves it is
  * Edge, and every copy computes the same thing.
+ *
+ * This is the v2 form (see lib/edge-gec.ts). The v1 form, a plain SHA-256 of
+ * the same input, still fetches the voice list but has been refused on the
+ * speech connection since November 2026.
  */
 export function secMsGec(now = Date.now() / 1000 + skew): string {
   let ticks = now + WIN_EPOCH;
@@ -50,11 +55,11 @@ export function secMsGec(now = Date.now() / 1000 + skew): string {
   // Ticks are 100 ns. BigInt, because the value is past what a double holds
   // exactly and the hash is of its digits.
   const digits = (BigInt(Math.floor(ticks)) * BigInt(10_000_000)).toString();
-  return createHash("sha256").update(`${digits}${TOKEN}`, "ascii").digest("hex").toUpperCase();
+  return gecV2(`${digits}${TOKEN}`);
 }
 
 function query(): string {
-  return `TrustedClientToken=${TOKEN}&Sec-MS-GEC=${secMsGec()}&Sec-MS-GEC-Version=1-${CHROMIUM}`;
+  return `TrustedClientToken=${TOKEN}&Sec-MS-GEC=${secMsGec()}&Sec-MS-GEC-Version=2-${CHROMIUM}`;
 }
 
 function headers(): Record<string, string> {
