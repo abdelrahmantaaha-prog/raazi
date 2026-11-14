@@ -514,6 +514,9 @@ export function migrate(db: Database.Database) {
   addColumn(db, "sources", "reliability", "TEXT");
   db.exec("CREATE INDEX IF NOT EXISTS idx_sources_published ON sources(published_at)");
   db.exec("CREATE INDEX IF NOT EXISTS idx_sources_canonical ON sources(canonical_url)");
+  // The poll's "do we already have this?" asks by either address. Without an
+  // index on both, the OR scanned every source for every headline in a feed.
+  db.exec("CREATE INDEX IF NOT EXISTS idx_sources_url ON sources(url)");
 
   // Who is asserting a claim, and what kind of claim it is. "The tariff will
   // take effect Monday" reported as officials' words is a different record

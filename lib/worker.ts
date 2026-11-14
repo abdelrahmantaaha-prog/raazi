@@ -46,6 +46,7 @@ declare global {
         sweptAt?: number;
         polledAt?: number;
         briefedAt?: number;
+        briefLookedAt?: number;
         retriedAt?: number;
         upgradedAt?: number;
       }
@@ -409,6 +410,7 @@ export async function startWorker(override?: Record<string, Handler>): Promise<v
 
       s.idleSince = Date.now();
       s.sweptAt = undefined;
+      s.briefLookedAt = undefined;
       const guarded = async (t: Task) => {
         try {
           await runOne(t, handlers);
@@ -559,11 +561,14 @@ function sweepStaleEntries(): boolean {
   const s = state();
   if (!getConfig().autoRefreshEntries) return false;
   // One sweep per quiet spell; a second would just re-queue what is running.
+  // Stamped before the look, not after: entries parked in a paused run keep
+  // refreshInFlight true for days, and left unstamped it read the whole task
+  // table on every pass of the idle loop.
   if (s.sweptAt && Date.now() - s.sweptAt < 60_000) return false;
+  s.sweptAt = Date.now();
   if (refreshInFlight()) return false;
 
   const queued = queueStaleEntries("Keeping entries current");
-  s.sweptAt = Date.now();
   if (!queued) return false;
 
   s.idleSince = Date.now();
@@ -620,9 +625,9 @@ function sweepFeeds(): boolean {
   const s = state();
   if (!getConfig().feedPolling) return false;
   if (s.polledAt && Date.now() - s.polledAt < 60_000) return false;
+  s.polledAt = Date.now();
   if (pollPending()) return false;
 
-  s.polledAt = Date.now();
   const queued = queuePolls();
   if (!queued) return false;
 
@@ -645,6 +650,11 @@ function sweepBrief(): boolean {
   // A scratch library is a test; unattended spending stays out of it.
   if (process.env.CORPUS_DATA_DIR) return false;
   if (s.briefedAt && Date.now() - s.briefedAt < 60_000) return false;
+  // Once a minute at most, and once more whenever work has just finished. An
+  // inbox with anything in it answers no below for days, and these two looks
+  // read the whole task table on every pass of the idle loop.
+  if (s.briefLookedAt && Date.now() - s.briefLookedAt < 60_000) return false;
+  s.briefLookedAt = Date.now();
   if (briefInFlight() || pollInFlight()) return false;
   // Nothing is written over an inbox you have not been through. A brief built
   // from the fraction of the morning that happened to be read already is worse

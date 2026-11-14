@@ -152,6 +152,49 @@ section("Bundles: the subject level");
   check("with no bundles the event pass asks nothing", (await B.groupEventsInBundles()).asked === 0);
 }
 
+section("One bundle's accounts, without reading the whole inbox");
+{
+  const feedId = Number(db().prepare("INSERT INTO feeds (url, title, outlet) VALUES ('https://b.example/rss', 'Paper', 'Paper')").run().lastInsertRowid);
+  const bundle = (label) => Number(db().prepare("INSERT INTO inbox_bundles (label) VALUES (?)").run(label).lastInsertRowid);
+  const held = (name, bundleId, state = "held") => {
+    const sourceId = Number(
+      db().prepare("INSERT INTO sources (title, kind, url, status, triage) VALUES (?, 'url', ?, 'chunked', 'held')").run(name, `https://b.example/${name}`).lastInsertRowid
+    );
+    db().prepare("INSERT INTO chunks (source_id, seq, text, locator_json) VALUES (?, 0, ?, '{}')").run(sourceId, `The lede of ${name}.`);
+    const itemId = Number(
+      db().prepare("INSERT INTO feed_items (feed_id, guid, url, title, state, source_id) VALUES (?, ?, ?, ?, ?, ?)").run(feedId, name, `https://b.example/${name}`, name, state, sourceId).lastInsertRowid
+    );
+    if (bundleId) db().prepare("INSERT INTO inbox_bundle_items (item_id, bundle_id) VALUES (?, ?)").run(itemId, bundleId);
+    return sourceId;
+  };
+  const courts = bundle("Courts");
+  const markets = bundle("Markets");
+  const a = held("court-one", courts);
+  const b = held("court-two", courts);
+  const c = held("market-one", markets);
+  held("unbundled", null);
+  held("court-decided", courts, "kept");
+
+  const ids = (list) => list.map((x) => x.sourceId).sort((x, y) => x - y).join(",");
+  check("the whole inbox is still the whole inbox", G.heldAccounts().length === 4, String(G.heldAccounts().length));
+  check("a bundle gets only its own held accounts", ids(G.heldAccounts(courts)) === [a, b].sort((x, y) => x - y).join(","), ids(G.heldAccounts(courts)));
+  check("and the other bundle only its", ids(G.heldAccounts(markets)) === String(c), ids(G.heldAccounts(markets)));
+  check("with the lede the pass reads", G.heldAccounts(markets)[0].lede === "The lede of market-one.");
+  check("an empty bundle has none", G.heldAccounts(bundle("Empty")).length === 0);
+
+  const plan = db()
+    .prepare("EXPLAIN QUERY PLAN SELECT id FROM sources WHERE (canonical_url IS NOT NULL AND canonical_url = ?) OR (url IS NOT NULL AND url = ?) LIMIT 1")
+    .all("x", "y")
+    .map((r) => r.detail)
+    .join("; ");
+  check("the duplicate check looks a headline up instead of scanning the library", !/SCAN sources/.test(plan), plan);
+
+  db().prepare("DELETE FROM feed_items WHERE feed_id = ?").run(feedId);
+  db().prepare("DELETE FROM sources WHERE url LIKE 'https://b.example/%'").run();
+  db().prepare("DELETE FROM feeds WHERE id = ?").run(feedId);
+  db().prepare("DELETE FROM inbox_bundles").run();
+}
+
 section("Importance: four stages, rated once, sorted most important first");
 {
   const B = await import("../lib/inbox-bundles.ts");

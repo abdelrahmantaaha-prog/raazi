@@ -258,6 +258,9 @@ CREATE TABLE IF NOT EXISTS tasks (
   updated_at   TEXT    NOT NULL DEFAULT (datetime('now'))
 );
 CREATE INDEX IF NOT EXISTS idx_tasks_claim ON tasks(run_id, state, seq);
+-- "Is one of these still open?" is asked constantly. Finished tasks are nearly
+-- all of the table, so only the open ones are indexed.
+CREATE INDEX IF NOT EXISTS idx_tasks_open ON tasks(kind, state) WHERE state IN ('pending', 'running');
 
 -- ---------------------------------------------------------------------------
 -- Full-text search over both the raw text and the written entries

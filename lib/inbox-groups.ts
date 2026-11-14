@@ -342,8 +342,22 @@ export function relatedPairs(sketches: Sketch[], rules = RULES): RelatedPair[] {
   return out;
 }
 
-/** The accounts waiting in the inbox, oldest source first, with what the pass reads. */
-export function heldAccounts(): HeldAccount[] {
+/**
+ * The accounts waiting in the inbox, oldest source first, with what the pass reads.
+ *
+ * With a bundle, only that bundle's. The event pass asks once per bundle, and
+ * filtering the whole inbox each time read and sorted its full text — 67 MB in,
+ * 26 MB out to a temp file — eighty-six times a pass, twice an hour (8 Nov 2026).
+ * Asked per bundle rather than loaded once because the pass takes minutes:
+ * a story merged or an item decided meanwhile must still be seen.
+ */
+export function heldAccounts(bundleId?: number): HeldAccount[] {
+  const onlyBundle =
+    bundleId === undefined
+      ? ""
+      : `AND s.id IN (SELECT held.source_id FROM inbox_bundle_items bi
+                        JOIN feed_items held ON held.id = bi.item_id
+                       WHERE bi.bundle_id = ?)`;
   return (
     db()
       .prepare(
@@ -358,9 +372,10 @@ export function heldAccounts(): HeldAccount[] {
       LEFT JOIN story_sources ss ON ss.source_id = s.id
       LEFT JOIN stories st ON st.id = ss.story_id
           WHERE i.state = 'held' AND i.decided_at IS NULL
+            ${onlyBundle}
           ORDER BY s.id`
       )
-      .all() as HeldAccount[]
+      .all(...(bundleId === undefined ? [] : [bundleId])) as HeldAccount[]
   ).map((a) => ({ ...a, title: a.title ?? "", outlet: a.outlet ?? "", lede: a.lede ?? "", summary: a.summary ?? "" }));
 }
 

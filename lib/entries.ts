@@ -158,10 +158,12 @@ export function nextUpgrade(model: string, runId: number | null): number | null 
       `SELECT e.id FROM entries en JOIN entities e ON e.id = en.entity_id
         WHERE e.merged_into IS NULL AND (en.model IS NULL OR en.model <> @model)
           AND EXISTS (SELECT 1 FROM live_mentions m WHERE m.entity_id = e.id)
-          AND NOT EXISTS (
-            SELECT 1 FROM tasks t
+          -- Read once, as a list. Asked per entity this parsed every task in the
+          -- run for each of them: 5 to 9 seconds with the server standing still.
+          AND e.id NOT IN (
+            SELECT json_extract(t.payload_json, '$.entityId') FROM tasks t
              WHERE t.run_id = @runId AND t.kind = 'entry'
-               AND json_extract(t.payload_json, '$.entityId') = e.id
+               AND json_extract(t.payload_json, '$.entityId') IS NOT NULL
                AND t.updated_at > datetime('now', '-1 day'))
         ORDER BY e.starred DESC,
                  (SELECT COUNT(*) FROM live_mentions m WHERE m.entity_id = e.id) DESC,

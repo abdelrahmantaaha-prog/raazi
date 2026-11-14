@@ -201,6 +201,44 @@ check(
   `queued ${queuedIn(third)}`
 );
 
+// ---------------------------------------------------------------------------
+section("The idle loop does not keep rereading the task table");
+// ---------------------------------------------------------------------------
+// Entries parked in a paused run keep "is a refresh in flight?" true for days.
+// The look was made before the once-a-minute stamp, so an idle worker scanned
+// all 140,000 tasks on every pass, several looks a pass (8 Nov 2026).
+db().prepare("UPDATE tasks SET state='done' WHERE run_id <> ?").run(first);
+saveConfig({ autoRefreshEntries: true });
+{
+  const conn = db();
+  const realPrepare = conn.prepare;
+  const seen = [];
+  conn.prepare = function (sql) {
+    seen.push(sql);
+    return realPrepare.call(this, sql);
+  };
+  const s = globalThis.__corpusWorker;
+  s.sweptAt = undefined;
+  s.idleSince = Date.now();
+  await startWorker({ async entry() {} });
+  delete conn.prepare;
+  const count = (needle) => seen.filter((q) => q.includes(needle)).length;
+  const passes = count("ORDER BY");
+  check("the idle loop made several passes", passes >= 2, `${passes}`);
+  check("and asked about refreshes once, not every pass", count("t.kind IN ('entry', 'plan_entries')") === 1, String(count("t.kind IN ('entry', 'plan_entries')")));
+
+  const usesIndex = (sql) => !/SCAN (tasks|t)\b/.test(db().prepare(`EXPLAIN QUERY PLAN ${sql}`).all().map((r) => r.detail).join("; "));
+  check(
+    "whether a refresh is open is answered from the open tasks alone",
+    usesIndex(`SELECT COUNT(*) AS n FROM tasks t WHERE t.kind IN ('entry', 'plan_entries') AND t.state IN ('pending', 'running') AND json_extract(t.payload_json, '$.upgrade') IS NULL`)
+  );
+  check(
+    "as is whether a poll or a brief is",
+    usesIndex(`SELECT COUNT(*) AS n FROM tasks WHERE kind IN ('poll', 'plan_polls', 'fetch_item') AND state IN ('pending','running')`) &&
+      usesIndex(`SELECT COUNT(*) AS n FROM tasks WHERE kind='brief' AND state IN ('pending','running')`)
+  );
+}
+
 db().close();
 fs.rmSync(SANDBOX, { recursive: true, force: true });
 console.log(`\n${failed === 0 ? "All passed" : "FAILURES PRESENT"}: ${passed} passed, ${failed} failed\n`);
