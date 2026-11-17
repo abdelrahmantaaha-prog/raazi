@@ -1,7 +1,19 @@
 import { Type, type Schema } from "@google/genai";
 import { db, tx } from "./db";
 import { generateJson } from "./ai/client";
-import { COMMON_NAMES, STOP, mayFold, mergeStories, shingle, titleSimilarity, titlesAgree } from "./stories";
+import {
+  COMMON_NAMES,
+  MAX_STORY_ACCOUNTS,
+  MIN_TITLE_WORDS,
+  STOP,
+  TITLE_CERTAIN,
+  TITLE_FLOOR,
+  mergeStories,
+  shingle,
+  splitRunawaysAsync,
+  titleSimilarity,
+  titleWords,
+} from "./stories";
 
 /**
  * The inbox pass: group everything related, deterministically, on request.
@@ -261,6 +273,13 @@ export interface RelatedPair {
   why: "title" | "wire" | "tokens";
   score: number;
   shared: string[];
+  /**
+   * The model was shown a formed story as one line and put a headline with
+   * it: the judgement was against the story as a whole, so the pair counts
+   * as agreeing with every account at the story's core, not just the one
+   * that stood for it.
+   */
+  whole?: boolean;
 }
 
 /** Titles alike; the same wire copy; or enough of the same specific tokens. */
@@ -290,25 +309,77 @@ export const RULES = {
  * one story. What settles it is how many independent things they share.
  */
 export function relatedPairs(sketches: Sketch[], rules = RULES): RelatedPair[] {
+  const out: RelatedPair[] = [];
+  for (const _ of walkPairs(sketches, rules, out)) {
+    // Run straight through.
+  }
+  return out;
+}
+
+/**
+ * The same, giving the server's thread back every few milliseconds: the
+ * walk over a full inbox takes half a minute, and pages must keep loading
+ * while it runs.
+ */
+export async function relatedPairsAsync(
+  sketches: Sketch[],
+  rules = RULES,
+  opts: { withinStories?: boolean } = {}
+): Promise<RelatedPair[]> {
+  const out: RelatedPair[] = [];
+  for (const _ of walkPairs(sketches, rules, out, opts.withinStories ?? false)) await new Promise((r) => setImmediate(r));
+  return out;
+}
+
+function* walkPairs(sketches: Sketch[], rules: typeof RULES, out: RelatedPair[], withinStories = false): Generator<void> {
   const n = sketches.length;
   const df = new Map<string, number>();
   for (const s of sketches) for (const t of s.tokens) df.set(t, (df.get(t) ?? 0) + 1);
   const idf = (t: string) =>
     (Math.log((n + 1) / ((df.get(t) ?? 0) + 1)) + 0.1) * (t.startsWith(TITLE_WORD) ? rules.titleWordWeight : 1);
   const weights = sketches.map((s) => [...s.tokens].reduce((w, t) => w + idf(t), 0));
-  const hoursApart = (a: string, b: string) => Math.abs(new Date(a).getTime() - new Date(b).getTime()) / 3_600_000;
 
-  const out: RelatedPair[] = [];
-  for (let i = 0; i < n; i++) {
-    for (let j = i + 1; j < n; j++) {
+  // Everything a pair needs that belongs to one account is worked out once,
+  // and accounts are walked in time order so each is only ever compared with
+  // those inside the window after it. Comparing all with all — 41 million
+  // pairs for a 9,000-item inbox, each re-reading both headlines — took four
+  // and a half minutes on the server's only thread (17 Nov 2026).
+  const times = sketches.map((s) => new Date(s.acc.at).getTime());
+  const words = sketches.map((s) => new Set(titleWords(s.acc.title)));
+  const order = sketches
+    .map((_, i) => i)
+    .filter((i) => Number.isFinite(times[i]))
+    .sort((x, y) => times[x] - times[y] || sketches[x].acc.sourceId - sketches[y].acc.sourceId);
+  const similarity = (x: number, y: number) => {
+    const A = words[x];
+    const B = words[y];
+    if (!A.size || !B.size) return 0;
+    let shared = 0;
+    for (const w of A) if (B.has(w)) shared++;
+    return shared / Math.min(A.size, B.size);
+  };
+  const window = rules.hours * 3_600_000;
+
+  let slice = Date.now();
+  for (let oi = 0; oi < order.length; oi++) {
+    if (Date.now() - slice > 30) {
+      yield;
+      slice = Date.now();
+    }
+    const i = order[oi];
+    for (let oj = oi + 1; oj < order.length; oj++) {
+      const j = order[oj];
+      if (times[j] - times[i] > window) break;
       const A = sketches[i];
       const B = sketches[j];
-      if (A.acc.storyId && A.acc.storyId === B.acc.storyId) continue;
-      const apart = hoursApart(A.acc.at, B.acc.at);
-      if (!Number.isFinite(apart) || apart > rules.hours) continue;
+      if (!withinStories && A.acc.storyId && A.acc.storyId === B.acc.storyId) continue;
+      const apart = (times[j] - times[i]) / 3_600_000;
+      const [a, b] = A.acc.sourceId < B.acc.sourceId ? [A.acc.sourceId, B.acc.sourceId] : [B.acc.sourceId, A.acc.sourceId];
+      const ts = similarity(i, j);
 
-      if (titlesAgree(A.acc.title, B.acc.title)) {
-        out.push({ a: A.acc.sourceId, b: B.acc.sourceId, why: "title", score: titleSimilarity(A.acc.title, B.acc.title), shared: [] });
+      // titlesAgree(), from the words already in hand.
+      if (Math.min(words[i].size, words[j].size) >= MIN_TITLE_WORDS && ts >= TITLE_CERTAIN) {
+        out.push({ a, b, why: "title", score: ts, shared: [] });
         continue;
       }
       // The same wire copy under two headlines. Never within one outlet,
@@ -316,7 +387,7 @@ export function relatedPairs(sketches: Sketch[], rules = RULES): RelatedPair[] {
       if (A.acc.outlet !== B.acc.outlet) {
         const wire = jaccard(A.shingles, B.shingles);
         if (wire >= rules.wireJaccard) {
-          out.push({ a: A.acc.sourceId, b: B.acc.sourceId, why: "wire", score: wire, shared: [] });
+          out.push({ a, b, why: "wire", score: wire, shared: [] });
           continue;
         }
       }
@@ -331,15 +402,13 @@ export function relatedPairs(sketches: Sketch[], rules = RULES): RelatedPair[] {
       // shared tokens, checked above, is what keeps a thin pair honest.
       const score = sharedWeight / Math.max(0.1, Math.min(weights[i], weights[j]));
       if (score < rules.score) continue;
-      const ts = titleSimilarity(A.acc.title, B.acc.title);
       const withTitle = ts >= rules.titleFloor;
       const alone = shared.length >= rules.tokensAlone && apart <= rules.hoursAlone;
       if (withTitle || alone) {
-        out.push({ a: A.acc.sourceId, b: B.acc.sourceId, why: "tokens", score, shared: shared.sort() });
+        out.push({ a, b, why: "tokens", score, shared: shared.sort() });
       }
     }
   }
-  return out;
 }
 
 /**
@@ -394,28 +463,231 @@ export interface GroupResult {
  * join it, it never dissolves into another, and two stories you named are
  * never merged with each other.
  */
-export function regroupHeld(): GroupResult {
-  const accounts = heldAccounts();
-  if (accounts.length < 2) return { accounts: accounts.length, pairs: 0, grouped: 0, stories: 0, folded: 0 };
-  const pairs = relatedPairs(sketchAccounts(accounts));
-  return applyGroups(accounts, pairs);
+export function regroupHeld(): Promise<GroupResult> {
+  // The pass now gives way to the server while it works, so a press of
+  // "Group related" can arrive during the half-hourly one; it waits for that
+  // pass rather than starting a second over the same stories.
+  globalThis.__raaziRegroup ??= regroupOnce().finally(() => {
+    globalThis.__raaziRegroup = undefined;
+  });
+  return globalThis.__raaziRegroup;
 }
 
-/** Merges the clusters the pairs describe. Separate so the rules can be tested apart from the writes. */
-export function applyGroups(accounts: HeldAccount[], pairs: RelatedPair[]): GroupResult {
-  const parent = new Map<number, number>(accounts.map((a) => [a.sourceId, a.sourceId]));
-  const find = (x: number): number => {
-    let r = x;
-    while (parent.get(r) !== r) r = parent.get(r)!;
-    let c = x;
-    while (parent.get(c) !== r) {
-      const next = parent.get(c)!;
-      parent.set(c, r);
-      c = next;
-    }
-    return r;
+declare global {
+  // eslint-disable-next-line no-var
+  var __raaziRegroup: Promise<GroupResult> | undefined;
+}
+
+async function regroupOnce(): Promise<GroupResult> {
+  // Anything that grew past one event — built by older rules, or by a path
+  // this pass does not police — is taken apart and filed again first, so
+  // the grouping below starts from stories that are each one thing.
+  await splitRunawaysAsync({ inboxOnly: true });
+  const accounts = heldAccounts();
+  if (accounts.length < 2) return { accounts: accounts.length, pairs: 0, grouped: 0, stories: 0, folded: 0 };
+  // Pairs inside stories too: they are what says a story's accounts belong.
+  const pairs = await relatedPairsAsync(sketchAccounts(accounts), RULES, { withinStories: true });
+  const trimmed = trimStrays(accounts, pairs);
+  return applyGroups(trimmed, pairs);
+}
+
+/**
+ * Takes out of each story the held accounts nothing ties to it.
+ *
+ * Kept: an account whose headline matches the story's own (TITLE_FLOOR), and
+ * any account related to one of those by the pass's rules — one step from
+ * the headline. What is further away arrived by a chain, the way "Jensen
+ * Huang's affair" came to hold October's inflation figures, and leaves for a
+ * story of its own; the grouping that follows may then put it with accounts
+ * it does belong with. A story you named or pinned is never touched, and
+ * only accounts still in the inbox are judged. Returns the accounts as they
+ * now stand.
+ */
+export function trimStrays(accounts: HeldAccount[], pairs: RelatedPair[]): HeldAccount[] {
+  const byStory = new Map<number, HeldAccount[]>();
+  for (const a of accounts) if (a.storyId !== null) byStory.set(a.storyId, [...(byStory.get(a.storyId) ?? []), a]);
+  const neighbours = new Map<number, Set<number>>();
+  for (const p of pairs) {
+    neighbours.set(p.a, (neighbours.get(p.a) ?? new Set()).add(p.b));
+    neighbours.set(p.b, (neighbours.get(p.b) ?? new Set()).add(p.a));
+  }
+  const storyRow = db().prepare("SELECT title, named_by, pinned FROM stories WHERE id = ?");
+  const reasonOf = db().prepare("SELECT reason FROM story_sources WHERE story_id = ? AND source_id = ?");
+  // Filed on arrival by its headline against this story's, or placed by the
+  // model under the core rule: tied to the story by something other than a
+  // chain, though no pair below says so.
+  const tiedByReason = (storyId: number, sourceId: number) => {
+    const why = (reasonOf.get(storyId, sourceId) as { reason: string | null } | undefined)?.reason ?? "";
+    return why.startsWith("Headline overlap") || why.startsWith(MODEL_CHECKED);
   };
+  const firstOf = db().prepare(
+    `SELECT ss.source_id AS id FROM story_sources ss JOIN sources s ON s.id = ss.source_id
+      WHERE ss.story_id = ? ORDER BY COALESCE(s.published_at, s.added_at), s.id LIMIT 1`
+  );
+  const strays: { acc: HeldAccount; title: string }[] = [];
+  for (const [storyId, members] of byStory) {
+    if (members.length < 2) continue;
+    const row = storyRow.get(storyId) as { title: string; named_by: string; pinned: number } | undefined;
+    if (!row || row.named_by === "user" || row.pinned) continue;
+    const opener = (firstOf.get(storyId) as { id: number } | undefined)?.id;
+    const anchored = new Set(
+      members
+        .filter(
+          (m) => m.sourceId === opener || titleSimilarity(m.title, row.title) >= TITLE_FLOOR || tiedByReason(storyId, m.sourceId)
+        )
+        .map((m) => m.sourceId)
+    );
+    for (const m of members) {
+      if (anchored.has(m.sourceId)) continue;
+      const near = neighbours.get(m.sourceId);
+      if (near && [...near].some((id) => anchored.has(id))) continue;
+      strays.push({ acc: m, title: row.title });
+    }
+  }
+  if (!strays.length) return accounts;
+
+  const moved = new Map<number, number>();
+  tx(() => {
+    const unlink = db().prepare("DELETE FROM story_sources WHERE source_id = ?");
+    const open = db().prepare("INSERT INTO stories (title, shingle, first_seen, last_seen) VALUES (?, ?, ?, ?)");
+    const link = db().prepare("INSERT INTO story_sources (story_id, source_id, reason) VALUES (?, ?, ?)");
+    for (const { acc, title } of strays) {
+      unlink.run(acc.sourceId);
+      const id = Number(open.run(acc.title, shingle(acc.title), acc.at, acc.at).lastInsertRowid);
+      link.run(id, acc.sourceId, `Taken out of "${title.slice(0, 80)}": nothing tied it to that story's headline.`);
+      moved.set(acc.sourceId, id);
+    }
+  });
+  console.log(`[corpus] inbox: took ${strays.length} unrelated account(s) out of the stories they had drifted into`);
+  return accounts.map((a) => (moved.has(a.sourceId) ? { ...a, storyId: moved.get(a.sourceId)!, namedBy: "auto" } : a));
+}
+
+/**
+ * How a grouping by the model under the core rule explains itself — and how
+ * trimStrays knows not to undo it. Older groupings by the model say "on
+ * headlines" and are judged like any other.
+ */
+const MODEL_CHECKED = "Grouped in the inbox by the model, checked against the story";
+
+/** How many of a cluster's earliest accounts a newcomer is measured against. */
+export const CORE = 6;
+/** The share of the core a newcomer (or a whole cluster) has to agree with. */
+export const CORE_SHARE = 0.5;
+/** The widest one event's held accounts may be spread, in hours. */
+export const EVENT_HOURS = 72;
+
+const PAIR_TIER = { title: 0, wire: 1, tokens: 2 } as const;
+
+/**
+ * Merges the clusters the pairs describe. Separate so the rules can be tested apart from the writes.
+ *
+ * Not a chain. This used to join every pair it was given (union-find), so
+ * one account resembling two others made all three one story, and a pass
+ * over nine thousand held accounts linked them into piles of hundreds — a
+ * story of 659 accounts by 17 November 2026, from Iran's supreme leader to
+ * the Michigan Senate race. Now clusters grow strongest pair first, and two
+ * clusters join only when:
+ *
+ *  - at least half the pairs between their cores are related (the core is
+ *    a cluster's first CORE accounts, oldest first), so a newcomer has to
+ *    agree with what the event IS, not with whichever account it touches;
+ *  - they are not two stories already formed — folding stories is
+ *    regroupRecent's job, on its stricter headline rule;
+ *  - together they stay within EVENT_HOURS and MAX_STORY_ACCOUNTS.
+ *
+ * Missing a join leaves a story split, which is one click from fixed; a
+ * wrong join hides accounts inside a story, which nobody sees.
+ */
+export function applyGroups(accounts: HeldAccount[], pairs: RelatedPair[]): GroupResult {
   const bySource = new Map(accounts.map((a) => [a.sourceId, a]));
+  const ms = (iso: string) => {
+    const t = new Date(iso).getTime();
+    return Number.isFinite(t) ? t : NaN;
+  };
+
+  // A story is "formed" — a unit that is never folded into another here —
+  // once it has a second account anywhere (held or decided), or you named it.
+  // A story of one is just where a lone account was filed.
+  const totals = new Map<number, number>();
+  {
+    const count = db().prepare("SELECT COUNT(*) AS n FROM story_sources WHERE story_id = ?");
+    for (const a of accounts) {
+      if (a.storyId !== null && !totals.has(a.storyId)) totals.set(a.storyId, (count.get(a.storyId) as { n: number }).n);
+    }
+  }
+  const formed = (a: HeldAccount) => a.storyId !== null && (a.namedBy === "user" || (totals.get(a.storyId) ?? 0) > 1);
+
+  interface Cluster {
+    members: HeldAccount[];
+    /** The formed story this cluster is built on, if any. */
+    story: number | null;
+    named: boolean;
+    /** Accounts in the formed story beyond the held ones here. */
+    outside: number;
+    first: number;
+    last: number;
+  }
+  const clusterOf = new Map<number, Cluster>();
+  const byStory = new Map<number, Cluster>();
+  for (const a of [...accounts].sort((x, y) => x.at.localeCompare(y.at) || x.sourceId - y.sourceId)) {
+    const t = ms(a.at);
+    if (formed(a)) {
+      let c = byStory.get(a.storyId!);
+      if (!c) {
+        c = { members: [], story: a.storyId, named: false, outside: totals.get(a.storyId!) ?? 0, first: t, last: t };
+        byStory.set(a.storyId!, c);
+      }
+      c.members.push(a);
+      c.outside--;
+      c.named ||= a.namedBy === "user";
+      c.first = Math.min(c.first, t);
+      c.last = Math.max(c.last, t);
+      clusterOf.set(a.sourceId, c);
+    } else {
+      clusterOf.set(a.sourceId, { members: [a], story: null, named: false, outside: 0, first: t, last: t });
+    }
+  }
+
+  const key = (x: number, y: number) => (x < y ? `${x}-${y}` : `${y}-${x}`);
+  const related = new Set<string>();
+  /** Accounts a "whole story" pair vouches for: every core account of that story. */
+  const wholeWith = new Map<number, Set<number>>();
+  for (const p of pairs) {
+    related.add(key(p.a, p.b));
+    if (p.whole) {
+      for (const [lone, rep] of [[p.a, p.b], [p.b, p.a]]) {
+        const c = clusterOf.get(rep);
+        if (c?.story != null) wholeWith.set(lone, new Set([...(wholeWith.get(lone) ?? []), ...c.members.map((m) => m.sourceId)]));
+      }
+    }
+  }
+  const agree = (x: number, y: number) => related.has(key(x, y)) || wholeWith.get(x)?.has(y) || wholeWith.get(y)?.has(x);
+  const core = (c: Cluster) => c.members.slice(0, CORE).map((m) => m.sourceId);
+
+  const mayJoin = (X: Cluster, Y: Cluster): boolean => {
+    if (X === Y) return false;
+    if (X.story !== null && Y.story !== null) return false;
+    if (X.named && Y.named) return false;
+    const held = X.members.length + Y.members.length;
+    if (held + X.outside + Y.outside > MAX_STORY_ACCOUNTS) return false;
+    const first = Math.min(X.first, Y.first);
+    const last = Math.max(X.last, Y.last);
+    if (Number.isFinite(first) && Number.isFinite(last) && (last - first) / 3_600_000 > EVENT_HOURS) return false;
+    const cx = core(X);
+    const cy = core(Y);
+    let agreeing = 0;
+    for (const x of cx) for (const y of cy) if (agree(x, y)) agreeing++;
+    return agreeing >= Math.max(1, Math.ceil(cx.length * cy.length * CORE_SHARE));
+  };
+  const join = (X: Cluster, Y: Cluster) => {
+    // The cluster built on a formed story absorbs the other, so its id survives.
+    const [into, from] = Y.story !== null ? [Y, X] : [X, Y];
+    into.members = [...into.members, ...from.members].sort((x, y) => x.at.localeCompare(y.at) || x.sourceId - y.sourceId);
+    into.first = Math.min(into.first, from.first);
+    into.last = Math.max(into.last, from.last);
+    into.named ||= from.named;
+    for (const m of from.members) clusterOf.set(m.sourceId, into);
+  };
   // Why each account was grouped, so a wrong grouping is explicable from
   // the story page: the first pair that reached it says.
   const because = new Map<number, string>();
@@ -425,70 +697,61 @@ export function applyGroups(accounts: HeldAccount[], pairs: RelatedPair[]): Grou
       : p.why === "wire"
         ? "Grouped in the inbox: the same wire copy."
         : p.shared[0]?.startsWith("model: ")
-          ? `Grouped in the inbox by the model, on headlines${p.shared[0].length > 7 ? ` — ${p.shared[0].slice(7)}` : ""}.`
+          ? `${MODEL_CHECKED}${p.shared[0].length > 7 ? ` — ${p.shared[0].slice(7)}` : ""}.`
           : `Grouped in the inbox: shares ${p.shared.map((s) => s.replace(TITLE_WORD, "")).slice(0, 4).join(", ")}.`;
-  for (const p of [...pairs].sort((x, y) => x.a - y.a || x.b - y.b)) {
-    const A = bySource.get(p.a);
-    const B = bySource.get(p.b);
-    if (!A || !B) continue;
-    if (A.namedBy === "user" && B.namedBy === "user" && A.storyId !== B.storyId) continue;
+  // Strongest evidence first — matching headlines, then shared wire copy,
+  // then shared names by score — so a cluster's core is made of its surest
+  // accounts before anything weaker is measured against it. Ties by id, so
+  // the same inbox always groups the same way.
+  const ordered = [...pairs].sort(
+    (x, y) => PAIR_TIER[x.why] - PAIR_TIER[y.why] || y.score - x.score || x.a - y.a || x.b - y.b
+  );
+  for (const p of ordered) {
+    if (!bySource.has(p.a) || !bySource.has(p.b)) continue;
+    const X = clusterOf.get(p.a)!;
+    const Y = clusterOf.get(p.b)!;
+    if (!mayJoin(X, Y)) continue;
     for (const id of [p.a, p.b]) if (!because.has(id)) because.set(id, explain(p));
-    const ra = find(p.a);
-    const rb = find(p.b);
-    if (ra !== rb) parent.set(Math.max(ra, rb), Math.min(ra, rb));
+    join(X, Y);
   }
 
-  const clusters = new Map<number, HeldAccount[]>();
-  for (const a of accounts) {
-    const r = find(a.sourceId);
-    clusters.set(r, [...(clusters.get(r) ?? []), a]);
-  }
+  const clusters = [...new Set(clusterOf.values())]
+    .filter((c) => c.members.length > 1 && !(c.story !== null && c.members.every((m) => m.storyId === c.story)))
+    .sort((x, y) => x.members[0].sourceId - y.members[0].sourceId);
 
   let grouped = 0;
   let stories = 0;
   let folded = 0;
   tx(() => {
-    const accountsOf = db().prepare("SELECT COUNT(*) AS n FROM story_sources WHERE story_id = ?");
     const link = db().prepare("INSERT OR IGNORE INTO story_sources (story_id, source_id, reason) VALUES (?, ?, ?)");
     const touch = db().prepare("UPDATE stories SET last_seen = MAX(last_seen, ?) WHERE id = ?");
-    for (const members of [...clusters.values()].sort((x, y) => x[0].sourceId - y[0].sourceId)) {
-      if (members.length < 2) continue;
-      const storyIds = [...new Set(members.map((m) => m.storyId).filter((id): id is number => id !== null))].sort((x, y) => x - y);
-      if (storyIds.length === 1 && members.every((m) => m.storyId !== null)) continue;
-
-      const named = storyIds.filter((id) => members.some((m) => m.storyId === id && m.namedBy === "user"));
+    const reason = db().prepare("UPDATE story_sources SET reason = ? WHERE story_id = ? AND source_id = ?");
+    for (const c of clusters) {
+      // Built on a formed story: that story. Otherwise the story the earliest
+      // account was filed under, so its headline names the event.
+      const first = c.members[0];
       let keep: number;
-      if (named.length) keep = named[0];
-      else if (storyIds.length) {
-        keep = [...storyIds].sort(
-          (x, y) => (accountsOf.get(y) as { n: number }).n - (accountsOf.get(x) as { n: number }).n || x - y
-        )[0];
-      } else {
-        const first = [...members].sort((x, y) => x.at.localeCompare(y.at) || x.sourceId - y.sourceId)[0];
+      if (c.story !== null) keep = c.story;
+      else if (first.storyId !== null) keep = first.storyId;
+      else {
         keep = Number(
           db()
             .prepare("INSERT INTO stories (title, shingle, first_seen, last_seen) VALUES (?, ?, ?, ?)")
             .run(first.title, shingle(first.title), first.at, first.at).lastInsertRowid
         );
       }
-      // A story opened days apart from the kept one is another event, however
-      // related one held account makes them look; it and its accounts stay.
-      const apart = new Set<number>();
-      for (const id of storyIds) {
-        if (id === keep) continue;
-        if (members.some((m) => m.storyId === id && m.namedBy === "user")) continue;
-        if (!mayFold(keep, id)) {
-          apart.add(id);
-          continue;
-        }
-        mergeStories(keep, id);
-        folded++;
-      }
-      for (const m of members) {
+      for (const m of c.members) {
         if (m.storyId === keep) continue;
-        if (m.storyId !== null && apart.has(m.storyId)) continue;
-        if (m.storyId !== null && members.some((x) => x.storyId === m.storyId && x.namedBy === "user")) continue;
-        link.run(keep, m.sourceId, because.get(m.sourceId) ?? "Grouped with the inbox's related accounts.");
+        const why = because.get(m.sourceId) ?? "Grouped with the inbox's related accounts.";
+        if (m.storyId !== null) {
+          // A story of one: where this account was filed alone. Folding it
+          // moves the account and retires the empty story.
+          mergeStories(keep, m.storyId);
+          reason.run(why, keep, m.sourceId);
+          folded++;
+        } else {
+          link.run(keep, m.sourceId, why);
+        }
         touch.run(m.at, keep);
         grouped++;
       }
@@ -628,9 +891,23 @@ export function pairsFromModel(
     const times = unique.map((id) => new Date(bySource.get(id)!.at).getTime()).filter((t) => Number.isFinite(t));
     if (times.length && (Math.max(...times) - Math.min(...times)) / 3_600_000 > MODEL_GROUP_HOURS) continue;
     accepted++;
-    const head = unique[0];
-    for (const other of unique.slice(1)) {
-      pairs.push({ a: Math.min(head, other), b: Math.max(head, other), why: "tokens", score: 1, shared: [`model: ${(g.label ?? "").slice(0, 60)}`] });
+    // Every member with every other: the model said they are all one event,
+    // and applyGroups asks a newcomer to agree with most of a cluster's core,
+    // which a star around the first member would never satisfy. A pair with
+    // the account standing for a formed story vouches for the whole story.
+    const reps = new Set(storyRep.values());
+    for (let x = 0; x < unique.length; x++) {
+      for (let y = x + 1; y < unique.length; y++) {
+        const [a, b] = [Math.min(unique[x], unique[y]), Math.max(unique[x], unique[y])];
+        pairs.push({
+          a,
+          b,
+          why: "tokens",
+          score: 1,
+          shared: [`model: ${(g.label ?? "").slice(0, 60)}`],
+          ...(reps.has(a) || reps.has(b) ? { whole: true } : {}),
+        });
+      }
     }
   }
   return { pairs, accepted };
@@ -674,7 +951,7 @@ export async function regroupByHeadlines(opts: { timeoutMs?: number } = {}): Pro
 
 /** The whole pass: the rules first, then the model on what they left alone. */
 export async function regroupInbox(): Promise<{ rules: GroupResult; model: ModelGroupResult }> {
-  const rules = regroupHeld();
+  const rules = await regroupHeld();
   const model = await regroupByHeadlines();
   return { rules, model };
 }

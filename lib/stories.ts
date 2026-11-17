@@ -33,14 +33,29 @@ const WINDOW_HOURS = 72;
  */
 export const MAX_STORY_DAYS = 7;
 
+/**
+ * The most accounts a story Raazi built itself may hold.
+ *
+ * Every path that grows a story — filing, folding, the inbox's grouping —
+ * stops here, and a story past it is taken apart (splitRunaways). Without a
+ * ceiling, grouping that links accounts pair by pair chains: A is like B, B
+ * like C, and by 17 November 2026 one "story" held 659 accounts — Iran's
+ * supreme leader, the Michigan Senate race, California's voter rolls — under
+ * the headline of a fiancé profile. The largest real event on this desk
+ * draws a few dozen outlets; past this the next account opens a second
+ * story, which is untidy, rather than hiding inside the first, which is not
+ * visible at all.
+ */
+export const MAX_STORY_ACCOUNTS = 60;
+
 /** Headline overlap required before the second signal is even consulted.
  *  Low, because the second signal is what decides: "McConnell returns after
  *  months-long absence for crucial vote" shares two words in five with the
  *  wire's headline, and the same three Kentuckians in its lede. */
-const TITLE_FLOOR = 0.34;
+export const TITLE_FLOOR = 0.34;
 
 /** With this much headline overlap, shared entities are not required. */
-const TITLE_CERTAIN = 0.72;
+export const TITLE_CERTAIN = 0.72;
 
 /** Shared known entities required at the lower headline threshold. */
 const MIN_SHARED_ENTITIES = 2;
@@ -53,7 +68,7 @@ const MIN_SHARED_ENTITIES = 2;
  * things were filed as one story because 1/1 is a perfect overlap. A short
  * headline still groups — but only with the second signal agreeing.
  */
-const MIN_TITLE_WORDS = 3;
+export const MIN_TITLE_WORDS = 3;
 
 export const STOP = new Set([
   "the", "a", "an", "and", "or", "but", "of", "in", "on", "at", "to", "for", "with", "by",
@@ -322,6 +337,7 @@ export function fileSource(sourceId: number): { storyId: number; created: boolea
         WHERE s.last_seen >= datetime(?, '-${WINDOW_HOURS} hours')
           AND s.first_seen <= datetime(?, '+${WINDOW_HOURS} hours')
           AND s.first_seen >= datetime(?, '-${MAX_STORY_DAYS} days')
+          AND (SELECT COUNT(*) FROM story_sources x WHERE x.story_id = s.id) < ${MAX_STORY_ACCOUNTS}
         ORDER BY abs(julianday(s.last_seen) - julianday(?))
         LIMIT 400`
     )
@@ -664,6 +680,7 @@ export function regroupRecent(opts: { hours?: number; limit?: number } = {}): nu
       const score = titleSimilarity(a.title, b.title, weigh);
       if (score < TITLE_FLOOR) continue;
       if (!titlesAgree(a.title, b.title, weigh) && overlap(namesFor(a.id), namesFor(b.id)) < MIN_SHARED_NAMES) continue;
+      if (a.accounts + b.accounts > MAX_STORY_ACCOUNTS) continue;
 
       // The one with more accounts keeps its name; on a tie, the older.
       const [keep, drop] = b.accounts > a.accounts ? [b, a] : [a, b];
@@ -698,28 +715,66 @@ export function mayFold(a: number, b: number): boolean {
  * Takes apart the stories that grew past one event and files their
  * accounts again, oldest first, under the rules as they are now.
  *
- * A story Raazi named itself whose accounts span more than MAX_STORY_DAYS
- * cannot be one event under the current rules, so it was built by the old
- * ones. A story you named or pinned is left alone. Returns how many stories
- * were taken apart and how many accounts were filed again.
+ * A story Raazi named itself whose accounts span more than MAX_STORY_DAYS,
+ * or that holds more than MAX_STORY_ACCOUNTS, cannot be one event under the
+ * current rules, so it was built by older ones. A story you named or pinned
+ * is left alone. Returns how many stories were taken apart and how many
+ * accounts were filed again.
+ *
+ * `inboxOnly` looks only at stories with something still waiting in the
+ * inbox, which is what the regroup runs every pass: over every story ever
+ * filed the query takes the better part of two minutes.
  */
-export function splitRunaways(): { stories: number; accounts: number } {
+export function splitRunaways(opts: { inboxOnly?: boolean } = {}): { stories: number; accounts: number } {
+  const ids = runawayIds(opts.inboxOnly ?? false);
+  const accounts = drain(refileSteps(ids));
+  if (ids.length) {
+    console.log(`[corpus] stories: took apart ${ids.length} that had grown past one event, filing ${accounts} accounts again`);
+  }
+  return { stories: ids.length, accounts };
+}
+
+/**
+ * The same, giving the server's thread back between accounts: the first pass
+ * over a library the old rules had piled up files a couple of thousand
+ * accounts again, which takes minutes, and Raazi must keep answering meanwhile.
+ */
+export async function splitRunawaysAsync(opts: { inboxOnly?: boolean } = {}): Promise<{ stories: number; accounts: number }> {
+  const ids = runawayIds(opts.inboxOnly ?? false);
+  const steps = refileSteps(ids);
+  let slice = Date.now();
+  let next = steps.next();
+  while (!next.done) {
+    if (Date.now() - slice > 30) {
+      await new Promise((r) => setImmediate(r));
+      slice = Date.now();
+    }
+    next = steps.next();
+  }
+  if (ids.length) {
+    console.log(`[corpus] stories: took apart ${ids.length} that had grown past one event, filing ${next.value} accounts again`);
+  }
+  return { stories: ids.length, accounts: next.value };
+}
+
+function runawayIds(inboxOnly: boolean): number[] {
+  const inbox = inboxOnly
+    ? `AND s.id IN (SELECT ss2.story_id FROM feed_items i JOIN story_sources ss2 ON ss2.source_id = i.source_id
+                    WHERE i.state = 'held' AND i.decided_at IS NULL)`
+    : "";
   const runaways = db()
     .prepare(
       `SELECT s.id FROM stories s
          JOIN story_sources ss ON ss.story_id = s.id
          JOIN sources src ON src.id = ss.source_id
-        WHERE s.named_by = 'auto' AND s.pinned = 0
+        WHERE s.named_by = 'auto' AND s.pinned = 0 ${inbox}
         GROUP BY s.id
-       HAVING julianday(MAX(COALESCE(src.published_at, src.added_at)))
+       HAVING COUNT(*) > ${MAX_STORY_ACCOUNTS}
+           OR julianday(MAX(COALESCE(src.published_at, src.added_at)))
             - julianday(MIN(COALESCE(src.published_at, src.added_at))) > ${MAX_STORY_DAYS}`
     )
     .all() as { id: number }[];
-  const accounts = refileStories(runaways.map((r) => r.id));
-  if (runaways.length) {
-    console.log(`[corpus] stories: took apart ${runaways.length} that had grown past one event, filing ${accounts} accounts again`);
-  }
-  return { stories: runaways.length, accounts };
+  return runaways.map((r) => r.id);
 }
 
 /**
@@ -737,11 +792,17 @@ export function rebuildStories(since: string): { stories: number; accounts: numb
   // stories is the beat" bar is sized for the 300 stories of a normal pass,
   // and over thousands it lets the beat's names back in. The regroup after
   // the next poll covers the recent days at its usual size.
-  return { stories: ids.length, accounts: refileStories(ids) };
+  return { stories: ids.length, accounts: drain(refileSteps(ids)) };
 }
 
-/** Dissolves the stories and files their accounts again, oldest first. */
-function refileStories(storyIds: number[]): number {
+function drain<T>(steps: Generator<void, T>): T {
+  let next = steps.next();
+  while (!next.done) next = steps.next();
+  return next.value;
+}
+
+/** Dissolves the stories and files their accounts again, oldest first; one step per account. */
+function* refileSteps(storyIds: number[]): Generator<void, number> {
   if (!storyIds.length) return 0;
   // Measured now, while the stories it is measured on still exist.
   titleWeights();
@@ -759,7 +820,10 @@ function refileStories(storyIds: number[]): number {
       drop.run(id);
     }
   });
-  for (const m of members) fileSource(m.id);
+  for (const m of members) {
+    fileSource(m.id);
+    yield;
+  }
   return members.length;
 }
 

@@ -1,102 +1,71 @@
 # Raazi on your phone
 
-A small Android app that finds whichever computer is running Raazi on your
-network and opens its library.
+An Android app that finds the computer running Raazi on your network and opens
+your library in it — the inbox, the reader, the pedia, everything the web app
+does, laid out for the phone.
 
-It is a wrapper around the web app, not a second implementation of it. Raazi
-already reads well on a phone — the reader, entries, the connections graph, Ask
-and Study all work as they are — and a native rewrite would only be a second
-version to keep in step with the first.
+It is a window onto the web app, not a second app: Raazi already lays itself
+out for a phone, and a native copy would be a second version always running
+behind. What the app adds is what a browser tab cannot do:
 
-## What it does
+- **Finds the computer by itself.** It tries the addresses it used before (the
+  home Wi-Fi one and, with Tailscale, the one from away) all at once; if none
+  answers it asks every address on the phone's network whether it is a Raazi
+  (`GET /api/hello` → `{"app":"corpus"}`), which takes about a second. One
+  found opens straight away.
+- **Signs in once.** Settings → Phone & other laptop → *Show the code* on the computer; tap
+  *Scan the code* in the app. Pasting the sign-in link or the token works too,
+  and so does opening the link from the camera app. A computer that turns up
+  under a new address is offered the tokens already known before anyone is
+  asked.
+- **Listen works.** Android's WebView has no speech synthesis at all, so the
+  reader's Listen button had nothing to speak with. `assets/phone.js` stands in
+  a `speechSynthesis` backed by the phone's own voices (`PhoneVoice.kt`) — the
+  same API the reader already uses, so the web app did not change for it.
+  Android's engine cannot pause, only stop, so pause stops and resume says the
+  current sentence again.
+- **Back closes what is open first** — the inbox sheet, a drawer, the book —
+  by sending Escape, which every panel in Raazi already answers; then it goes
+  back a page; from the front page it shows the connect screen, which is also
+  how you switch computers.
+- **The screen stays on while a book is open** (the reader asks for a wake
+  lock; the app honours it).
+- **Files and downloads** go through Android's own picker and download manager,
+  the download carrying the sign-in cookie.
+- **Links out** (articles, sources) open in the phone's browser.
 
-On launch it tries the machine you used last. That is one request and it
-normally succeeds, so you go straight into the library.
+The bridge between the page and the phone (`RaaziPhone`) is offered to Raazi's
+own address only, so pages from other sites shown inside the inbox cannot
+reach it.
 
-If that fails, it asks all 254 addresses of your phone's own subnet whether
-they are a Raazi, in batches of 48, with a 400 ms patience each. That takes
-about a second. Anything that answers `/api/hello` with `{"app":"corpus"}` is
-listed with its machine name and how much it holds; if exactly one answers, it
-opens automatically.
+## Before it can work: Sharing on, and the firewall
 
-Failing all that, you can type the address by hand.
+Raazi listens only to its own computer until **Settings → Phone & other laptop → Sharing** is set to
+*Shared*. Then the phone needs the token, once — that is the code above.
 
-## Before it can work: LAN mode and the token
-
-Raazi listens on `127.0.0.1` by default, which means your phone cannot reach
-it at all — deliberately, because the alternative is a library that anyone on
-the same Wi-Fi can delete sources from and spend your quota on.
-
-To use it from a phone, on the computer:
-
-1. Settings → turn on **LAN mode**. That records the choice and generates a
-   token (32 random bytes, kept in `data/config.json` beside the API keys).
-2. Restart Raazi, so it binds every interface instead of just this machine.
-   The launcher reads the setting and starts `npm run start:lan` for you; from
-   a terminal it is `npm run dev:lan` or `npm run start:lan`.
-3. Settings shows the sign-in link — `http://<address>:5400/login?token=…` —
-   as a link to scan or a code to type.
-
-On the phone, the helper finds the machine as before (`/api/hello` stays open,
-because a phone has to find a library before it can sign in to it) and asks for
-the token once. It is remembered per machine, and the WebView carries it as a
-cookie afterwards. Anything without it gets a 401.
-
-## Before it can work: the firewall
-
-**Windows blocks incoming connections by default**, so a freshly installed
-Raazi is invisible to your phone even while it is running perfectly. From the
-phone this looks identical to Raazi being switched off, which makes it worth
-ruling out first.
-
-Open PowerShell **as Administrator** and run:
+**Windows blocks incoming connections by default**, which from the phone looks
+exactly like Raazi being switched off. Open PowerShell **as Administrator** once:
 
 ```powershell
 New-NetFirewallRule -DisplayName "Raazi (local network)" -Direction Inbound -Action Allow -Protocol TCP -LocalPort 5400 -Profile Private
 ```
 
-`-Profile Private` matters: it opens the port on networks you have marked as
-private (home, office) and leaves it shut on public Wi-Fi. Check that your
-network is classified private with `Get-NetConnectionProfile`.
+Both devices must be on the same Wi-Fi (a guest network is walled off), or on
+Tailscale.
 
-To undo it later:
+## Building it
 
 ```powershell
-Remove-NetFirewallRule -DisplayName "Raazi (local network)"
+powershell -ExecutionPolicy Bypass -File android\build-apk.ps1
 ```
 
-## Building the APK
-
-There is no Android toolchain on the machine Raazi is developed on, so the APK
-comes out of GitHub Actions.
-
-1. Make this a git repository and push it somewhere on GitHub:
-
-   ```bash
-   git init && git add . && git commit -m "Raazi" && git branch -M main
-   ```
-
-   Add `data/` and `node_modules/` to `.gitignore` first — `data/` holds your
-   library and your API keys.
-
-2. Push. The **Android helper** workflow runs on any change under `android/`,
-   or on demand from the Actions tab.
-
-3. Download `corpus-helper-apk` from the finished run, unzip, and install the
-   APK on your phone. You will have to allow installation from unknown sources
-   once — it is an unsigned debug build, which is the normal way to install
-   something you built yourself.
-
-## Notes
-
-- Both devices must be on the same Wi-Fi. A guest network is deliberately
-  walled off from the rest of the house and will not reach your computer.
-- The app permits cleartext HTTP, because Raazi has no certificate. It is only
-  ever pointed at an address found on your own network or typed in by hand.
-- Exports download through Android's own download manager and land in
-  Downloads.
-- Back from a library's front page returns to the connect screen, which is also
-  how you switch between machines.
+Uses the toolchain in `E:\Claude\tools\android` and writes
+`dist\raazi-phone.apk`, signed with the release key in `android\.signing\`
+(made on the first build, kept out of git; a copy of its password is in the
+owner's vault). Every build signed with that key installs over the last one.
+`-Debug` builds one whose pages can be inspected from the computer
+(`adb forward tcp:9333 localabstract:webview_devtools_remote_<pid>`) — it is
+signed differently, so switching between the two means uninstalling first.
 
 ## What was tried and dropped
 
@@ -105,4 +74,4 @@ instantly instead of sweeping. Every pure-JS responder needs node's `dgram`,
 which Next's bundler will not resolve inside the instrumentation hook — the
 attempt took the entire site down twice before it was abandoned. Multicast is
 also dropped by many home access points, so the sweep would have been needed
-anyway, and one mechanism that always works beats two that sometimes do.
+anyway.

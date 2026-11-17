@@ -14,5 +14,5 @@ dependencyResolutionManagement {
     }
 }
 
-rootProject.name = "CorpusHelper"
+rootProject.name = "Raazi"
 include(":app")

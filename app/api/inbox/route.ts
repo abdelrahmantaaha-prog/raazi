@@ -38,7 +38,7 @@ export async function POST(req: Request) {
   if (body.action === "group") {
     // The rules first, then the subject bundles, then the same-event pass
     // inside each bundle, where a small model actually finds them.
-    const rules = regroupHeld();
+    const rules = await regroupHeld();
     const bundled = await bundleInbox();
     const events = bundled.error ? null : await groupEventsInBundles();
     // And how much each new item matters, for the priority order. Rated once

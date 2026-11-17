@@ -201,8 +201,8 @@ function regroupStories(): void {
     // And the fuller pass over what is waiting in the inbox, now the
     // articles behind the headlines have been read; then the cheap model
     // on whatever the rules left alone, without holding the poll up.
-    regroupHeld();
-    void bundleInbox()
+    void regroupHeld()
+      .then(() => bundleInbox())
       .then((b) => (b.error ? undefined : groupEventsInBundles()))
       // Then how much each new item matters, for the inbox's priority order.
       .then(() => rateInbox())

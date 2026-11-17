@@ -100,12 +100,99 @@ export function LanCard() {
               Copy
             </Button>
           </div>
+          {lan.enabled && lan.loginUrls.length ? <PhonePairing urls={lan.loginUrls} /> : null}
         </div>
       ) : (
         <p className="mt-3 text-sm text-[var(--color-muted)]">Loading…</p>
       )}
       {error ? <p className="mt-2 text-sm text-red-700">{error}</p> : null}
     </Card>
+  );
+}
+
+/**
+ * A code the phone app scans to connect, once.
+ *
+ * It carries the sign-in link — address and token — so it is drawn only on
+ * request, like the token above it. The home network's address is offered
+ * first; a Tailscale one (100.64–100.127) is for when the phone is away from
+ * home. Any phone camera can read it too, and opening the link signs that
+ * phone's browser in.
+ */
+function PhonePairing({ urls }: { urls: string[] }) {
+  const ordered = [...urls].sort((a, b) => Number(isTailscale(a)) - Number(isTailscale(b)));
+  const [shown, setShown] = useState(false);
+  const [pick, setPick] = useState(0);
+  const url = ordered[Math.min(pick, ordered.length - 1)];
+  return (
+    <div className="rounded-lg border border-[var(--color-rule)] p-3 text-sm">
+      <div className="flex flex-wrap items-center gap-2">
+        <span className="font-medium">Your phone</span>
+        <span className="text-[var(--color-muted)]">
+          In the Raazi phone app, tap <em>Scan the code</em> and point it here.
+        </span>
+        <Button variant="ghost" onClick={() => setShown((v) => !v)}>
+          {shown ? "Hide the code" : "Show the code"}
+        </Button>
+      </div>
+      {shown ? (
+        <div className="mt-3 flex flex-wrap items-start gap-4">
+          <QrCode text={url} />
+          {ordered.length > 1 ? (
+            <div className="space-y-1">
+              {ordered.map((u, i) => (
+                <label key={u} className="flex items-center gap-2">
+                  <input type="radio" checked={u === url} onChange={() => setPick(i)} />
+                  <span>{isTailscale(u) ? "Away from home (Tailscale)" : "On the home Wi-Fi"}</span>
+                  <code className="text-xs text-[var(--color-muted)]">{new URL(u).host}</code>
+                </label>
+              ))}
+            </div>
+          ) : null}
+        </div>
+      ) : null}
+    </div>
+  );
+}
+
+function isTailscale(url: string): boolean {
+  const m = /^https?:\/\/100\.(\d+)\./.exec(url);
+  return !!m && Number(m[1]) >= 64 && Number(m[1]) <= 127;
+}
+
+/** Drawn as one SVG path, dark on white whatever the theme, which is what scanners read best. */
+function QrCode({ text }: { text: string }) {
+  const [path, setPath] = useState<{ d: string; n: number } | null>(null);
+  useEffect(() => {
+    let gone = false;
+    void import("qrcode-generator").then(({ default: qrcode }) => {
+      const qr = qrcode(0, "M");
+      qr.addData(text);
+      qr.make();
+      const n = qr.getModuleCount();
+      let d = "";
+      for (let r = 0; r < n; r++) for (let c = 0; c < n; c++) if (qr.isDark(r, c)) d += `M${c} ${r}h1v1h-1z`;
+      if (!gone) setPath({ d, n });
+    });
+    return () => {
+      gone = true;
+    };
+  }, [text]);
+  if (!path) return <div className="h-[200px] w-[200px] rounded bg-neutral-100" />;
+  const q = 4;
+  return (
+    <svg
+      width={200}
+      height={200}
+      viewBox={`${-q} ${-q} ${path.n + 2 * q} ${path.n + 2 * q}`}
+      shapeRendering="crispEdges"
+      role="img"
+      aria-label="Code for the phone app"
+      className="rounded"
+    >
+      <rect x={-q} y={-q} width={path.n + 2 * q} height={path.n + 2 * q} fill="#fff" />
+      <path d={path.d} fill="#000" />
+    </svg>
   );
 }
 

@@ -262,6 +262,36 @@ export async function bundleInbox(opts: { timeoutMs?: number; chunk?: number } =
   }
   if (!assignments.size) return { ...nothing, error, model: [...models].join(", ") || null };
 
+  // A bundle past BIG_SUBJECT is a beat, not a subject: chunk after chunk
+  // reuses its label, and "Trump administration" had 813 headlines by 17
+  // November 2026 — the arch, the seafood strategy and the chief of staff
+  // read as one pile. Each is put back to the model alone, to be split into
+  // the subjects inside it.
+  if (!error) {
+    const lineOf = new Map<number, string>();
+    for (const l of lines) for (const id of membersOf.get(l.split(":")[0]) ?? []) lineOf.set(id, l);
+    for (const [label, ids] of [...assignments.entries()]) {
+      if (label === LEFTOVER || ids.length <= BIG_SUBJECT) continue;
+      const part = [...new Set(ids.map((id) => lineOf.get(id)).filter((l): l is string => !!l))];
+      try {
+        const parts = await splitSubject(label, part, membersOf, labels, opts.timeoutMs, cheapestRealModel());
+        if (parts.model) models.add(parts.model);
+        if (parts.split.size < 2) continue;
+        const moved = new Set([...parts.split.values()].flat());
+        const rest = ids.filter((id) => !moved.has(id));
+        if (rest.length) assignments.set(label, rest);
+        else assignments.delete(label);
+        for (const [sub, subIds] of parts.split) {
+          assignments.set(sub, [...(assignments.get(sub) ?? []).filter((id) => !moved.has(id)), ...subIds]);
+          labels.add(sub);
+        }
+        console.log(`[corpus] inbox: split "${label}" (${ids.length}) into ${parts.split.size} subjects`);
+      } catch (err) {
+        console.warn(`[corpus] inbox: could not split "${label}" — ${err instanceof Error ? err.message : String(err)}`);
+      }
+    }
+  }
+
   return tx(() => {
     const find = db().prepare("SELECT id FROM inbox_bundles WHERE label = ?");
     const make = db().prepare("INSERT INTO inbox_bundles (label) VALUES (?)");
@@ -304,6 +334,66 @@ export async function bundleInbox(opts: { timeoutMs?: number; chunk?: number } =
   });
 }
 
+
+/** Past this many headlines a bundle is put back to be split into its subjects. */
+export const BIG_SUBJECT = 60;
+
+const SPLIT_SYSTEM = `These headlines from a political journalist's inbox were all filed under one
+broad heading, and it is too broad to triage. Split them into the specific
+subjects inside it, the way a desk would: a running story, a fight, a policy,
+a person's troubles — "Trump's triumphal arch", "Seafood labelling order",
+"White House chief of staff change".
+
+- Aim for subjects of four to twenty-five headlines. Every headline that has
+  no subject of its own goes in "Everything else".
+- Name each subject in two to five specific words. Never reuse the broad
+  heading itself, and do not invent new broad headings ("Politics", "Trump").
+- Reuse an EXISTING LABEL when it names the same subject.
+- Return ids exactly as given.`;
+
+/**
+ * Splits one over-broad bundle into the subjects inside it. In chunks of
+ * BUNDLE_CHUNK, each told the labels the ones before made. What the model
+ * calls "Everything else", or leaves out, stays under the broad heading.
+ * Pure apart from the model call; never throws past the caller's catch.
+ */
+async function splitSubject(
+  broad: string,
+  part: string[],
+  membersOf: Map<string, number[]>,
+  existing: Set<string>,
+  timeoutMs: number | undefined,
+  model: string | undefined
+): Promise<{ split: Map<string, number[]>; model: string | null }> {
+  const split = new Map<string, number[]>();
+  const known = new Set([...existing].filter((l) => l !== broad));
+  let used: string | null = null;
+  for (let i = 0; i < part.length; i += BUNDLE_CHUNK) {
+    const chunk = part.slice(i, i + BUNDLE_CHUNK);
+    const res = await generateJson<{ bundles?: { label?: string; ids?: string[] }[] }>({
+      stage: "group",
+      system: SPLIT_SYSTEM,
+      schema: BUNDLE_SCHEMA,
+      temperature: 0,
+      timeoutMs: timeoutMs ?? 180_000,
+      ...(model ? { model } : {}),
+      parts: [
+        `BROAD HEADING: ${broad}`,
+        known.size ? `EXISTING LABELS: ${[...known].sort().join(" | ")}` : "EXISTING LABELS: (none)",
+        `HEADLINES (${chunk.length}), oldest first:\n${chunk.join("\n")}`,
+      ],
+    });
+    used = res.model ?? used;
+    for (const [label, ids] of assignmentsFromModel(membersOf, res.data.bundles ?? [])) {
+      if (/^everything else$/i.test(label) || label.toLowerCase() === broad.toLowerCase()) continue;
+      split.set(label, [...(split.get(label) ?? []), ...ids]);
+      known.add(label);
+    }
+  }
+  // A "subject" of one headline is a headline; it stays under the heading.
+  for (const [label, ids] of split) if (ids.length < 2) split.delete(label);
+  return { split, model: used };
+}
 
 export interface BundleEventResult {
   bundles: number;
