@@ -9,6 +9,7 @@ import {
   tokenFrom,
   tokenMatches,
 } from "./lib/lan";
+import { noteRequest } from "./lib/presence";
 
 /**
  * The door, when there is one.
@@ -77,6 +78,7 @@ export async function middleware(req: NextRequest) {
     if (req.method !== "GET") return new NextResponse(null, { status: 405 });
     const offered = searchParams.get("token");
     if (offered && tokenMatches(offered, token)) {
+      noteRequest(req.headers.get("x-forwarded-for"));
       const res = NextResponse.redirect(new URL("/", req.url));
       // Lax rather than Strict so a link from another app on the phone (the
       // helper, a QR scanner) still arrives signed in. Not Secure: there is no
@@ -100,7 +102,12 @@ export async function middleware(req: NextRequest) {
     );
   }
 
-  if (tokenMatches(tokenFrom(req), token)) return NextResponse.next();
+  if (tokenMatches(tokenFrom(req), token)) {
+    // A phone or another laptop reading from here is what the launcher keeps
+    // the computer awake for (lib/presence.ts).
+    noteRequest(req.headers.get("x-forwarded-for"));
+    return NextResponse.next();
+  }
 
   if (pathname.startsWith("/api/")) {
     return NextResponse.json(

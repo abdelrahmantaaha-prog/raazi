@@ -52,6 +52,14 @@ one — the laptop on the desk working from the library on the machine at home, 
 the LAN or Tailscale. *Connect to… → This computer* switches back. Point the
 browser extension's options at the same address.
 
+**Awake while your phone is reading.** A laptop goes to sleep a few minutes after
+its last key press, and takes the Wi-Fi down with it — which from the phone looks
+like Raazi vanishing. While a signed-in phone or other laptop has used the library
+in the last half hour, Raazi asks Windows not to sleep (the screen still turns off);
+`powercfg /requests` lists it as *Raazi: another device is using this library*.
+Plugged in, that holds for as long as it is needed. On battery Windows honours it
+for only a few minutes, and closing the lid still sleeps the machine.
+
 First time only:
 
 ```bash

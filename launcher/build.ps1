@@ -90,6 +90,7 @@ $src = Join-Path $PSScriptRoot "Launcher.cs"
 
 $swapSrc = Join-Path $PSScriptRoot "UpdateSwap.cs"
 $feedSrc = Join-Path $PSScriptRoot "UpdateFeed.cs"
+$awakeSrc = Join-Path $PSScriptRoot "Awake.cs"
 $keysSrc = if ($KeysFile) { $KeysFile } else { Join-Path $PSScriptRoot "UpdateKeys.cs" }
 
 # The release this exe belongs to, from package.json; a new starter answers
@@ -110,7 +111,7 @@ $defines = if ($Test) { "/define:UPDATE_TESTS" } else { "/define:RELEASE" }
   /reference:System.Windows.Forms.dll `
   /reference:System.IO.Compression.dll `
   /reference:System.IO.Compression.FileSystem.dll `
-  "$src" "$swapSrc" "$feedSrc" "$keysSrc" "$verSrc"
+  "$src" "$swapSrc" "$feedSrc" "$awakeSrc" "$keysSrc" "$verSrc"
 
 if ($LASTEXITCODE -ne 0) { throw "Compilation failed." }
 Write-Host "exe     -> $exe"

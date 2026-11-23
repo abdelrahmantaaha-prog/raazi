@@ -195,6 +195,8 @@ static class Raazi
 
         if (Updatable()) StartUpdateChecks();
 
+        StartAwakeWatch();
+
         // At sign-in the point is the server — feeds polled and parked runs
         // resumed before you sit down — not a window you did not ask for.
         if (atSignIn)
@@ -1508,6 +1510,36 @@ static class Raazi
         zipPath = zip;
         version = v;
         return "ready: " + v;
+    }
+
+    static System.Threading.Timer awakeTimer;
+    static int askingPresence;
+
+    /**
+     * Keeps the computer from sleeping under a phone or another laptop that is
+     * reading from it (Awake.cs has the why). Asked of this computer's own
+     * server only, and only when it is shared: a server on loopback has nobody
+     * else to stay awake for, and a follower's copy is not what the other
+     * devices read from.
+     */
+    static void StartAwakeWatch()
+    {
+        awakeTimer = new System.Threading.Timer(_ =>
+        {
+            if (Interlocked.Exchange(ref askingPresence, 1) == 1) return;
+            try
+            {
+                bool hold = false;
+                if (!quitting && !installing && lanMode && server != null && !server.HasExited)
+                    hold = Awake.ShouldHold(Http("GET", LocalBase() + "/api/presence", null, 5000));
+                if (Awake.Set(hold))
+                    Log(hold
+                        ? "[awake] another device is using this library; keeping the computer from sleeping"
+                        : "[awake] no other device for a while; the computer may sleep again");
+            }
+            catch { }
+            finally { Interlocked.Exchange(ref askingPresence, 0); }
+        }, null, Awake.AskEveryMs, Awake.AskEveryMs);
     }
 
     /** First look two minutes after start, then every six hours. */
