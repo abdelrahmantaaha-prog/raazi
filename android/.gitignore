@@ -1,0 +1,7 @@
+.gradle/
+build/
+app/build/
+local.properties
+# The release key and its passwords. Losing it means the phone has to
+# uninstall the app before a new build will install over it.
+.signing/

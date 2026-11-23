@@ -1,4 +1,4 @@
-package com.corpus.helper
+package com.lymoon.raazi
 
 import android.content.Context
 import android.net.ConnectivityManager
@@ -60,7 +60,7 @@ data class Server(
 object Discovery {
 
     const val DEFAULT_PORT = 5400
-    private const val TAG = "CorpusDiscovery"
+    private const val TAG = "RaaziDiscovery"
 
     private const val CONNECT_MS = 400
     private const val READ_MS = 900
@@ -82,8 +82,8 @@ object Discovery {
             var conn: HttpURLConnection? = null
             try {
                 conn = (URL("http://$host:$port/api/settings").openConnection() as HttpURLConnection).apply {
-                    connectTimeout = CONNECT_MS
-                    readTimeout = READ_MS
+                    connectTimeout = 3_000
+                    readTimeout = 5_000
                     requestMethod = "GET"
                     instanceFollowRedirects = false
                     setRequestProperty(TOKEN_HEADER, token)
@@ -105,12 +105,13 @@ object Discovery {
      * of hundred addresses that are mostly phones, printers and nothing at all,
      * and a slow answer is as good as no answer.
      */
-    suspend fun probe(host: String, port: Int = DEFAULT_PORT): Server? = withContext(Dispatchers.IO) {
+    suspend fun probe(host: String, port: Int = DEFAULT_PORT, patienceMs: Int = CONNECT_MS): Server? = withContext(Dispatchers.IO) {
         var conn: HttpURLConnection? = null
         try {
             conn = (URL("http://$host:$port/api/hello").openConnection() as HttpURLConnection).apply {
-                connectTimeout = CONNECT_MS
-                readTimeout = READ_MS
+                connectTimeout = patienceMs
+                // A computer asked for by name may be busy; one swept for need not be.
+                readTimeout = maxOf(READ_MS, patienceMs * 3)
                 requestMethod = "GET"
                 // A redirect means something else is listening here.
                 instanceFollowRedirects = false

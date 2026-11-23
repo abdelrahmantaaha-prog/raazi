@@ -264,7 +264,104 @@ section("Applying the groups keeps your decisions and is idempotent");
   );
   check("two named stories stay two", storyOf(s1) === mine && storyOf(s6) === yours2, JSON.stringify(r2));
   check("and the loose account joined one of them, not a third", storyOf(s7) === yours2 || storyOf(s7) === mine, String(storyOf(s7)));
-  check("regroupHeld on an empty inbox is a no-op", G.regroupHeld().grouped === 0);
+  check("regroupHeld on an empty inbox is a no-op", (await G.regroupHeld()).grouped === 0);
+}
+
+section("Grouping does not chain (17 Nov 2026: one story had 659 accounts)");
+{
+  const mk = (title, at) =>
+    Number(db().prepare("INSERT INTO sources (title, kind, status, outlet, published_at) VALUES (?, 'url', 'chunked', 'O', ?)").run(title, at).lastInsertRowid);
+  const storyOf = (src) => db().prepare("SELECT story_id FROM story_sources WHERE source_id=?").get(src)?.story_id ?? null;
+  const hour = (h) => new Date(Date.UTC(2026, 10, 10, 8 + h)).toISOString();
+  const lone = (title, h) => ({ sourceId: mk(title, hour(h)), storyId: null, namedBy: null, title, outlet: "O", at: hour(h), lede: "", summary: "" });
+  const pair = (a, b, why = "tokens") => ({ a: Math.min(a.sourceId, b.sourceId), b: Math.max(a.sourceId, b.sourceId), why, score: 1, shared: ["x", "y"] });
+
+  // A chain: each account like the next, the ends like nothing.
+  const chain = Array.from({ length: 6 }, (_, i) => lone(`Chain ${i}`, i));
+  G.applyGroups(chain, chain.slice(1).map((b, i) => pair(chain[i], b)));
+  const ids = chain.map((a) => storyOf(a.sourceId));
+  check("the two ends of a chain are not one story", ids[0] === null || ids[0] !== ids[5], JSON.stringify(ids));
+  const biggest = Math.max(...Object.values(ids.reduce((n, id) => (id === null ? n : { ...n, [id]: (n[id] ?? 0) + 1 }), {})));
+  check("and no story along it takes more than three links", biggest <= 3, JSON.stringify(ids));
+
+  // A real event: every account like every other.
+  const event = Array.from({ length: 5 }, (_, i) => lone(`Event ${i}`, i));
+  const all = [];
+  for (let i = 0; i < event.length; i++) for (let j = i + 1; j < event.length; j++) all.push(pair(event[i], event[j], "title"));
+  G.applyGroups(event, all);
+  check("accounts that all agree are one story", new Set(event.map((a) => storyOf(a.sourceId))).size === 1 && storyOf(event[0].sourceId) !== null);
+
+  // An outsider that agrees with one account of that event does not join it.
+  const outsider = lone("Outsider", 2);
+  const withOut = event.map((a) => ({ ...a, storyId: storyOf(a.sourceId), namedBy: "auto" }));
+  G.applyGroups([...withOut, outsider], [pair(event[4], outsider)]);
+  check("one shared link is not enough to join a formed story", storyOf(outsider.sourceId) !== storyOf(event[0].sourceId));
+
+  // Too far apart.
+  const early = lone("Early", 0), late = lone("Late", 100);
+  G.applyGroups([early, late], [pair(early, late, "title")]);
+  check("accounts four days apart are not one event", storyOf(early.sourceId) === null || storyOf(early.sourceId) !== storyOf(late.sourceId));
+
+  // Two formed stories are never folded by the inbox pass.
+  const a1 = lone("A1", 0), a2 = lone("A2", 1), b1 = lone("B1", 0), b2 = lone("B2", 1);
+  G.applyGroups([a1, a2, b1, b2], [pair(a1, a2, "title"), pair(b1, b2, "title")]);
+  const formed = [a1, a2, b1, b2].map((a) => ({ ...a, storyId: storyOf(a.sourceId), namedBy: "auto" }));
+  const before = formed.map((a) => a.storyId);
+  const r = G.applyGroups(formed, [pair(a1, b1, "title"), pair(a1, b2, "title"), pair(a2, b1, "title"), pair(a2, b2, "title")]);
+  check("two formed stories stay two, however alike", before[0] !== before[2] && storyOf(a1.sourceId) === before[0] && storyOf(b1.sourceId) === before[2] && r.folded === 0, JSON.stringify(r));
+
+  // The model's groups are cliques; a story line vouches for the whole story.
+  const at = (h) => new Date(Date.UTC(2026, 8, 15, 10 + h)).toISOString();
+  const acc = (sourceId, storyId, title, h) => ({ sourceId, storyId, namedBy: storyId ? "auto" : null, title, outlet: "O", at: at(h), lede: "", summary: "" });
+  const accounts = [acc(1, 50, "S a", 0), acc(2, 50, "S b", 1), acc(3, null, "x", 2), acc(4, null, "y", 2), acc(5, null, "z", 3)];
+  const { storyRep } = G.headlineLines(accounts);
+  const m = G.pairsFromModel(accounts, storyRep, [{ ids: ["I3", "I4", "I5"] }, { ids: ["S50", "I3"] }]);
+  check("a model group of three is three pairs", m.pairs.filter((p) => !p.whole).length === 3, JSON.stringify(m.pairs));
+  check("a pair with a story's line is marked as vouching for the story", m.pairs.some((p) => p.whole && p.a === 1 && p.b === 3));
+}
+
+section("Accounts that drifted into a story by a chain are taken out");
+{
+  const at = (h) => new Date(Date.UTC(2026, 10, 14, 8 + h)).toISOString();
+  const mk = (title, h) => Number(db().prepare("INSERT INTO sources (title, kind, status, outlet, published_at) VALUES (?, 'url', 'chunked', 'O', ?)").run(title, at(h)).lastInsertRowid);
+  const story = Number(db().prepare("INSERT INTO stories (title, shingle) VALUES ('Nvidia chief faces affair probe in Congress', 'x')").run().lastInsertRowid);
+  const titles = [
+    ["Nvidia chief faces affair probe in Congress", 0, "First account."],
+    ["Congress widens Nvidia chief affair probe", 1, "Grouped in the inbox: shares x."],
+    ["Huang ally speaks out", 2, "Grouped in the inbox: shares x."],
+    ["October inflation data surprises markets", 3, "Grouped in the inbox: shares x."],
+    ["Lawmakers to question chip boss", 4, "Grouped in the inbox by the model, checked against the story — probe."],
+  ];
+  const accs = titles.map(([title, h, reason]) => {
+    const id = mk(title, h);
+    db().prepare("INSERT INTO story_sources (story_id, source_id, reason) VALUES (?, ?, ?)").run(story, id, reason);
+    return { sourceId: id, storyId: story, namedBy: "auto", title, outlet: "O", at: at(h), lede: "", summary: "" };
+  });
+  const pair = (x, y) => ({ a: Math.min(accs[x].sourceId, accs[y].sourceId), b: Math.max(accs[x].sourceId, accs[y].sourceId), why: "tokens", score: 1, shared: ["x", "y"] });
+  // 2 is one step from a headline match; 3 is only reached through 2.
+  const after = G.trimStrays(accs, [pair(1, 2), pair(2, 3)]);
+  const storyOf = (src) => db().prepare("SELECT story_id FROM story_sources WHERE source_id=?").get(src)?.story_id;
+  check("the opener and a headline match stay", storyOf(accs[0].sourceId) === story && storyOf(accs[1].sourceId) === story);
+  check("an account one step from the headline stays", storyOf(accs[2].sourceId) === story);
+  check("an account two steps away is taken out", storyOf(accs[3].sourceId) !== story && after[3].storyId !== story);
+  check("one the model placed under the core rule stays", storyOf(accs[4].sourceId) === story);
+  check("and a second pass takes nothing more", G.trimStrays(after, [pair(1, 2)]).every((a, i) => a.storyId === after[i].storyId));
+}
+
+section("Runaway stories are taken apart");
+{
+  const S = await import("../lib/stories.ts");
+  const at = new Date(Date.UTC(2026, 10, 12, 9)).toISOString();
+  const big = Number(db().prepare("INSERT INTO stories (title, shingle) VALUES ('Runaway', 'runaway')").run().lastInsertRowid);
+  for (let i = 0; i <= S.MAX_STORY_ACCOUNTS; i++) {
+    const src = Number(db().prepare("INSERT INTO sources (title, kind, status, outlet, published_at) VALUES (?, 'url', 'chunked', 'O', ?)").run(`Unrelated headline number ${i} about subject ${i * 7}`, at).lastInsertRowid);
+    db().prepare("INSERT INTO story_sources (story_id, source_id) VALUES (?, ?)").run(big, src);
+  }
+  const split = S.splitRunaways();
+  check("a story past the ceiling is taken apart", split.stories >= 1 && !db().prepare("SELECT 1 FROM stories WHERE id=?").get(big), JSON.stringify(split));
+  const max = db().prepare("SELECT MAX(n) AS n FROM (SELECT COUNT(*) AS n FROM story_sources GROUP BY story_id)").get().n;
+  check("and no story is past it afterwards", max <= S.MAX_STORY_ACCOUNTS, String(max));
+  check("a second pass has nothing to do", S.splitRunaways().stories === 0);
 }
 
 db().close();

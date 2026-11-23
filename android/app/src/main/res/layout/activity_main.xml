@@ -4,8 +4,7 @@
 <FrameLayout xmlns:android="http://schemas.android.com/apk/res/android"
     android:layout_width="match_parent"
     android:layout_height="match_parent"
-    android:background="@color/paper"
-    android:fitsSystemWindows="true">
+    android:background="@color/paper">
 
     <WebView
         android:id="@+id/web"
@@ -62,6 +61,23 @@
                 android:orientation="vertical" />
 
             <Button
+                android:id="@+id/scanCode"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:layout_marginTop="12dp"
+                android:backgroundTint="@color/accent"
+                android:text="Scan the code on the computer"
+                android:textColor="#FFFFFF" />
+
+            <TextView
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:layout_marginTop="6dp"
+                android:text="First time? On the computer: Raazi, Settings, Phone &amp; other laptop, Show the code."
+                android:textColor="@color/muted"
+                android:textSize="13sp" />
+
+            <Button
                 android:id="@+id/rescan"
                 style="?android:attr/borderlessButtonStyle"
                 android:layout_width="wrap_content"
@@ -80,7 +96,7 @@
                 android:layout_width="match_parent"
                 android:layout_height="wrap_content"
                 android:layout_marginTop="20dp"
-                android:text="Or type the address shown in the Raazi tray menu"
+                android:text="Or paste the sign-in link, or type the computer&#39;s address"
                 android:textColor="@color/muted"
                 android:textSize="13sp" />
 
@@ -95,7 +111,7 @@
                     android:layout_width="0dp"
                     android:layout_height="wrap_content"
                     android:layout_weight="1"
-                    android:hint="192.168.1.20"
+                    android:hint="192.168.1.20 or the sign-in link"
                     android:importantForAutofill="no"
                     android:inputType="text"
                     android:textColor="@color/ink"

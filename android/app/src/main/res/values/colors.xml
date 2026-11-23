@@ -8,5 +8,5 @@
     <color name="accent_soft">#F0E7DD</color>
     <!-- Kept out of values-night: a launcher icon that changes colour with the
          system theme is a launcher icon you cannot find. -->
-    <color name="icon_background">#F0E7DD</color>
+    <color name="icon_background">#7A4B2A</color>
 </resources>

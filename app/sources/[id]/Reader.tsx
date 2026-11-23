@@ -212,6 +212,36 @@ export function Reader({
    * not on the reading line, and "where you are" has to follow it.
    */
   const focusMode = useRef(prefs.mode === "focus");
+
+  // The screen stays on while a book is open: a phone that dims and locks
+  // mid-page, or mid-chapter while listening, is the commonest interruption
+  // of reading on one. The browser lets go when the page is hidden, so it is
+  // asked again on the way back. Where there is no wake lock, nothing happens.
+  useEffect(() => {
+    type Sentinel = { release: () => Promise<void> };
+    const lockApi = (navigator as Navigator & { wakeLock?: { request: (t: "screen") => Promise<Sentinel> } }).wakeLock;
+    if (!lockApi) return;
+    let held: Sentinel | null = null;
+    let gone = false;
+    const take = () => {
+      if (document.visibilityState !== "visible") return;
+      lockApi
+        .request("screen")
+        .then((s) => {
+          if (gone) void s.release();
+          else held = s;
+        })
+        .catch(() => undefined);
+    };
+    take();
+    document.addEventListener("visibilitychange", take);
+    return () => {
+      gone = true;
+      document.removeEventListener("visibilitychange", take);
+      void held?.release().catch(() => undefined);
+    };
+  }, []);
+
   useEffect(() => {
     focusMode.current = prefs.mode === "focus";
   }, [prefs.mode]);
@@ -1171,6 +1201,9 @@ export function Reader({
   return createPortal(
     <div
       ref={scroller}
+      // Tells the phone app that its back button should close this (by
+      // Escape, which already steps out innermost first) before leaving the page.
+      data-back=""
       className="fixed inset-0 z-40"
       style={{
         background: theme.bg,
