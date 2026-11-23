@@ -935,6 +935,33 @@ section("Held back is not lost");
   check("the other two still wait", feeds.heldBack(feedId).length === 2);
 }
 
+section("Filing an account never reads a whole table");
+{
+  // Every one of these is asked once per account, or three times per story,
+  // inside a loop on the server's only thread. On 23 Nov 2026 the first read
+  // all 41,681 feed items each time, and a regroup of 300 stories held the
+  // server for 21 seconds: "The Raazi server is down" in every open window.
+  // A small library hides it — the same plan is instant over forty rows — so
+  // the plan is what is checked, not the clock.
+  const plan = (sql) =>
+    db()
+      .prepare(`EXPLAIN QUERY PLAN ${sql}`)
+      .all(1)
+      .map((r) => r.detail)
+      .join(" | ");
+  const lookups = {
+    "the feed item behind an article": "SELECT i.summary FROM feed_items i WHERE i.source_id = ? LIMIT 1",
+    "an article's opening passage": "SELECT c.text FROM chunks c WHERE c.source_id = ? ORDER BY c.seq LIMIT 1",
+    "the story an article is in": "SELECT story_id FROM story_sources WHERE source_id = ?",
+    "a story's accounts": "SELECT source_id FROM story_sources WHERE story_id = ?",
+    "the entities an article names": "SELECT DISTINCT entity_id FROM mentions WHERE source_id = ?",
+  };
+  for (const [what, sql] of Object.entries(lookups)) {
+    const p = plan(sql);
+    check(`${what} is found by an index`, /USING (COVERING )?INDEX|USING INTEGER PRIMARY KEY/.test(p) && !/\bSCAN\b/.test(p), p);
+  }
+}
+
 db().close();
 fs.rmSync(SANDBOX, { recursive: true, force: true });
 console.log(`\n${failed === 0 ? "All passed" : "FAILURES PRESENT"}: ${passed} passed, ${failed} failed\n`);

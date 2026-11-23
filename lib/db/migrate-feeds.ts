@@ -232,6 +232,20 @@ export function migrateFeeds(db: Database.Database) {
   `);
   db.exec(`CREATE INDEX IF NOT EXISTS idx_feed_items_clipped ON feed_items(clipped_at) WHERE clipped_at IS NOT NULL;`);
 
+  // The item an article came from, found by the article (2026-11-23).
+  //
+  // feed_items had an index for every way it was read but this one, so "the
+  // feed item behind source 22496" read the whole table: 36 ms with 41,681
+  // items in it. Filing an account with its story asks that for the account
+  // and for three accounts of every story it resembles, and the regroup after
+  // a feed check asks it for three accounts of each of 300 stories, one after
+  // another on the server's only thread — 21 seconds, measured, in which
+  // Raazi answered nothing at all and every open window put up "The Raazi
+  // server is down". It grew with the table, which is why it arrived
+  // unannounced. Deleting a source walked the table too: the foreign key has
+  // to find the items that pointed at it.
+  db.exec(`CREATE INDEX IF NOT EXISTS idx_feed_items_source ON feed_items(source_id);`);
+
   // The curator (2026-09-15), see lib/curator.ts.
   //
   // queued_at: when the poll actually took the item, which is what the daily
