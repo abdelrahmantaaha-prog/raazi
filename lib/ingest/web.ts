@@ -10,7 +10,7 @@ import { canonicalUrl, normaliseLang, outletFromUrl, toPublishedAt } from "./met
  *  fetched. Nothing here needs the styles. A console with no listeners is quiet. */
 const quiet = () => new VirtualConsole();
 
-export { canonicalUrl, normaliseLang, outletFromUrl, toPublishedAt } from "./meta";
+export { canonicalUrl, normaliseLang } from "./meta";
 
 export interface WebMeta {
   title?: string;

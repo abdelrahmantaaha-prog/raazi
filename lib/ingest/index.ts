@@ -12,7 +12,6 @@ import { parsePdf } from "./pdf";
 import { parseEpub } from "./epub";
 import { IMAGE_EXTENSIONS, OFFICE_EXTENSIONS, parseOffice } from "./office";
 import { patchMeta } from "../source-meta";
-export { IMAGE_EXTENSIONS } from "./office";
 import { PDFDocument } from "pdf-lib";
 import { parseUrl } from "./web";
 import { setSourceTags } from "../tags";

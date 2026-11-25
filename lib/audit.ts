@@ -42,7 +42,7 @@ import {
  */
 
 export type { DiscardReason, DiscardScope, ReasonSpec } from "./discard-reasons";
-export { DISCARD_REASONS, quoteKeyOf, reasonLabel, reasonSpec } from "./discard-reasons";
+export { quoteKeyOf } from "./discard-reasons";
 
 export interface DiscardRow {
   id: number;

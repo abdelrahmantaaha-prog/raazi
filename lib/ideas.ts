@@ -16,7 +16,6 @@ import { IDEA_STATES, MAX_OUTLINE_DEPTH, type IdeaState } from "./idea-states";
  */
 
 export type { IdeaState } from "./idea-states";
-export { IDEA_STATES } from "./idea-states";
 
 export interface Idea {
   id: number;

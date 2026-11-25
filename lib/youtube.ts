@@ -1,7 +1,7 @@
 import { db } from "./db";
 import { thumbnailUrl, videoId, watchUrl } from "./video";
 
-export { thumbnailUrl, videoId, watchUrl } from "./video";
+export { thumbnailUrl, videoId } from "./video";
 
 /**
  * What YouTube will tell you without an API key.

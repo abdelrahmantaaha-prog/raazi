@@ -8,7 +8,7 @@
  */
 import { markerLabel } from "@/lib/cite-markers";
 
-export { citeOrder, markerHtml, normalizeMarkers, numbering, strayBrackets } from "@/lib/cite-markers";
+export { markerHtml, normalizeMarkers, numbering, strayBrackets } from "@/lib/cite-markers";
 
 export interface CitedRef {
   id: number;
