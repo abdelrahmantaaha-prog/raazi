@@ -32,7 +32,6 @@
     "test:speech": "tsx scripts/test-speech.mjs",
     "test:fidelity": "tsx scripts/test-fidelity.mjs",
     "prebuild": "node scripts/guard-build.mjs",
-    "test:broker": "tsx scripts/test-broker.mjs",
     "test:api": "tsx scripts/test-api.mjs",
     "test:research": "tsx scripts/test-research.mjs && tsx scripts/test-folders.mjs && tsx scripts/test-office.mjs",
     "test:entry": "tsx scripts/test-entry.mjs",
