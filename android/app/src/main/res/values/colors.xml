@@ -5,7 +5,6 @@
     <color name="muted">#6B665E</color>
     <color name="rule">#E2DDD3</color>
     <color name="accent">#7A4B2A</color>
-    <color name="accent_soft">#F0E7DD</color>
     <!-- Kept out of values-night: a launcher icon that changes colour with the
          system theme is a launcher icon you cannot find. -->
     <color name="icon_background">#7A4B2A</color>
