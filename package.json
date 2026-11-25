@@ -2,6 +2,7 @@
   "name": "raazi",
   "version": "0.12.0",
   "private": true,
+  "license": "MIT",
   "scripts": {
     "dev": "next dev --port 5400 --hostname 127.0.0.1",
     "dev:lan": "node scripts/lan.mjs dev",

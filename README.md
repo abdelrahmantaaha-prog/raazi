@@ -132,3 +132,7 @@ Raazi was called Corpus until version 0.10. Some internal identifiers keep the
 old name on purpose (`data/corpus.db`, the `corpus_token` cookie, the
 `x-corpus-token` header, `CORPUS_*` variables, the `com.corpus.helper` Android
 package), because existing libraries and signed-in devices depend on them.
+
+## License
+
+[MIT](LICENSE): free to use, copy, change and redistribute, including commercially. The browser extension bundles Mozilla's Readability, which keeps its own Apache 2.0 license ([`extension/READABILITY-LICENSE.md`](extension/READABILITY-LICENSE.md)), and the bundled Amiri font is under the SIL Open Font License ([`public/fonts/OFL.txt`](public/fonts/OFL.txt)).
