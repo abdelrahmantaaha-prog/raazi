@@ -11,8 +11,6 @@ import type { StarredArticle } from "@/lib/starred";
 
 export type WriteTab = "drafts" | "ideas" | "starred";
 
-const TABS: WriteTab[] = ["drafts", "ideas", "starred"];
-
 /**
  * The halves of writing, on one page — and what you set aside to write from.
  *

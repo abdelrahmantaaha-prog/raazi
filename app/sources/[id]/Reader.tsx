@@ -2,7 +2,6 @@
 
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { createPortal } from "react-dom";
-import Link from "next/link";
 import { dirOf } from "@/lib/dir";
 import { EntityDrawer } from "../../components/EntityDrawer";
 import {
