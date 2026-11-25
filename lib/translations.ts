@@ -48,9 +48,6 @@ export interface TranslationSummary {
   alignedAt: string | null;
 }
 
-/** Below this a pair is shown, but marked as a guess. */
-export const DOUBTFUL = 0.55;
-
 interface Row {
   id: number;
   text: string;

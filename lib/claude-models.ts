@@ -14,8 +14,6 @@ export const PLAN_MODELS = [
 ] as const;
 
 export type PlanModel = (typeof PLAN_MODELS)[number]["id"];
-export const DEFAULT_PLAN_MODEL: PlanModel = "claude-sonnet-5-5";
-
 export function isPlanModel(v: unknown): v is PlanModel {
   return PLAN_MODELS.some((m) => m.id === v);
 }

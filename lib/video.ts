@@ -46,13 +46,3 @@ export function thumbnailUrl(id: string): string {
 export function watchUrl(id: string): string {
   return `https://www.youtube.com/watch?v=${id}`;
 }
-
-/** "00:34:12" or "12:04" as seconds, for opening a player at a passage. */
-export function secondsOf(timecode: string | null | undefined): number | undefined {
-  if (!timecode) return undefined;
-  const parts = timecode.trim().split(":").map(Number);
-  if (!parts.length || parts.some((n) => !Number.isFinite(n))) return undefined;
-  if (parts.length === 3) return parts[0] * 3600 + parts[1] * 60 + parts[2];
-  if (parts.length === 2) return parts[0] * 60 + parts[1];
-  return undefined;
-}

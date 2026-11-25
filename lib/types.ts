@@ -41,13 +41,6 @@ export type RunState =
   | "done"
   | "failed";
 
-export const PAUSED_STATES: RunState[] = [
-  "paused_quota",
-  "paused_user",
-  "paused_budget",
-  "paused_key",
-];
-
 export type TaskState =
   | "pending"
   | "running"

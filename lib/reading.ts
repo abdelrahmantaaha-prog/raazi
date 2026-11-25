@@ -179,12 +179,6 @@ export function markReadThrough(sourceId: number, chunkId: number, share = 1): n
   return n;
 }
 
-/** Forgets that a passage was read. */
-export function unmarkRead(sourceId: number, chunkId: number): void {
-  db().prepare("DELETE FROM read_passages WHERE source_id=? AND chunk_id=?").run(sourceId, chunkId);
-  recomputeProgress(sourceId);
-}
-
 /**
  * Progress as the share of the text you have read, by length.
  *

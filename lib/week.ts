@@ -86,8 +86,3 @@ export function describeWeek(key: string): string {
 export function isCurrentWeek(key: string, now = new Date()): boolean {
   return key === weekKey(now);
 }
-
-/** Days left before the window rolls, for a page that wants to say so. */
-export function daysLeftInWeek(now = new Date()): number {
-  return Math.max(0, Math.ceil((weekEnd(now).getTime() - now.getTime()) / 86_400_000));
-}

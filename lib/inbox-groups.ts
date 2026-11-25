@@ -948,10 +948,3 @@ export async function regroupByHeadlines(opts: { timeoutMs?: number } = {}): Pro
   const applied = applyGroups(accounts, pairs);
   return { ...applied, model, error: null, proposed: (data.groups ?? []).length, accepted };
 }
-
-/** The whole pass: the rules first, then the model on what they left alone. */
-export async function regroupInbox(): Promise<{ rules: GroupResult; model: ModelGroupResult }> {
-  const rules = await regroupHeld();
-  const model = await regroupByHeadlines();
-  return { rules, model };
-}

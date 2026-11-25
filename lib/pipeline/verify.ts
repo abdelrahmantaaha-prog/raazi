@@ -242,16 +242,3 @@ export async function handleVerify(task: Task): Promise<void> {
     );
   });
 }
-
-/** What the audit and the UI read. */
-export function flagsFor(entityId: number) {
-  return db()
-    .prepare("SELECT * FROM entry_flags WHERE entity_id=? ORDER BY id")
-    .all(entityId) as {
-    id: number;
-    sentence: string;
-    verdict: string;
-    note: string | null;
-    mention_ids: string;
-  }[];
-}

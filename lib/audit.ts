@@ -308,19 +308,6 @@ export function reapplyDiscards(sourceId?: number): number {
   return stamped;
 }
 
-/** How many verdicts are standing, for the places that report on themselves. */
-export function discardCount(entityId?: number): number {
-  const row = entityId
-    ? (db()
-        .prepare(
-          `SELECT COUNT(*) AS n FROM evidence_discards
-            WHERE entity_id=? OR entity_norm=(SELECT normalized FROM entities WHERE id=?)`
-        )
-        .get(entityId, entityId) as { n: number })
-    : (db().prepare("SELECT COUNT(*) AS n FROM evidence_discards").get() as { n: number });
-  return row.n;
-}
-
 /* -------------------------------------------------------------------------- *
  * Teaching
  *

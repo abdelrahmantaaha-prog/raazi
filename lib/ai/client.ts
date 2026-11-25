@@ -192,13 +192,6 @@ function noteModel(model: string | undefined) {
   else (globalThis.__corpusModelsUsed ??= []).push(model);
 }
 
-/** The models that have answered since the last take, deduplicated. */
-export function takeModelsUsed(): string[] {
-  const used = globalThis.__corpusModelsUsed ?? [];
-  globalThis.__corpusModelsUsed = [];
-  return [...new Set(used)];
-}
-
 /** Runs one task's work with a list of its own for the models that answer it. */
 export async function withOwnModels<T>(fn: () => Promise<T>): Promise<{ value: T; models: string[] }> {
   const own: string[] = [];
@@ -1036,24 +1029,6 @@ export function uploadClient(): { ai: GoogleGenAI; keyId: string } {
   const key = usableKeys("gemini")[0];
   if (!key) throw new MissingKeyError();
   return { ai: gemini(key, MEDIA_TIMEOUT_MS), keyId: key.id };
-}
-
-/** For calls that need a Gemini client but no particular key — counting tokens,
- *  say. */
-export function client(): GoogleGenAI {
-  const key = nextKey("gemini");
-  if (!key) throw new MissingKeyError();
-  return gemini(key);
-}
-
-/** Pre-flight cost estimate, so a book can be priced before it is started. */
-export async function countTokens(text: string): Promise<number> {
-  const cfg = getConfig();
-  const res = await client().models.countTokens({
-    model: cfg.model,
-    contents: [{ role: "user", parts: [{ text }] }],
-  });
-  return res.totalTokens ?? 0;
 }
 
 export async function validateKey(

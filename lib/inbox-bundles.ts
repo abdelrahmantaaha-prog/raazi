@@ -599,15 +599,3 @@ export async function rateInbox(opts: { timeoutMs?: number; chunk?: number } = {
   if (result.rated) console.log(`[corpus] inbox: ${result.rated} item(s) rated by ${result.model ?? "the model"}`);
   return result;
 }
-
-/** A bundle as the inbox shows it. */
-export function listBundles(): { id: number; label: string; items: number }[] {
-  return db()
-    .prepare(
-      `SELECT b.id, b.label,
-              (SELECT COUNT(*) FROM inbox_bundle_items bi JOIN feed_items i ON i.id = bi.item_id
-                WHERE bi.bundle_id = b.id AND i.state = 'held' AND i.decided_at IS NULL) AS items
-         FROM inbox_bundles b ORDER BY items DESC, b.label`
-    )
-    .all() as { id: number; label: string; items: number }[];
-}

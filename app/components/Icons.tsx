@@ -76,14 +76,6 @@ export function IconExternal(p: IconProps) {
   ]);
 }
 
-/** Preview: an eye. */
-export function IconEye(p: IconProps) {
-  return svg(p, [
-    <path key="a" d="M2.5 12S6 5.5 12 5.5 21.5 12 21.5 12 18 18.5 12 18.5 2.5 12 2.5 12Z" />,
-    <circle key="b" cx="12" cy="12" r="3" />,
-  ]);
-}
-
 /** A calendar page. */
 export function IconCalendar(p: IconProps) {
   return svg(p, [
